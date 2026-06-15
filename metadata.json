@@ -1,0 +1,23 @@
+{
+  "name": "Job Hunt Pipeline",
+  "description": "Job search facts (postings, applications, interviews, status history, funnel metrics) layered on the canonical organizations and contacts dims.",
+  "category": "extensions",
+  "author": {
+    "name": "Hannah Wilson",
+    "github": "hannahgwilson"
+  },
+  "version": "2.0.0",
+  "requires": {
+    "open_brain": true,
+    "services": [],
+    "tools": ["Supabase CLI"]
+  },
+  "requires_schemas": ["organizations", "family-calendar", "professional-crm"],
+  "requires_primitives": ["deploy-edge-function", "remote-mcp", "rls"],
+  "learning_order": 6,
+  "tags": ["job-hunt", "career", "pipeline", "interviews", "applications", "funnel-metrics", "rls"],
+  "difficulty": "advanced",
+  "estimated_time": "1 hour",
+  "created": "2026-03-12",
+  "updated": "2026-06-12"
+}

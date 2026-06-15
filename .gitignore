@@ -1,0 +1,20 @@
+# Secrets & local env — never commit
+.env
+.env.local
+.env.*.local
+*.secret
+
+# Node / web build
+node_modules/
+web/node_modules/
+web/dist/
+
+# Supabase local
+.branches/
+.temp/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/

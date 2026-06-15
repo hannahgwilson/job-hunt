@@ -1,0 +1,102 @@
+// Hand-written row shapes for the columns the UI reads. For a generated,
+// exhaustive set run `supabase gen types typescript` against the live DB once
+// it's deployed; these cover what the five pages touch.
+
+export type ApplicationStatus =
+  | "draft" | "applied" | "screening" | "interviewing"
+  | "offer" | "accepted" | "rejected" | "withdrawn";
+
+export const STATUS_ORDER: ApplicationStatus[] = [
+  "draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn",
+];
+
+export const PIPELINE_COLUMNS: ApplicationStatus[] = [
+  "applied", "screening", "interviewing", "offer", "accepted",
+];
+
+export type RemotePolicy = "remote" | "hybrid" | "onsite";
+export type Source = "linkedin" | "company-site" | "referral" | "recruiter" | "other";
+
+export interface Organization {
+  id: string;
+  name: string;
+}
+
+export interface JobPosting {
+  id: string;
+  title: string;
+  url: string | null;
+  location: string | null;
+  remote_policy: RemotePolicy | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  closing_date: string | null;
+  organizations?: Organization;
+}
+
+export interface Application {
+  id: string;
+  status: ApplicationStatus;
+  applied_date: string | null;
+  response_date: string | null;
+  notes: string | null;
+  job_postings?: JobPosting;
+}
+
+export interface StatusHistoryRow {
+  id: string;
+  from_status: string | null;
+  to_status: string;
+  changed_at: string;
+  notes: string | null;
+}
+
+export interface Interview {
+  id: string;
+  interview_type: string | null;
+  scheduled_at: string | null;
+  status: string;
+  rating: number | null;
+  feedback: string | null;
+  advance_decision: "advance" | "hold" | "withdraw" | "rejected" | null;
+  decision_notes: string | null;
+}
+
+// ── get_action_queue() return shape ──────────────────────────────────────────
+export interface ActionQueue {
+  success: boolean;
+  roles_to_apply: Array<JobPosting & { organization_name: string; closing_soon: boolean }>;
+  role_followups: Array<{
+    application_id: string;
+    status: ApplicationStatus;
+    applied_date: string | null;
+    days_waiting: number | null;
+    title: string;
+    organization_name: string;
+    url: string | null;
+  }>;
+  upcoming_interviews: Array<{
+    interview_id: string;
+    interview_type: string | null;
+    scheduled_at: string;
+    title: string;
+    organization_name: string;
+  }>;
+  networking: Array<{
+    contact_id: string;
+    name: string;
+    title: string | null;
+    last_contacted: string | null;
+    organization_name: string | null;
+  }>;
+}
+
+// ── get_funnel_metrics() return shape ────────────────────────────────────────
+export interface FunnelMetrics {
+  success: boolean;
+  window_days: number | null;
+  sample_size: number;
+  stage_counts: Record<string, number>;
+  conversion_rates: Record<string, number | null>;
+  median_days_from_applied: Record<string, number | null>;
+}

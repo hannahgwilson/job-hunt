@@ -57,32 +57,49 @@ Apply these schemas **before** job-hunt:
 ## Deploy
 
 ```bash
-# 1. Apply schema.sql in the Supabase SQL editor.
+# 1. Apply the SQL, in order, in the Supabase SQL editor:
+#      schema.sql      — tables, triggers, RLS
+#      functions.sql   — read aggregations + write RPCs (the shared logic layer)
+#    On a database that already ran an earlier schema.sql, also apply:
+#      migrations/001_interview_decisions.sql   — adds interview go/no-go columns
 
-# 2. Deploy the MCP Edge Function
-cp /Users/hannah/repos/OB1/extensions/job-hunt/index.ts \
-   /Users/hannah/repos/open-brain/supabase/functions/job-hunt-mcp/index.ts
-cp /Users/hannah/repos/OB1/extensions/job-hunt/deno.json \
-   /Users/hannah/repos/open-brain/supabase/functions/job-hunt-mcp/deno.json
-cd /Users/hannah/repos/open-brain
+# 2. Deploy the MCP Edge Function (copy index.ts AND deno.json together)
+cp index.ts   <open-brain>/supabase/functions/job-hunt-mcp/index.ts
+cp deno.json  <open-brain>/supabase/functions/job-hunt-mcp/deno.json
+cd <open-brain>
 supabase functions deploy job-hunt-mcp --no-verify-jwt
 ```
 
 Add as a Claude Desktop connector with `?key=<MCP_ACCESS_KEY>`.
 
+### Two planes, one logic layer
+
+The aggregations and multi-step writes live in **`functions.sql`** as Postgres
+functions, so they are written once and called from both sides:
+
+- **The agent (this MCP)** — tools are thin `supabase.rpc(...)` wrappers; the
+  service role passes `p_user_id` explicitly.
+- **The tracking-hub SPA** (`web/`) — calls the same `rpc(...)` directly via
+  supabase-js, scoped by RLS to the logged-in user (`p_user_id` defaults to
+  `auth.uid()`).
+
+This is why "paste a job link → build the org → start tracking" is one
+transactional `intake_role` call instead of brittle chained inserts.
+
 ## Tools
 
 | Tool | Purpose |
 |---|---|
-| `add_job_posting` | Add a role at an organization. Takes `organization_id` (from organizations-mcp). |
-| `submit_application` | Record a new application; status defaults to `'applied'`. |
-| `update_application_status` | Move an application to a new status. Transition auto-logged. |
+| `intake_role` | One-call intake: find-or-create the org **by name** + add the posting (wraps `intake_role()`). Replaces `add_job_posting` + a separate org lookup. |
+| `submit_application` | Record a new application; status defaults to `'applied'`. Tracking starts here. |
+| `update_application_status` | Move an application to a new status (wraps `advance_application()`). Transition auto-logged. |
 | `schedule_interview` | Schedule an interview. `add_to_calendar: true` also writes a row in `events`. |
-| `log_interview_notes` | Add feedback + rating; marks status `completed`. |
+| `log_interview_notes` | Feedback + rating **+ go/no-go `advance_decision`**; marks status `completed`. |
 | `list_postings` | List postings, optional org filter. |
 | `list_applications` | List applications, optional status + org filter. |
 | `get_pipeline_overview` | Status breakdown + upcoming interviews. The "how's it going?" tool. |
 | `get_upcoming_interviews` | Scheduled interviews in the next N days. |
+| `get_action_queue` | The to-do list: roles to apply, follow-ups, upcoming interviews, stale networking contacts. |
 | `get_funnel_metrics` | True conversion rates between stages + median time-from-applied. |
 
 ## Typical flow with Claude

@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/lib/api.ts","./src/lib/supabase.ts","./src/lib/types.ts","./src/pages/actionqueue.tsx","./src/pages/addrole.tsx","./src/pages/dashboard.tsx","./src/pages/funnel.tsx","./src/pages/pipeline.tsx","./src/pages/roledetail.tsx"],"errors":true,"version":"5.9.3"}

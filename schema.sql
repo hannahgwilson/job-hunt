@@ -143,6 +143,11 @@ CREATE TABLE IF NOT EXISTS interviews (
     feedback TEXT,               -- post-interview reflection
     rating INTEGER CHECK ((rating BETWEEN 1 AND 5) OR rating IS NULL),
 
+    -- go/no-go: after this round, do you move forward? Distinct from feedback.
+    advance_decision TEXT
+        CHECK (advance_decision IN ('advance', 'hold', 'withdraw', 'rejected') OR advance_decision IS NULL),
+    decision_notes TEXT,
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

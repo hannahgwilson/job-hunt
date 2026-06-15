@@ -1,0 +1,15 @@
+dashboard feedback:
+1. I have a bunch of applications stored in my database that aren't loading when I refresh. that seems to be disconnect. 
+2. the dashboard UI is lackluster. We need some serious updates: 
+a. move the funnel to the 'dashboard page' 
+b.  on the pipeline page add a top of funnel section w/ cards for things i need to apply for. 
+c. Put a dyamic table at the bottom with the key meta data on each role out of my tables and so i can sort by stuff. 
+
+big feature enhanacement to do in a different work tree: 
+I want a prioriziation algo that force ranks the job posting using a few criteria this should show up in the action queue as the order i need to work applications: 
+    1. alignment with my job experience (using a placeholder for my resume, it will be a longer version of my resume)
+    2. features including pay and benefits, job location (hybrid NYC is preferreed, then remote, then other locations hybrid)
+    3. represents a lateral or step forward in my career. 
+    4. appears to be a growth stage company with potential 
+
+For the metric tracking, I want to implement a lightweight semantic layer using yamls to define the key metrics -> this is mostly to show how i think about the architectures. We should generate a place to store the definition of time in stage, conversion rate for me, and finally the prioritization algo. 

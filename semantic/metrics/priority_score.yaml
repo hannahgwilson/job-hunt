@@ -52,8 +52,8 @@ components:
       Linearly normalize the salary midpoint between a floor and a target band.
       <= floor scores ~0, >= target scores 1.0, clamped.
     band:
-      floor:  120000   # p_comp_floor default — placeholder, tune to my market
-      target: 220000   # p_comp_target default
+      floor:  200000   # p_comp_floor default — placeholder, tune to my market
+      target: 250000   # p_comp_target default
     null_default: 0.40   # no posted salary → mild penalty, not zero
 
   career:

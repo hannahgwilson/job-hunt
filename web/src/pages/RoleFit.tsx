@@ -18,6 +18,41 @@ function alignClass(a: number | null): string {
   return "score-low";
 }
 
+// Headline verdict: which resume track fits this role best, and by how much.
+function Verdict({ resumes }: { resumes: ResumeFitEntry[] }) {
+  const judged = resumes
+    .filter((r) => r.fit && r.fit.alignment != null)
+    .sort((a, b) => (b.fit!.alignment as number) - (a.fit!.alignment as number));
+
+  if (judged.length === 0) return null;
+
+  const best = judged[0];
+  const runnerUp = judged[1];
+  const margin = runnerUp ? (best.fit!.alignment as number) - (runnerUp.fit!.alignment as number) : null;
+  const close = margin != null && margin < 0.05;
+
+  return (
+    <div className={`verdict ${alignClass(best.fit!.alignment ?? null)}`}>
+      <div className="verdict-main">
+        <span className="verdict-label">Better fit</span>
+        <strong className="verdict-track">{best.label}</strong>
+        {best.variant && <span className="pill">{best.variant}</span>}
+        <span className={`score-badge ${alignClass(best.fit!.alignment ?? null)}`}>{pct(best.fit!.alignment ?? null)}</span>
+      </div>
+      <div className="verdict-detail muted small">
+        {judged.length > 1 ? (
+          <>
+            vs {judged.slice(1).map((r) => `${r.label} ${pct(r.fit!.alignment ?? null)}`).join(", ")}
+            {close && <> · <span className="warn-text">close call — read both</span></>}
+          </>
+        ) : (
+          <>only this resume judged so far — run the others to compare</>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FitCard({ entry, recommended }: { entry: ResumeFitEntry; recommended: boolean }) {
   const fit = entry.fit;
   return (
@@ -137,6 +172,8 @@ export default function RoleFit() {
           score is stuck around 65. Run the AI judge to score it for real.
         </div>
       )}
+
+      <Verdict resumes={data.resumes} />
 
       <div className="cols">
         {data.resumes.length === 0 ? (

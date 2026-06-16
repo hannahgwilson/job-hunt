@@ -168,7 +168,7 @@ Deno.serve(async (req) => {
     if (userErr || !userData?.user) return json({ success: false, error: "invalid auth" }, 401);
     const userId = userData.user.id;
 
-    const { job_posting_id } = await req.json();
+    const { job_posting_id, resume_id } = await req.json();
     if (!job_posting_id) return json({ success: false, error: "job_posting_id required" }, 400);
 
     // Service-role client for the privileged reads/writes, scoped to this user.
@@ -182,15 +182,17 @@ Deno.serve(async (req) => {
       .single();
     if (postErr || !posting) return json({ success: false, error: "posting not found" }, 404);
 
-    const { data: resumes, error: resErr } = await admin
-      .from("resumes")
-      .select("id, label, resume_text")
-      .eq("user_id", userId);
+    // Judge all resumes by default, or just one when resume_id is given (used to
+    // score a newly added resume against a subset of roles without re-spending
+    // on the others).
+    let resumeQuery = admin.from("resumes").select("id, label, resume_text").eq("user_id", userId);
+    if (resume_id) resumeQuery = resumeQuery.eq("id", resume_id);
+    const { data: resumes, error: resErr } = await resumeQuery;
     if (resErr) throw resErr;
 
     const usable = (resumes ?? []).filter((r) => r.resume_text && r.resume_text.trim().length > 0);
     if (usable.length === 0)
-      return json({ success: false, error: "no resumes uploaded — add one on the Resume page first" }, 400);
+      return json({ success: false, error: "no resume to judge — add one on the Resumes page first" }, 400);
 
     const jd = jdContext(posting);
 

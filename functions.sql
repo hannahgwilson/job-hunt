@@ -868,6 +868,40 @@ AS $$
     );
 $$;
 
+-- get_fit_coverage — every posting with the set of resume_ids already judged
+-- against it. Powers the backfill button (postings with an empty set are
+-- un-judged) and per-resume targeting (postings missing a given resume_id).
+CREATE OR REPLACE FUNCTION get_fit_coverage(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'postings', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', jp.id,
+                    'title', jp.title,
+                    'organization_name', o.name,
+                    'judged_resume_ids', COALESCE((
+                        SELECT jsonb_agg(rf.resume_id)
+                        FROM role_fit rf
+                        WHERE rf.job_posting_id = jp.id
+                          AND rf.user_id = p_user_id
+                          AND rf.alignment IS NOT NULL
+                    ), '[]'::jsonb)
+                ) ORDER BY o.name, jp.title
+            )
+            FROM job_postings jp
+            JOIN organizations o ON o.id = jp.organization_id
+            WHERE jp.user_id = p_user_id
+        ), '[]'::jsonb)
+    );
+$$;
+
 -- save_role_fit — upsert one (posting × resume) judgement AND lift the posting's
 -- experience_alignment to the best fit across resumes, so compute_priority's
 -- force-ranking reflects the judge instead of the neutral 0.5 fallback.
@@ -936,4 +970,5 @@ GRANT EXECUTE ON FUNCTION upsert_resume_variant(text, text, text, text, uuid, bo
 GRANT EXECUTE ON FUNCTION set_default_resume(uuid, uuid)            TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION delete_resume(uuid, uuid)                TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_role_fit(uuid, uuid)                 TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_fit_coverage(uuid)                   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;

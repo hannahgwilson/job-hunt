@@ -6,7 +6,7 @@ import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
-  CompanyData,
+  CompanyData, FitCoveragePosting,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -235,15 +235,24 @@ export async function getRoleFit(jobPostingId: string): Promise<RoleFitResponse>
   return data as RoleFitResponse;
 }
 
-// Run the AI judge for a posting (scores every resume vs the JD, writes role_fit
-// and lifts the posting's experience_alignment). Implemented by the judge-fit
-// edge function — see supabase/functions/judge-fit.
-export async function runJudge(jobPostingId: string): Promise<RoleFitResponse> {
+// Run the AI judge for a posting. Scores every resume vs the JD, or just one
+// when resumeId is given (used to score a newly added resume against a subset of
+// roles). Writes role_fit and lifts the posting's experience_alignment.
+// Implemented by the judge-fit edge function — see supabase/functions/judge-fit.
+export async function runJudge(jobPostingId: string, resumeId?: string): Promise<RoleFitResponse> {
   const { data, error } = await supabase.functions.invoke("judge-fit", {
-    body: { job_posting_id: jobPostingId },
+    body: { job_posting_id: jobPostingId, resume_id: resumeId ?? null },
   });
   if (error) throw error;
   return data as RoleFitResponse;
+}
+
+// Fit coverage: every posting + which resume_ids have already been judged
+// against it. Drives the backfill button and per-resume targeting.
+export async function fetchFitCoverage(): Promise<FitCoveragePosting[]> {
+  const { data, error } = await supabase.rpc("get_fit_coverage", {});
+  if (error) throw error;
+  return (data as { postings: FitCoveragePosting[] }).postings ?? [];
 }
 
 export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {

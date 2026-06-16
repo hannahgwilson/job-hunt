@@ -136,6 +136,14 @@ export interface ResumeFitEntry {
   fit: RoleFit | null;       // null until the judge has run for this resume
 }
 
+// One row per posting for the backfill / per-resume targeting UIs.
+export interface FitCoveragePosting {
+  id: string;
+  title: string;
+  organization_name: string;
+  judged_resume_ids: string[]; // resumes already scored against this posting
+}
+
 export interface RoleFitResponse {
   success: boolean;
   posting: {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { listResumes, upsertResumeVariant, setDefaultResume, deleteResume } from "../lib/api";
-import type { Resume, ResumeVariant } from "../lib/types";
+import { listResumes, upsertResumeVariant, setDefaultResume, deleteResume, fetchFitCoverage } from "../lib/api";
+import type { Resume, ResumeVariant, FitCoveragePosting } from "../lib/types";
+import ResumeScoringPanel from "../components/ResumeScoringPanel";
 
 // Resume management: multiple named variants (e.g. a senior-IC resume and a
 // manager resume). The default variant is what get_resume()/the MCP read; the
@@ -28,10 +29,15 @@ const BLANK: Draft = { label: "", variant: "ic", resume_text: "", resume_filenam
 export default function Profile() {
   const [resumes, setResumes] = useState<Resume[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [coverage, setCoverage] = useState<FitCoveragePosting[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  function loadCoverage() {
+    fetchFitCoverage().then(setCoverage).catch((e) => setError(e.message));
+  }
 
   function load(selectId?: string) {
     return listResumes()
@@ -51,6 +57,7 @@ export default function Profile() {
 
   useEffect(() => {
     load().finally(() => setLoading(false));
+    loadCoverage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -218,6 +225,15 @@ export default function Profile() {
           />
 
           {error && <p className="error">{error}</p>}
+
+          {draft.id && (
+            <ResumeScoringPanel
+              resumeId={draft.id}
+              resumeLabel={draft.label}
+              coverage={coverage}
+              onDone={loadCoverage}
+            />
+          )}
         </section>
       )}
 

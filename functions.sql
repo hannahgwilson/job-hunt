@@ -109,8 +109,112 @@ END;
 $$;
 
 
+-- compute_priority — pure scoring of ONE posting (the prioritization algorithm).
+-- Takes the raw signals, returns { score (0..100), components (0..1 each),
+-- weights }. IMMUTABLE so it can be called per-row in a query without
+-- re-planning. Defined here (above its first caller, get_action_queue) because
+-- SQL-language functions validate referenced functions at creation time.
+-- The canonical spec is semantic/metrics/priority_score.yaml — the weights and
+-- comp band below are duplicated there; keep them in sync.
+CREATE OR REPLACE FUNCTION compute_priority(
+    p_experience_alignment numeric,
+    p_location text,
+    p_remote_policy text,
+    p_salary_min int,
+    p_salary_max int,
+    p_career_trajectory text,
+    p_growth_stage text,
+    p_weights jsonb DEFAULT
+        '{"experience":0.35,"location":0.15,"comp":0.15,"career":0.20,"growth":0.15}'::jsonb,
+    p_comp_floor int DEFAULT 120000,
+    p_comp_target int DEFAULT 220000
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    f_experience numeric;
+    f_location   numeric;
+    f_comp       numeric;
+    f_career     numeric;
+    f_growth     numeric;
+    v_is_nyc     boolean;
+    v_mid        numeric;
+    v_score      numeric;
+BEGIN
+    -- experience: agent-judged 0..1, null → neutral 0.5
+    f_experience := COALESCE(p_experience_alignment, 0.5);
+
+    -- location: preference ladder (hybrid-NYC > remote > onsite-NYC > hybrid-other > onsite-other)
+    v_is_nyc := p_location IS NOT NULL AND (
+        p_location ILIKE '%new york%' OR p_location ILIKE '%nyc%'
+        OR p_location ILIKE '%manhattan%' OR p_location ILIKE '%brooklyn%'
+    );
+    f_location := CASE
+        WHEN p_remote_policy = 'remote'              THEN 0.85
+        WHEN p_remote_policy = 'hybrid' AND v_is_nyc THEN 1.00
+        WHEN p_remote_policy = 'hybrid'              THEN 0.55
+        WHEN p_remote_policy = 'onsite' AND v_is_nyc THEN 0.65
+        WHEN p_remote_policy = 'onsite'              THEN 0.25
+        WHEN v_is_nyc                                THEN 0.60  -- NYC, policy unknown
+        ELSE 0.40                                                -- fully unknown
+    END;
+
+    -- comp: linear-normalize the salary midpoint into [floor, target], clamped.
+    -- No posted salary → mild 0.40 (unknown, not zero).
+    IF p_salary_min IS NULL AND p_salary_max IS NULL THEN
+        f_comp := 0.40;
+    ELSE
+        v_mid := (COALESCE(p_salary_min, p_salary_max)
+                  + COALESCE(p_salary_max, p_salary_min)) / 2.0;
+        f_comp := GREATEST(0, LEAST(1,
+            (v_mid - p_comp_floor)::numeric / NULLIF(p_comp_target - p_comp_floor, 0)));
+    END IF;
+
+    -- career: step_up > lateral > step_back, null → neutral
+    f_career := CASE p_career_trajectory
+        WHEN 'step_up'   THEN 1.00
+        WHEN 'lateral'   THEN 0.75
+        WHEN 'step_back' THEN 0.25
+        ELSE 0.50
+    END;
+
+    -- growth: stage → upside, null/unknown → neutral
+    f_growth := CASE p_growth_stage
+        WHEN 'growth' THEN 1.00
+        WHEN 'early'  THEN 0.90
+        WHEN 'late'   THEN 0.70
+        WHEN 'seed'   THEN 0.65
+        WHEN 'public' THEN 0.50
+        ELSE 0.50
+    END;
+
+    v_score := 100 * (
+          COALESCE((p_weights->>'experience')::numeric, 0) * f_experience
+        + COALESCE((p_weights->>'location')::numeric,   0) * f_location
+        + COALESCE((p_weights->>'comp')::numeric,       0) * f_comp
+        + COALESCE((p_weights->>'career')::numeric,     0) * f_career
+        + COALESCE((p_weights->>'growth')::numeric,     0) * f_growth
+    );
+
+    RETURN jsonb_build_object(
+        'score', round(v_score, 1),
+        'components', jsonb_build_object(
+            'experience', round(f_experience, 2),
+            'location',   round(f_location, 2),
+            'comp',       round(f_comp, 2),
+            'career',     round(f_career, 2),
+            'growth',     round(f_growth, 2)
+        ),
+        'weights', p_weights
+    );
+END;
+$$;
+
+
 -- get_action_queue — the four buckets the search runs on, in one call:
---   roles_to_apply   — tracked postings with no live application
+--   roles_to_apply   — tracked postings with no live application (force-ranked)
 --   role_followups   — applications awaiting a response past the threshold
 --   upcoming_interviews — scheduled interviews in the next window
 --   networking       — job-hunt contacts gone stale / never contacted
@@ -127,21 +231,39 @@ STABLE
 AS $$
     SELECT jsonb_build_object(
         'success', true,
+        -- Force-ranked by priority_score (see semantic/metrics/priority_score.yaml).
+        -- This bucket is the answer to "what do I apply to next" — top card first.
         'roles_to_apply', (
             SELECT coalesce(jsonb_agg(
-                to_jsonb(jp) || jsonb_build_object(
-                    'organization_name', o.name,
-                    'closing_soon', (jp.closing_date IS NOT NULL
-                                     AND jp.closing_date <= current_date + p_closing_days)
-                ) ORDER BY jp.closing_date NULLS LAST, jp.created_at DESC
+                scored.rec || jsonb_build_object('rank', scored.rn)
+                ORDER BY scored.rn
             ), '[]'::jsonb)
-            FROM job_postings jp
-            JOIN organizations o ON o.id = jp.organization_id
-            WHERE jp.user_id = p_user_id
-              AND NOT EXISTS (
-                  SELECT 1 FROM applications a
-                  WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
-              )
+            FROM (
+                SELECT
+                    to_jsonb(jp) || jsonb_build_object(
+                        'organization_name', o.name,
+                        'closing_soon', (jp.closing_date IS NOT NULL
+                                         AND jp.closing_date <= current_date + p_closing_days),
+                        'priority', compute_priority(
+                            jp.experience_alignment, jp.location, jp.remote_policy,
+                            jp.salary_min, jp.salary_max, jp.career_trajectory,
+                            jp.growth_stage)
+                    ) AS rec,
+                    row_number() OVER (
+                        ORDER BY (compute_priority(
+                            jp.experience_alignment, jp.location, jp.remote_policy,
+                            jp.salary_min, jp.salary_max, jp.career_trajectory,
+                            jp.growth_stage)->>'score')::numeric DESC NULLS LAST,
+                            jp.closing_date NULLS LAST
+                    ) AS rn
+                FROM job_postings jp
+                JOIN organizations o ON o.id = jp.organization_id
+                WHERE jp.user_id = p_user_id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM applications a
+                      WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
+                  )
+            ) scored
         ),
         'role_followups', (
             SELECT coalesce(jsonb_agg(
@@ -205,6 +327,71 @@ $$;
 
 
 -- ============================================================================
+-- PRIORITIZATION  (force-rank postings I haven't applied to yet)
+-- compute_priority() — the scoring algorithm — is defined above, just before
+-- its first caller get_action_queue(). The canonical spec for both lives in
+-- semantic/metrics/priority_score.yaml. Weights/comp band are duplicated there.
+-- ============================================================================
+
+-- get_prioritized_roles — the roles_to_apply bucket, force-ranked. Postings with
+-- no live (non-draft) application, each scored by compute_priority, highest
+-- first. The same query backs get_action_queue's roles_to_apply ordering.
+CREATE OR REPLACE FUNCTION get_prioritized_roles(
+    p_user_id uuid DEFAULT auth.uid(),
+    p_closing_days int DEFAULT 7,
+    p_limit int DEFAULT NULL,
+    p_weights jsonb DEFAULT
+        '{"experience":0.35,"location":0.15,"comp":0.15,"career":0.20,"growth":0.15}'::jsonb,
+    p_comp_floor int DEFAULT 120000,
+    p_comp_target int DEFAULT 220000
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    WITH ranked AS (
+        SELECT
+            to_jsonb(jp) || jsonb_build_object(
+                'organization_name', o.name,
+                'closing_soon', (jp.closing_date IS NOT NULL
+                                 AND jp.closing_date <= current_date + p_closing_days),
+                'priority', compute_priority(
+                    jp.experience_alignment, jp.location, jp.remote_policy,
+                    jp.salary_min, jp.salary_max, jp.career_trajectory,
+                    jp.growth_stage, p_weights, p_comp_floor, p_comp_target)
+            ) AS rec,
+            compute_priority(
+                jp.experience_alignment, jp.location, jp.remote_policy,
+                jp.salary_min, jp.salary_max, jp.career_trajectory,
+                jp.growth_stage, p_weights, p_comp_floor, p_comp_target)->>'score' AS score
+        FROM job_postings jp
+        JOIN organizations o ON o.id = jp.organization_id
+        WHERE jp.user_id = p_user_id
+          AND NOT EXISTS (
+              SELECT 1 FROM applications a
+              WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
+          )
+    )
+    SELECT jsonb_build_object(
+        'success', true,
+        'count', (SELECT count(*) FROM ranked),
+        'weights', p_weights,
+        'roles', COALESCE(
+            (SELECT jsonb_agg(
+                rec || jsonb_build_object('rank', rn)
+                ORDER BY rn)
+             FROM (
+                SELECT rec, score,
+                       row_number() OVER (ORDER BY score::numeric DESC NULLS LAST) AS rn
+                FROM ranked
+             ) r
+             WHERE p_limit IS NULL OR rn <= p_limit
+            ), '[]'::jsonb)
+    );
+$$;
+
+
+-- ============================================================================
 -- WRITES  (the brittleness fix — multi-step intake in one transaction)
 -- ============================================================================
 
@@ -212,6 +399,11 @@ $$;
 -- Returns the org id (+ whether it was newly created) and the full posting.
 -- The OB company/role thought is captured separately by the agent via the
 -- open-brain MCP (keeps this function decoupled from the brain's queue schema).
+--
+-- Also accepts the three agent-judged prioritization signals (experience_alignment,
+-- career_trajectory, growth_stage) so a role can be scored the moment it's intaked.
+-- They're optional — leave them null and set_priority_signals can fill them later.
+DROP FUNCTION IF EXISTS intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, text[], uuid);
 CREATE OR REPLACE FUNCTION intake_role(
     p_org_name text,
     p_title text,
@@ -227,6 +419,9 @@ CREATE OR REPLACE FUNCTION intake_role(
     p_posted_date date DEFAULT NULL,
     p_closing_date date DEFAULT NULL,
     p_notes text DEFAULT NULL,
+    p_experience_alignment numeric DEFAULT NULL,
+    p_career_trajectory text DEFAULT NULL,
+    p_growth_stage text DEFAULT NULL,
     p_org_tags text[] DEFAULT ARRAY['employer-target'],
     p_user_id uuid DEFAULT auth.uid()
 )
@@ -262,14 +457,16 @@ BEGIN
         user_id, organization_id, title, url,
         salary_min, salary_max, salary_currency,
         requirements, nice_to_haves, location, remote_policy,
-        source, posted_date, closing_date, notes
+        source, posted_date, closing_date, notes,
+        experience_alignment, career_trajectory, growth_stage
     )
     VALUES (
         p_user_id, v_org_id, p_title, p_url,
         p_salary_min, p_salary_max, coalesce(p_salary_currency, 'USD'),
         coalesce(p_requirements, '{}'), coalesce(p_nice_to_haves, '{}'),
         p_location, p_remote_policy,
-        p_source, p_posted_date, p_closing_date, p_notes
+        p_source, p_posted_date, p_closing_date, p_notes,
+        p_experience_alignment, p_career_trajectory, p_growth_stage
     )
     RETURNING * INTO v_posting;
 
@@ -353,12 +550,55 @@ END;
 $$;
 
 
+-- set_priority_signals — update the agent-judged scoring inputs on a posting
+-- after intake (e.g. after re-reading the JD against the resume). Only non-null
+-- args are applied, so you can nudge one signal without clobbering the others.
+CREATE OR REPLACE FUNCTION set_priority_signals(
+    p_job_posting_id uuid,
+    p_experience_alignment numeric DEFAULT NULL,
+    p_career_trajectory text DEFAULT NULL,
+    p_growth_stage text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_posting job_postings;
+BEGIN
+    UPDATE job_postings
+    SET experience_alignment = COALESCE(p_experience_alignment, experience_alignment),
+        career_trajectory    = COALESCE(p_career_trajectory, career_trajectory),
+        growth_stage         = COALESCE(p_growth_stage, growth_stage)
+    WHERE id = p_job_posting_id
+      AND user_id = COALESCE(p_user_id, user_id)
+    RETURNING * INTO v_posting;
+
+    IF v_posting.id IS NULL THEN
+        RAISE EXCEPTION 'set_priority_signals: posting % not found or not owned', p_job_posting_id;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'posting', to_jsonb(v_posting),
+        'priority', compute_priority(
+            v_posting.experience_alignment, v_posting.location, v_posting.remote_policy,
+            v_posting.salary_min, v_posting.salary_max, v_posting.career_trajectory,
+            v_posting.growth_stage)
+    );
+END;
+$$;
+
+
 -- ============================================================================
 -- Grants — both planes. `authenticated` = the SPA's logged-in user (RLS
 -- scopes them); `service_role` = the MCP edge function.
 -- ============================================================================
 GRANT EXECUTE ON FUNCTION get_funnel_metrics(int, uuid)              TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_action_queue(uuid, int, int, int, int) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, text[], uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION compute_priority(numeric, text, text, int, int, text, text, jsonb, int, int) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_prioritized_roles(uuid, int, int, jsonb, int, int) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, numeric, text, text, text[], uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION submit_application(uuid, uuid, text, date, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;

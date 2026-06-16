@@ -1,0 +1,43 @@
+metric: time_in_stage
+label: Time in stage
+description: >
+  Median number of days from when an application was first marked "applied" to
+  when it first reached a later stage. Measures how long the pipeline takes to
+  move, not how long any single application sat — it's a median across the cohort,
+  so a stalled outlier doesn't distort it.
+owner: hannah
+grain: one application × target stage
+unit: days
+
+source:
+  table: application_status_history
+  columns: [application_id, to_status, changed_at]
+  notes: >
+    Auto-populated by the log_application_status_change trigger on every status
+    transition, so the metric never depends on the writer remembering to log.
+
+definition: >
+  For each application, take the earliest changed_at per stage (first time it
+  reached that stage). Subtract the application's "applied" timestamp to get
+  days-to-stage. The metric is the median (percentile_cont 0.5) of that value
+  across all applications, per stage.
+
+stages: [screening, interviewing, offer, accepted]
+# 'applied' is the t=0 baseline, so it has no time-in-stage of its own.
+
+dimensions:
+  - window_days   # restrict to transitions within the last N days
+  - to_status     # the stage being measured
+
+implemented_by:
+  function: get_funnel_metrics(p_window_days int, p_user_id uuid)
+  file: functions.sql
+  returns_key: median_days_from_applied
+  surfaced_in:
+    - web/src/pages/Funnel.tsx
+    - MCP tool get_funnel_metrics
+
+interpretation: >
+  Rising median time-to-screening means responses are slowing — a cue to
+  follow up sooner or widen the top of funnel. Compare windows (e.g. last 30
+  days vs all-time) to see if the search is speeding up.

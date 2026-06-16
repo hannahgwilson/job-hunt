@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS job_postings (
     posted_date DATE,
     closing_date DATE,
 
+    -- ── prioritization signals (see semantic/metrics/priority_score.yaml) ──
+    -- compute_priority() force-ranks postings from these. location / remote_policy
+    -- / salary_* above are scored deterministically; the three below are the
+    -- subjective reads the agent supplies at intake (or via set_priority_signals).
+    experience_alignment NUMERIC(3,2)             -- 0..1 fit vs my resume
+        CHECK ((experience_alignment BETWEEN 0 AND 1) OR experience_alignment IS NULL),
+    career_trajectory TEXT                         -- this role relative to my current level
+        CHECK (career_trajectory IN ('step_up', 'lateral', 'step_back') OR career_trajectory IS NULL),
+    growth_stage TEXT                              -- the company's stage / upside
+        CHECK (growth_stage IN ('seed', 'early', 'growth', 'late', 'public', 'unknown') OR growth_stage IS NULL),
+
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

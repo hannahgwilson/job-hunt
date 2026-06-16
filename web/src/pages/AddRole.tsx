@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { intakeRole, submitApplication } from "../lib/api";
+import type { CareerTrajectory, GrowthStage } from "../lib/types";
 
 export default function AddRole({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [org, setOrg] = useState("");
@@ -7,6 +8,9 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
   const [url, setUrl] = useState("");
   const [location, setLocation] = useState("");
   const [remote, setRemote] = useState("");
+  const [career, setCareer] = useState("");
+  const [growth, setGrowth] = useState("");
+  const [fit, setFit] = useState("");
   const [alsoApply, setAlsoApply] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,12 +20,17 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
     setBusy(true);
     setError(null);
     try {
+      const fitNum = fit === "" ? undefined : Number(fit);
       const { posting_id } = await intakeRole({
         organization_name: org,
         title,
         url: url || undefined,
         location: location || undefined,
         remote_policy: remote || undefined,
+        career_trajectory: (career || undefined) as CareerTrajectory | undefined,
+        growth_stage: (growth || undefined) as GrowthStage | undefined,
+        experience_alignment:
+          fitNum !== undefined && !Number.isNaN(fitNum) ? fitNum : undefined,
       });
       if (alsoApply && posting_id) await submitApplication(posting_id);
       onDone();
@@ -52,6 +61,34 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
                 <option value="hybrid">hybrid</option>
                 <option value="onsite">onsite</option>
               </select>
+            </label>
+          </div>
+          <p className="muted small">Prioritization signals (optional — feeds the force-ranking; Claude fills these from the JD + your resume).</p>
+          <div className="form-row">
+            <label>Career move
+              <select value={career} onChange={(e) => setCareer(e.target.value)}>
+                <option value="">—</option>
+                <option value="step_up">step up</option>
+                <option value="lateral">lateral</option>
+                <option value="step_back">step back</option>
+              </select>
+            </label>
+            <label>Company stage
+              <select value={growth} onChange={(e) => setGrowth(e.target.value)}>
+                <option value="">—</option>
+                <option value="seed">seed</option>
+                <option value="early">early</option>
+                <option value="growth">growth</option>
+                <option value="late">late</option>
+                <option value="public">public</option>
+                <option value="unknown">unknown</option>
+              </select>
+            </label>
+            <label>Fit (0–1)
+              <input
+                type="number" min="0" max="1" step="0.05"
+                value={fit} onChange={(e) => setFit(e.target.value)} placeholder="0.8"
+              />
             </label>
           </div>
           <label className="checkbox">

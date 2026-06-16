@@ -1,0 +1,117 @@
+metric: priority_score
+label: Application priority score
+description: >
+  A 0–100 force-ranking of job postings I have NOT yet applied to, so the action
+  queue tells me what to work next instead of leaving me to guess. A weighted sum
+  of five component fits (0..1 each), scaled to 100. Higher = apply sooner.
+owner: hannah
+grain: one job_posting
+unit: points   # 0..100
+
+# ── The four criteria from the search spec, expressed as five weighted components.
+#    "Features" (pay + location) is split into two components so each can be tuned,
+#    but they belong to the same criterion conceptually.
+weights:
+  experience: 0.35   # criterion 1 — alignment with my experience (vs resume)
+  location:   0.15   # criterion 2a — features: where the job is
+  comp:       0.15   # criterion 2b — features: pay
+  career:     0.20   # criterion 3 — lateral or step-forward move
+  growth:     0.15   # criterion 4 — growth-stage company with upside
+# weights MUST sum to 1.0. Mirrored as the p_weights DEFAULT in compute_priority().
+
+components:
+
+  experience:
+    criterion: Alignment with my job experience
+    input: job_postings.experience_alignment   # NUMERIC(3,2), 0..1
+    source: agent-judged
+    how: >
+      The agent reads the posting's requirements against my resume
+      (resume/resume.example.md — a placeholder for the real long-form resume)
+      and assigns a 0..1 alignment. 1.0 = I clearly clear the bar; 0.5 = stretch.
+    null_default: 0.5   # unscored → neutral, so an un-enriched role isn't buried
+
+  location:
+    criterion: "Features → location (hybrid NYC preferred, then remote, then other hybrid)"
+    input: [job_postings.location, job_postings.remote_policy]
+    source: derived
+    scale:                       # explicit preference ladder from the spec
+      hybrid_nyc:        1.00    # hybrid + location matches NYC
+      remote:            0.85
+      onsite_nyc:        0.65
+      hybrid_other:      0.55
+      onsite_other:      0.25
+      unknown:           0.40
+    nyc_match: location ILIKE any of ['%new york%','%nyc%','%manhattan%','%brooklyn%']
+
+  comp:
+    criterion: "Features → pay"
+    input: [job_postings.salary_min, job_postings.salary_max]
+    source: derived
+    how: >
+      Linearly normalize the salary midpoint between a floor and a target band.
+      <= floor scores ~0, >= target scores 1.0, clamped.
+    band:
+      floor:  120000   # p_comp_floor default — placeholder, tune to my market
+      target: 220000   # p_comp_target default
+    null_default: 0.40   # no posted salary → mild penalty, not zero
+
+  career:
+    criterion: Lateral or step-forward move
+    input: job_postings.career_trajectory   # enum
+    source: agent-judged
+    scale:
+      step_up:   1.00
+      lateral:   0.75
+      step_back: 0.25
+    null_default: 0.50
+
+  growth:
+    criterion: Growth-stage company with potential
+    input: job_postings.growth_stage   # enum
+    source: agent-judged
+    scale:
+      growth: 1.00     # scaling, clear traction
+      early:  0.90     # early but promising
+      late:   0.70     # late-stage / pre-IPO
+      seed:   0.65     # high risk, high upside
+      public: 0.50     # stable, less upside
+      unknown: 0.50
+    null_default: 0.50
+
+definition: >
+  score = 100 * (
+      w.experience * fit.experience
+    + w.location   * fit.location
+    + w.comp       * fit.comp
+    + w.career     * fit.career
+    + w.growth     * fit.growth
+  )
+  Each fit is in [0,1]; with weights summing to 1, score is in [0,100].
+
+dimensions:
+  - none   # scored per posting; ranked within the roles_to_apply bucket
+
+implemented_by:
+  function: compute_priority(experience_alignment, location, remote_policy, salary_min, salary_max, career_trajectory, growth_stage, weights, comp_floor, comp_target)
+  file: functions.sql
+  returns: "{ score, components: {experience, location, comp, career, growth}, weights }"
+  ranked_by:
+    - get_prioritized_roles(p_user_id, ...)          # standalone ranked list
+    - get_action_queue(...).roles_to_apply           # ordered by score desc
+  surfaced_in:
+    - web/src/pages/ActionQueue.tsx   # rank + score + component breakdown
+    - MCP tools get_prioritized_roles, get_action_queue
+
+interpretation: >
+  The roles_to_apply bucket comes back already sorted highest-first, so "what do
+  I work next" is the top card. The component breakdown shows WHY a role ranks
+  where it does — a high-comp role I'm under-qualified for and a perfect-fit role
+  with no posted salary land in visibly different places.
+
+caveats:
+  - Only ranks postings with no live (non-draft) application — it's a
+    top-of-funnel triage metric, not a measure of in-flight applications.
+  - experience / career / growth are subjective agent reads; re-running enrichment
+    can shift them. location / comp are deterministic from the columns.
+  - Weights are a personal value judgement. Change them here + in functions.sql.

@@ -1,0 +1,46 @@
+metric: conversion_rate
+label: Stage conversion rate
+description: >
+  The fraction of applications that advanced from one funnel stage to the next.
+  applied → screening → interviewing → offer → accepted. A true funnel rate:
+  each application is counted at a stage if it EVER reached it, so re-applies and
+  back-and-forth transitions don't double-count.
+owner: hannah
+grain: one ordered stage pair (e.g. screening_to_interviewing)
+unit: ratio   # 0..1, e.g. 0.6 == 60%
+
+source:
+  table: application_status_history
+  columns: [application_id, to_status, changed_at]
+
+definition: >
+  Count distinct applications that ever reached each stage (stage_counts). For
+  each adjacent pair in the canonical order, rate = count(next) / count(prev).
+  Pairs where the previous stage has zero applications return null (undefined,
+  not zero).
+
+stage_order: [applied, screening, interviewing, offer, accepted]
+
+dimensions:
+  - window_days   # restrict to transitions within the last N days
+  - stage_pair    # which adjacent transition
+
+implemented_by:
+  function: get_funnel_metrics(p_window_days int, p_user_id uuid)
+  file: functions.sql
+  returns_key: conversion_rates
+  surfaced_in:
+    - web/src/pages/Funnel.tsx
+    - web/src/pages/Dashboard.tsx   # funnel moved here per dashboard feedback
+    - MCP tool get_funnel_metrics
+
+interpretation: >
+  A low applied → screening rate is a top-of-funnel / targeting problem (the
+  priority_score metric exists to fix exactly this — apply to better-fit roles
+  first). A low interviewing → offer rate is an interview-performance signal.
+  Read alongside sample_size: rates over a handful of applications are noisy.
+
+caveats:
+  - rejected / withdrawn are terminal and not part of the forward funnel order.
+  - Small samples make rates volatile; get_funnel_metrics returns sample_size
+    so the UI can warn.

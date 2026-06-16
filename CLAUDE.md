@@ -28,7 +28,9 @@ When I paste a job-description link (or describe a role):
 
 1. **Enrich.** Read the posting at the URL and extract: title, salary range,
    key requirements, location, remote policy, source. If the page is walled,
-   ask me for the fields instead.
+   ask me for the fields instead. **Also judge the three prioritization signals**
+   (see Play 4) by reading the JD against my resume (`resume/resume.md` locally,
+   or the committed placeholder `resume/resume.example.md`).
 2. **Persist in one call** — job-hunt `intake_role`:
    ```
    intake_role({
@@ -36,12 +38,19 @@ When I paste a job-description link (or describe a role):
      title: "Senior AI Engineer",
      url: "<the link>",
      salary_min, salary_max, requirements: [...],
-     location, remote_policy, source: "linkedin"
+     location, remote_policy, source: "linkedin",
+     // prioritization signals (optional but recommended — they rank the queue):
+     experience_alignment: 0.85,          // 0..1 fit vs my resume
+     career_trajectory: "step_up",        // step_up | lateral | step_back
+     growth_stage: "growth"               // seed | early | growth | late | public | unknown
    })  →  { organization_id, posting_id }
    ```
    This find-or-creates the org (tagged `employer-target`) and inserts the
    posting transactionally. One company → many roles falls out naturally:
    intake another role at the same `organization_name` and it reuses the org.
+   Forgot the signals at intake, or want to revise after a closer read?
+   `set_priority_signals({ job_posting_id, experience_alignment?, career_trajectory?,
+   growth_stage? })` — only the fields you pass change.
 3. **Capture the Open Brain notes** (the "entries in Open Brain for the company
    and the role"):
    - Once per company: open-brain `capture_thought` — a reference note about the
@@ -77,8 +86,9 @@ When I paste a job-description link (or describe a role):
 ## Play 3 — Weekly review (requirement 3)
 
 1. `get_action_queue()` → four buckets:
-   - **roles_to_apply** — tracked postings with no live application (closing-soon
-     flagged).
+   - **roles_to_apply** — tracked postings with no live application, **force-ranked
+     by priority score** (see Play 4); each carries `rank`, `priority.score`, and
+     the component breakdown. Closing-soon is flagged. Work them top-down.
    - **role_followups** — applications awaiting a response past the threshold.
    - **upcoming_interviews** — scheduled in the next two weeks.
    - **networking** — `job-hunt` contacts gone stale / never contacted.
@@ -86,6 +96,33 @@ When I paste a job-description link (or describe a role):
    (tags `['job-search','networking']`) so it persists across sessions.
 3. `get_pipeline_overview()` for the status snapshot, `get_funnel_metrics()` for
    conversion + median time-in-stage when I ask "how's it going?".
+
+## Play 4 — Prioritize the apply queue (force-ranking)
+
+The order I work applications is not gut feel — it's a 0–100 **priority score**
+computed by `compute_priority()` and surfaced ranked in `roles_to_apply` and via
+`get_prioritized_roles({ limit? })`. The canonical definition lives in the
+**semantic layer**: [`semantic/metrics/priority_score.yaml`](semantic/metrics/priority_score.yaml).
+
+Five weighted components (weights sum to 1.0):
+
+| Component | Weight | Source | What I judge |
+|---|---|---|---|
+| experience | 0.35 | `experience_alignment` (you set, 0..1) | fit of the JD vs my resume |
+| location | 0.15 | `location` + `remote_policy` (derived) | hybrid-NYC > remote > onsite-NYC > hybrid-other > onsite-other |
+| comp | 0.15 | `salary_min/max` (derived) | midpoint normalized into a band |
+| career | 0.20 | `career_trajectory` (you set) | step_up > lateral > step_back |
+| growth | 0.15 | `growth_stage` (you set) | growth/early > late/seed > public |
+
+- **Your job is the three subjective signals** (`experience_alignment`,
+  `career_trajectory`, `growth_stage`). Location and comp are scored
+  deterministically from columns intake already captured — don't double-enter them.
+- Set the signals at intake (Play 1) or later with `set_priority_signals`.
+- Un-scored signals fall back to neutral (0.5), so a role is never *buried* just
+  for being un-enriched — but enrich it so the ranking is real.
+- To re-weight the search (e.g. care more about comp), edit the YAML **and** the
+  matching `DEFAULT`s in `functions.sql` (`compute_priority` / `get_prioritized_roles`),
+  then re-apply `functions.sql`. The YAML is the source of truth.
 
 ## Notes for the assistant
 

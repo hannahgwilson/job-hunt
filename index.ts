@@ -29,6 +29,13 @@
  *     networking in one call.
  *   - `log_interview_notes` now records the go/no-go `advance_decision`.
  *   - Service-role calls pass `p_user_id` explicitly (RLS is bypassed).
+ *
+ * What changed in v2.2 (prioritization framework + semantic layer):
+ *   - `intake_role` accepts three prioritization signals (experience_alignment,
+ *     career_trajectory, growth_stage); new `set_priority_signals` updates them.
+ *   - New `get_prioritized_roles` and `get_action_queue.roles_to_apply` are
+ *     force-ranked by `compute_priority()` (the scoring algorithm in
+ *     functions.sql). Metric specs live in semantic/*.yaml.
  */
 
 import { Hono } from "hono";
@@ -47,6 +54,9 @@ const interviewTypeEnum = z.enum([
 ]);
 const remotePolicyEnum = z.enum(["remote", "hybrid", "onsite"]);
 const sourceEnum = z.enum(["linkedin", "company-site", "referral", "recruiter", "other"]);
+// Prioritization signals (see semantic/metrics/priority_score.yaml).
+const careerTrajectoryEnum = z.enum(["step_up", "lateral", "step_back"]);
+const growthStageEnum = z.enum(["seed", "early", "growth", "late", "public", "unknown"]);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Handlers — pulled out for the multi-step writes (schedule_interview,
@@ -233,7 +243,7 @@ app.post("*", async (c) => {
   const userId = Deno.env.get("DEFAULT_USER_ID");
   if (!userId) return c.json({ error: "DEFAULT_USER_ID not configured" }, 500);
 
-  const server = new McpServer({ name: "job-hunt", version: "2.1.0" });
+  const server = new McpServer({ name: "job-hunt", version: "2.2.0" });
 
   const ok = (payload: Record<string, unknown>) => ({
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
@@ -262,6 +272,12 @@ app.post("*", async (c) => {
       posted_date: z.string().optional().describe("YYYY-MM-DD"),
       closing_date: z.string().optional().describe("YYYY-MM-DD"),
       notes: z.string().optional(),
+      experience_alignment: z.number().min(0).max(1).optional()
+        .describe("0..1 fit of the role's requirements vs my resume (resume/resume.example.md). Feeds the priority score."),
+      career_trajectory: careerTrajectoryEnum.optional()
+        .describe("Is this role a step_up / lateral / step_back from my current level? Feeds the priority score."),
+      growth_stage: growthStageEnum.optional()
+        .describe("The company's stage: seed / early / growth / late / public / unknown. Feeds the priority score."),
       organization_tags: z.array(z.string()).optional().describe("Tags applied only if the org is created (default ['employer-target'])"),
     },
     async (args) => {
@@ -280,10 +296,60 @@ app.post("*", async (c) => {
         p_posted_date: args.posted_date ?? null,
         p_closing_date: args.closing_date ?? null,
         p_notes: args.notes ?? null,
+        p_experience_alignment: args.experience_alignment ?? null,
+        p_career_trajectory: args.career_trajectory ?? null,
+        p_growth_stage: args.growth_stage ?? null,
         p_org_tags: args.organization_tags ?? ["employer-target"],
         p_user_id: userId,
       });
       if (error) throw new Error(`intake_role failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // set_priority_signals — update the agent-judged scoring inputs after intake
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "set_priority_signals",
+    "Update the prioritization signals on a posting (experience_alignment 0..1, career_trajectory, growth_stage) after re-reading the JD against my resume. Only the fields you pass are changed. Returns the recomputed priority score. See semantic/metrics/priority_score.yaml.",
+    {
+      job_posting_id: z.string(),
+      experience_alignment: z.number().min(0).max(1).optional()
+        .describe("0..1 fit vs my resume (resume/resume.example.md)"),
+      career_trajectory: careerTrajectoryEnum.optional(),
+      growth_stage: growthStageEnum.optional(),
+    },
+    async (args) => {
+      const { data, error } = await supabase.rpc("set_priority_signals", {
+        p_job_posting_id: args.job_posting_id,
+        p_experience_alignment: args.experience_alignment ?? null,
+        p_career_trajectory: args.career_trajectory ?? null,
+        p_growth_stage: args.growth_stage ?? null,
+        p_user_id: userId,
+      });
+      if (error) throw new Error(`set_priority_signals failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // get_prioritized_roles — force-ranked roles-to-apply, highest score first
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "get_prioritized_roles",
+    "Force-rank the roles I haven't applied to yet by priority score (0..100): experience-alignment, location, comp, career trajectory, and company growth stage. Returns each role with its rank, score, and component breakdown — the order I should work applications. See semantic/metrics/priority_score.yaml.",
+    {
+      closing_days: z.number().optional().describe("Flag postings closing within this many days (default 7)"),
+      limit: z.number().optional().describe("Return only the top N (default: all)"),
+    },
+    async (a) => {
+      const { data, error } = await supabase.rpc("get_prioritized_roles", {
+        p_user_id: userId,
+        p_closing_days: a.closing_days ?? 7,
+        p_limit: a.limit ?? null,
+      });
+      if (error) throw new Error(`get_prioritized_roles failed: ${error.message}`);
       return ok(data as Record<string, unknown>);
     },
   );
@@ -557,6 +623,6 @@ app.post("*", async (c) => {
   return transport.handleRequest(c);
 });
 
-app.get("*", (c) => c.json({ status: "ok", service: "Job Hunt Pipeline", version: "2.1.0" }));
+app.get("*", (c) => c.json({ status: "ok", service: "Job Hunt Pipeline", version: "2.2.0" }));
 
 Deno.serve(app.fetch);

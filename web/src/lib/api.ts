@@ -5,7 +5,7 @@
 import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
-  CareerTrajectory, GrowthStage,
+  CareerTrajectory, GrowthStage, ResumeProfile,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -128,6 +128,20 @@ export async function setPrioritySignals(input: {
     p_experience_alignment: input.experience_alignment ?? null,
     p_career_trajectory: input.career_trajectory ?? null,
     p_growth_stage: input.growth_stage ?? null,
+  });
+  if (error) throw error;
+}
+
+export async function fetchResume(): Promise<ResumeProfile> {
+  const { data, error } = await supabase.rpc("get_resume", {});
+  if (error) throw error;
+  return data as ResumeProfile;
+}
+
+export async function saveResume(text: string, filename?: string): Promise<void> {
+  const { error } = await supabase.rpc("upsert_resume", {
+    p_resume_text: text,
+    p_resume_filename: filename ?? null,
   });
   if (error) throw error;
 }

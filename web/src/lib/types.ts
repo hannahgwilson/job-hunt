@@ -88,6 +88,15 @@ export type RankedRole = JobPosting & {
   priority: Priority;
 };
 
+// ── get_resume() return shape ────────────────────────────────────────────────
+export interface ResumeProfile {
+  success: boolean;
+  resume_text: string | null;
+  resume_filename: string | null;
+  updated_at: string | null;
+  has_resume: boolean;
+}
+
 // ── get_action_queue() return shape ──────────────────────────────────────────
 export interface ActionQueue {
   success: boolean;

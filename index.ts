@@ -36,6 +36,11 @@
  *   - New `get_prioritized_roles` and `get_action_queue.roles_to_apply` are
  *     force-ranked by `compute_priority()` (the scoring algorithm in
  *     functions.sql). Metric specs live in semantic/*.yaml.
+ *
+ * What changed in v2.3 (resume input for the matching algo):
+ *   - `get_resume` / `set_resume` read & write the stored long-form resume
+ *     (job_search_profile table). Read it before judging experience_alignment.
+ *     The tracking hub uploads it from the Resume page.
  */
 
 import { Hono } from "hono";
@@ -243,7 +248,7 @@ app.post("*", async (c) => {
   const userId = Deno.env.get("DEFAULT_USER_ID");
   if (!userId) return c.json({ error: "DEFAULT_USER_ID not configured" }, 500);
 
-  const server = new McpServer({ name: "job-hunt", version: "2.2.0" });
+  const server = new McpServer({ name: "job-hunt", version: "2.3.0" });
 
   const ok = (payload: Record<string, unknown>) => ({
     content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
@@ -350,6 +355,41 @@ app.post("*", async (c) => {
         p_limit: a.limit ?? null,
       });
       if (error) throw new Error(`get_prioritized_roles failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // get_resume — the stored long-form resume, for scoring experience alignment
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "get_resume",
+    "Fetch my stored long-form resume. Read this when judging a role's experience_alignment (0..1) so the score reflects my actual experience. Returns has_resume=false if I haven't uploaded one yet.",
+    {},
+    async () => {
+      const { data, error } = await supabase.rpc("get_resume", { p_user_id: userId });
+      if (error) throw new Error(`get_resume failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // set_resume — save / replace the stored resume text
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "set_resume",
+    "Save or replace my long-form resume text (one per user). Usually I upload this from the tracking hub, but you can set it here too.",
+    {
+      resume_text: z.string().describe("The full resume text"),
+      resume_filename: z.string().optional().describe("Original filename, if from a file"),
+    },
+    async (args) => {
+      const { data, error } = await supabase.rpc("upsert_resume", {
+        p_resume_text: args.resume_text,
+        p_resume_filename: args.resume_filename ?? null,
+        p_user_id: userId,
+      });
+      if (error) throw new Error(`set_resume failed: ${error.message}`);
       return ok(data as Record<string, unknown>);
     },
   );
@@ -623,6 +663,6 @@ app.post("*", async (c) => {
   return transport.handleRequest(c);
 });
 
-app.get("*", (c) => c.json({ status: "ok", service: "Job Hunt Pipeline", version: "2.2.0" }));
+app.get("*", (c) => c.json({ status: "ok", service: "Job Hunt Pipeline", version: "2.3.0" }));
 
 Deno.serve(app.fetch);

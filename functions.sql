@@ -591,6 +591,62 @@ $$;
 
 
 -- ============================================================================
+-- RESUME  (the experience_alignment input — see priority_score.yaml)
+-- ============================================================================
+
+-- get_resume — the stored long-form resume for scoring experience alignment.
+CREATE OR REPLACE FUNCTION get_resume(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'resume_text', p.resume_text,
+        'resume_filename', p.resume_filename,
+        'updated_at', p.updated_at,
+        'has_resume', (p.resume_text IS NOT NULL AND length(trim(p.resume_text)) > 0)
+    )
+    FROM (SELECT p_user_id AS uid) base
+    LEFT JOIN job_search_profile p ON p.user_id = base.uid;
+$$;
+
+-- upsert_resume — save / replace the resume text (one row per user).
+CREATE OR REPLACE FUNCTION upsert_resume(
+    p_resume_text text,
+    p_resume_filename text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row job_search_profile;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'upsert_resume: no user_id';
+    END IF;
+
+    INSERT INTO job_search_profile (user_id, resume_text, resume_filename)
+    VALUES (p_user_id, p_resume_text, p_resume_filename)
+    ON CONFLICT (user_id) DO UPDATE
+        SET resume_text = EXCLUDED.resume_text,
+            resume_filename = EXCLUDED.resume_filename
+    RETURNING * INTO v_row;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'resume_filename', v_row.resume_filename,
+        'updated_at', v_row.updated_at,
+        'length', length(coalesce(v_row.resume_text, ''))
+    );
+END;
+$$;
+
+
+-- ============================================================================
 -- Grants — both planes. `authenticated` = the SPA's logged-in user (RLS
 -- scopes them); `service_role` = the MCP edge function.
 -- ============================================================================
@@ -602,3 +658,5 @@ GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], 
 GRANT EXECUTE ON FUNCTION submit_application(uuid, uuid, text, date, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_resume(uuid)                          TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION upsert_resume(text, text, uuid)           TO authenticated, service_role;

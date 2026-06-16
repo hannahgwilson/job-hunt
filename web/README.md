@@ -3,11 +3,11 @@
 A Vite + React SPA that is the read/write surface for the job-hunt pipeline. It
 talks to Supabase **directly** via `supabase-js` — no MCP in the data path:
 
-- **Reads** are RLS-scoped selects + two read RPCs (`get_action_queue`,
-  `get_funnel_metrics`).
+- **Reads** are RLS-scoped selects + read RPCs (`get_action_queue`,
+  `get_funnel_metrics`, `get_resume`).
 - **Writes** are the transactional RPCs (`intake_role`, `submit_application`,
-  `advance_application`) — the same functions the MCP wraps, so the app and the
-  agent share one implementation.
+  `advance_application`, `set_priority_signals`, `upsert_resume`) — the same
+  functions the MCP wraps, so the app and the agent share one implementation.
 
 The anon (publishable) key is safe in the client: Row Level Security scopes every
 query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
@@ -16,10 +16,11 @@ query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
 
 | Route | What |
 |---|---|
-| `/` | Dashboard — counts, status breakdown, next interviews |
-| `/pipeline` | Kanban by status (Realtime), posting links, one-click advance, **+ Add a role** |
-| `/queue` | Action queue — roles to apply, follow-ups, interviews, networking |
+| `/` | Dashboard — high-level counts, status breakdown, next interviews |
+| `/pipeline` | **Roles to apply** (force-ranked, sortable table) + kanban by stage (Realtime), posting links, one-click advance, **+ Add a role** |
+| `/queue` | Action queue — follow-ups, interviews, networking (to-apply lives on the Pipeline) |
 | `/funnel` | Conversion + median time-in-stage from `application_status_history` |
+| `/resume` | Upload / paste the long-form resume scored for `experience_alignment` |
 | `/role/:id` | Stage-history timeline + interviews with go/no-go decisions |
 
 ## Run

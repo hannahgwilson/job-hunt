@@ -29,8 +29,9 @@ When I paste a job-description link (or describe a role):
 1. **Enrich.** Read the posting at the URL and extract: title, salary range,
    key requirements, location, remote policy, source. If the page is walled,
    ask me for the fields instead. **Also judge the three prioritization signals**
-   (see Play 4) by reading the JD against my resume (`resume/resume.md` locally,
-   or the committed placeholder `resume/resume.example.md`).
+   (see Play 4) by reading the JD against my resume — call `get_resume` to fetch
+   the stored long-form version (I upload it from the tracking hub's Resume page;
+   `resume/resume.example.md` is only the committed placeholder).
 2. **Persist in one call** — job-hunt `intake_role`:
    ```
    intake_role({

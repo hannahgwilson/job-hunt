@@ -63,7 +63,9 @@ Apply these schemas **before** job-hunt:
 #    On a database that already ran an earlier schema.sql, also apply:
 #      migrations/001_interview_decisions.sql   — adds interview go/no-go columns
 #      migrations/002_priority_scoring.sql      — adds the prioritization signals
-#    (then re-run functions.sql — it adds compute_priority / get_prioritized_roles)
+#      migrations/003_resume_profile.sql         — adds the resume/profile table
+#    (then re-run functions.sql — it adds compute_priority / get_prioritized_roles
+#     / get_resume / upsert_resume)
 
 # 2. Deploy the MCP Edge Function (copy index.ts AND deno.json together)
 cp index.ts   <open-brain>/supabase/functions/job-hunt-mcp/index.ts
@@ -105,8 +107,10 @@ priority_score = 100 * (
 ```
 
 Three of the signals are subjective reads the agent supplies from the JD and my
-résumé (`resume/resume.example.md` is the committed placeholder; the real
-long-form résumé stays local / in Open Brain). Location and comp are scored
+résumé. The résumé is **uploaded from the tracking hub** (the Resume page → stored
+in `job_search_profile`, RLS-scoped) and the agent reads it via `get_resume` when
+judging `experience_alignment`; `resume/resume.example.md` is just the committed
+placeholder that documents the expected shape. Location and comp are scored
 deterministically from columns intake already captured.
 
 **The metric definitions live in a lightweight YAML semantic layer**, not buried
@@ -130,6 +134,8 @@ mirrored as `DEFAULT`s on `compute_priority()` so the function runs standalone.
 | `intake_role` | One-call intake: find-or-create the org **by name** + add the posting (wraps `intake_role()`). Also accepts the prioritization signals. Replaces `add_job_posting` + a separate org lookup. |
 | `set_priority_signals` | Update a posting's prioritization signals (`experience_alignment`, `career_trajectory`, `growth_stage`) after intake; returns the recomputed score. |
 | `get_prioritized_roles` | Force-rank the roles I haven't applied to yet by priority score (0–100), with per-role component breakdown. |
+| `get_resume` | Fetch the stored long-form resume — read it before judging `experience_alignment`. |
+| `set_resume` | Save / replace the stored resume text. |
 | `submit_application` | Record a new application; status defaults to `'applied'`. Tracking starts here. |
 | `update_application_status` | Move an application to a new status (wraps `advance_application()`). Transition auto-logged. |
 | `schedule_interview` | Schedule an interview. `add_to_calendar: true` also writes a row in `events`. |

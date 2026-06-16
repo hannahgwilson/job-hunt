@@ -62,6 +62,10 @@ Apply these schemas **before** job-hunt:
 #      functions.sql   — read aggregations + write RPCs (the shared logic layer)
 #    On a database that already ran an earlier schema.sql, also apply:
 #      migrations/001_interview_decisions.sql   — adds interview go/no-go columns
+#      migrations/002_priority_scoring.sql      — adds the prioritization signals
+#      migrations/003_resume_profile.sql         — adds the resume/profile table
+#    (then re-run functions.sql — it adds compute_priority / get_prioritized_roles
+#     / get_resume / upsert_resume)
 
 # 2. Deploy the MCP Edge Function (copy index.ts AND deno.json together)
 cp index.ts   <open-brain>/supabase/functions/job-hunt-mcp/index.ts
@@ -86,11 +90,52 @@ functions, so they are written once and called from both sides:
 This is why "paste a job link → build the org → start tracking" is one
 transactional `intake_role` call instead of brittle chained inserts.
 
+## Prioritization & the semantic layer
+
+The action queue doesn't just list roles to apply to — it **force-ranks** them by
+a 0–100 priority score, so "what do I work next" is the top card. The score is a
+weighted sum of five components, defined once and consumed everywhere:
+
+```
+priority_score = 100 * (
+    0.35 * experience   // fit of the JD vs my resume          (agent-judged 0..1)
+  + 0.15 * location     // hybrid-NYC > remote > onsite-NYC …   (derived)
+  + 0.15 * comp         // salary midpoint normalized to a band (derived)
+  + 0.20 * career       // step_up > lateral > step_back        (agent-judged)
+  + 0.15 * growth       // growth/early > late/seed > public    (agent-judged)
+)
+```
+
+Three of the signals are subjective reads the agent supplies from the JD and my
+résumé. The résumé is **uploaded from the tracking hub** (the Resume page → stored
+in `job_search_profile`, RLS-scoped) and the agent reads it via `get_resume` when
+judging `experience_alignment`; `resume/resume.example.md` is just the committed
+placeholder that documents the expected shape. Location and comp are scored
+deterministically from columns intake already captured.
+
+**The metric definitions live in a lightweight YAML semantic layer**, not buried
+in code — see [`semantic/`](semantic/). Each metric (`time_in_stage`,
+`conversion_rate`, `priority_score`) is a spec that points at the SQL function
+implementing it, so there's one canonical definition the agent, the UI, and I all
+read. The priority weights are the source of truth in
+[`semantic/metrics/priority_score.yaml`](semantic/metrics/priority_score.yaml) and
+mirrored as `DEFAULT`s on `compute_priority()` so the function runs standalone.
+
+| Surface | What it shows |
+|---|---|
+| `compute_priority()` | pure scoring of one posting → `{ score, components, weights }` |
+| `get_prioritized_roles()` / `get_action_queue().roles_to_apply` | the unapplied roles, ranked high→low |
+| Action Queue page (`web/`) | rank + score badge + per-component fit bars |
+
 ## Tools
 
 | Tool | Purpose |
 |---|---|
-| `intake_role` | One-call intake: find-or-create the org **by name** + add the posting (wraps `intake_role()`). Replaces `add_job_posting` + a separate org lookup. |
+| `intake_role` | One-call intake: find-or-create the org **by name** + add the posting (wraps `intake_role()`). Also accepts the prioritization signals. Replaces `add_job_posting` + a separate org lookup. |
+| `set_priority_signals` | Update a posting's prioritization signals (`experience_alignment`, `career_trajectory`, `growth_stage`) after intake; returns the recomputed score. |
+| `get_prioritized_roles` | Force-rank the roles I haven't applied to yet by priority score (0–100), with per-role component breakdown. |
+| `get_resume` | Fetch the stored long-form resume — read it before judging `experience_alignment`. |
+| `set_resume` | Save / replace the stored resume text. |
 | `submit_application` | Record a new application; status defaults to `'applied'`. Tracking starts here. |
 | `update_application_status` | Move an application to a new status (wraps `advance_application()`). Transition auto-logged. |
 | `schedule_interview` | Schedule an interview. `add_to_calendar: true` also writes a row in `events`. |

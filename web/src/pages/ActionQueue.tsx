@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { fetchActionQueue } from "../lib/api";
 import type { ActionQueue as Q } from "../lib/types";
 
@@ -16,21 +17,14 @@ export default function ActionQueue() {
   return (
     <div className="page">
       <h1>Action Queue</h1>
-      <div className="queue-grid">
-        <section className="card">
-          <h2>Roles to apply <span className="count">{q.roles_to_apply.length}</span></h2>
-          <ul className="clean">
-            {q.roles_to_apply.map((r) => (
-              <li key={r.id}>
-                <strong>{r.title}</strong> @ {r.organization_name}
-                {r.closing_soon && <span className="pill pill-warn">closing soon</span>}
-                {r.url && <a href={r.url} target="_blank" rel="noreferrer"> ↗</a>}
-              </li>
-            ))}
-            {q.roles_to_apply.length === 0 && <li className="muted">Nothing waiting.</li>}
-          </ul>
-        </section>
 
+      {/* Roles to apply are force-ranked on the Pipeline page; link, don't duplicate. */}
+      <p className="muted">
+        <strong>{q.roles_to_apply.length}</strong> role{q.roles_to_apply.length === 1 ? "" : "s"} waiting to apply to,
+        ranked by priority on the <Link to="/pipeline">Pipeline →</Link>
+      </p>
+
+      <div className="queue-grid">
         <section className="card">
           <h2>Follow-ups <span className="count">{q.role_followups.length}</span></h2>
           <ul className="clean">

@@ -7,6 +7,7 @@ import Pipeline from "./pages/Pipeline";
 import ActionQueue from "./pages/ActionQueue";
 import Funnel from "./pages/Funnel";
 import RoleDetail from "./pages/RoleDetail";
+import Profile from "./pages/Profile";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -54,6 +55,7 @@ const NAV: { to: string; label: string; end: boolean }[] = [
   { to: "/pipeline", label: "Pipeline", end: false },
   { to: "/queue", label: "Action Queue", end: false },
   { to: "/funnel", label: "Funnel", end: false },
+  { to: "/resume", label: "Resume", end: false },
 ];
 
 export default function App() {
@@ -93,6 +95,7 @@ export default function App() {
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/queue" element={<ActionQueue />} />
           <Route path="/funnel" element={<Funnel />} />
+          <Route path="/resume" element={<Profile />} />
           <Route path="/role/:id" element={<RoleDetail />} />
         </Routes>
       </main>

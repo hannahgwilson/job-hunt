@@ -4,6 +4,10 @@
 .env.*.local
 *.secret
 
+# Real résumé — long-form personal data the agent scores against. Only the
+# placeholder (resume/resume.example.md) is committed. See semantic/metrics/priority_score.yaml.
+resume/resume.md
+
 # Node / web build
 node_modules/
 web/node_modules/

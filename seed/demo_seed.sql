@@ -15,11 +15,15 @@ DECLARE
     org_acme   uuid;
     org_globex uuid;
     org_initech uuid;
+    org_nimbus uuid;
+    org_hooli  uuid;
 
     post_acme_eng   uuid;
     post_globex_pm  uuid;
     post_initech_ds uuid;
     post_acme_lead  uuid;
+    post_nimbus_eng uuid;
+    post_hooli_de   uuid;
 
     app_acme   uuid;
     app_globex uuid;
@@ -38,6 +42,14 @@ BEGIN
     VALUES (v_user, 'Initech', 'FinTech', ARRAY['employer-target'])
     RETURNING id INTO org_initech;
 
+    INSERT INTO organizations (user_id, name, industry, tags)
+    VALUES (v_user, 'Nimbus', 'AI Infrastructure', ARRAY['employer-target'])
+    RETURNING id INTO org_nimbus;
+
+    INSERT INTO organizations (user_id, name, industry, tags)
+    VALUES (v_user, 'Hooli', 'Enterprise Software', ARRAY['employer-target'])
+    RETURNING id INTO org_hooli;
+
     -- Job postings
     INSERT INTO job_postings (user_id, organization_id, title, url, salary_min, salary_max, location, remote_policy, source)
     VALUES (v_user, org_acme, 'Senior AI Engineer', 'https://example.com/acme/sai', 190000, 240000, 'Remote', 'remote', 'linkedin')
@@ -51,10 +63,34 @@ BEGIN
     VALUES (v_user, org_initech, 'Staff Data Scientist', 'https://example.com/initech/sds', 200000, 250000, 'Austin, TX', 'onsite', 'company-site')
     RETURNING id INTO post_initech_ds;
 
-    -- A tracked posting with NO application yet -> shows in "roles to apply"
-    INSERT INTO job_postings (user_id, organization_id, title, url, remote_policy, source, closing_date)
-    VALUES (v_user, org_acme, 'AI Research Lead', 'https://example.com/acme/lead', 'remote', 'linkedin', current_date + 4)
+    -- Tracked postings with NO application yet -> the force-ranked "roles to apply".
+    -- Their priority signals (experience_alignment / career_trajectory / growth_stage)
+    -- plus location, remote_policy, and salary drive compute_priority(). The spread
+    -- below is deliberate so the ranking is visibly differentiated in the queue:
+    --   Nimbus  — hybrid-NYC, growth-stage, step-up, high fit, strong comp  → ranks top
+    --   Acme    — remote, growth, step-up, good fit, no posted salary       → middle
+    --   Hooli   — onsite (non-NYC), public, lateral, weak fit               → ranks low
+    INSERT INTO job_postings (user_id, organization_id, title, url, salary_min, salary_max,
+                              location, remote_policy, source, closing_date,
+                              experience_alignment, career_trajectory, growth_stage)
+    VALUES (v_user, org_nimbus, 'Staff Platform Engineer', 'https://example.com/nimbus/staff',
+            210000, 260000, 'New York, NY', 'hybrid', 'referral', current_date + 10,
+            0.90, 'step_up', 'growth')
+    RETURNING id INTO post_nimbus_eng;
+
+    INSERT INTO job_postings (user_id, organization_id, title, url, remote_policy, source, closing_date,
+                              experience_alignment, career_trajectory, growth_stage)
+    VALUES (v_user, org_acme, 'AI Research Lead', 'https://example.com/acme/lead', 'remote', 'linkedin', current_date + 4,
+            0.80, 'step_up', 'growth')
     RETURNING id INTO post_acme_lead;
+
+    INSERT INTO job_postings (user_id, organization_id, title, url, salary_min, salary_max,
+                              location, remote_policy, source,
+                              experience_alignment, career_trajectory, growth_stage)
+    VALUES (v_user, org_hooli, 'Data Engineer', 'https://example.com/hooli/de',
+            140000, 165000, 'San Jose, CA', 'onsite', 'company-site',
+            0.45, 'lateral', 'public')
+    RETURNING id INTO post_hooli_de;
 
     -- Applications (the status-history trigger logs the current state on insert)
     INSERT INTO applications (user_id, job_posting_id, status, applied_date)

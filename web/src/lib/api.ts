@@ -5,6 +5,7 @@
 import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
+  CareerTrajectory, GrowthStage, ResumeProfile,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -89,6 +90,10 @@ export interface IntakeRoleInput {
   source?: string;
   requirements?: string[];
   notes?: string;
+  // prioritization signals (see semantic/metrics/priority_score.yaml)
+  experience_alignment?: number; // 0..1
+  career_trajectory?: CareerTrajectory;
+  growth_stage?: GrowthStage;
 }
 
 export async function intakeRole(input: IntakeRoleInput): Promise<{ posting_id: string }> {
@@ -103,10 +108,42 @@ export async function intakeRole(input: IntakeRoleInput): Promise<{ posting_id: 
     p_source: input.source ?? null,
     p_requirements: input.requirements ?? null,
     p_notes: input.notes ?? null,
+    p_experience_alignment: input.experience_alignment ?? null,
+    p_career_trajectory: input.career_trajectory ?? null,
+    p_growth_stage: input.growth_stage ?? null,
   });
   if (error) throw error;
   const posting = (data as { posting?: { id: string } }).posting;
   return { posting_id: posting?.id ?? "" };
+}
+
+export async function setPrioritySignals(input: {
+  job_posting_id: string;
+  experience_alignment?: number;
+  career_trajectory?: CareerTrajectory;
+  growth_stage?: GrowthStage;
+}): Promise<void> {
+  const { error } = await supabase.rpc("set_priority_signals", {
+    p_job_posting_id: input.job_posting_id,
+    p_experience_alignment: input.experience_alignment ?? null,
+    p_career_trajectory: input.career_trajectory ?? null,
+    p_growth_stage: input.growth_stage ?? null,
+  });
+  if (error) throw error;
+}
+
+export async function fetchResume(): Promise<ResumeProfile> {
+  const { data, error } = await supabase.rpc("get_resume", {});
+  if (error) throw error;
+  return data as ResumeProfile;
+}
+
+export async function saveResume(text: string, filename?: string): Promise<void> {
+  const { error } = await supabase.rpc("upsert_resume", {
+    p_resume_text: text,
+    p_resume_filename: filename ?? null,
+  });
+  if (error) throw error;
 }
 
 export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {

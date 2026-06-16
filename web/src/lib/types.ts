@@ -62,10 +62,45 @@ export interface Interview {
   decision_notes: string | null;
 }
 
+// ── prioritization (see semantic/metrics/priority_score.yaml) ────────────────
+export type CareerTrajectory = "step_up" | "lateral" | "step_back";
+export type GrowthStage = "seed" | "early" | "growth" | "late" | "public" | "unknown";
+
+export interface PriorityComponents {
+  experience: number;
+  location: number;
+  comp: number;
+  career: number;
+  growth: number;
+}
+
+export interface Priority {
+  score: number;            // 0..100
+  components: PriorityComponents;
+  weights: PriorityComponents;
+}
+
+// A ranked roles_to_apply entry: the posting + scoring metadata.
+export type RankedRole = JobPosting & {
+  organization_name: string;
+  closing_soon: boolean;
+  rank: number;
+  priority: Priority;
+};
+
+// ── get_resume() return shape ────────────────────────────────────────────────
+export interface ResumeProfile {
+  success: boolean;
+  resume_text: string | null;
+  resume_filename: string | null;
+  updated_at: string | null;
+  has_resume: boolean;
+}
+
 // ── get_action_queue() return shape ──────────────────────────────────────────
 export interface ActionQueue {
   success: boolean;
-  roles_to_apply: Array<JobPosting & { organization_name: string; closing_soon: boolean }>;
+  roles_to_apply: RankedRole[];
   role_followups: Array<{
     application_id: string;
     status: ApplicationStatus;

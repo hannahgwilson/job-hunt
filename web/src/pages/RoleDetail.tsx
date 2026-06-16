@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchRole } from "../lib/api";
+import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
 const DECISION_PILL: Record<string, string> = {
@@ -24,6 +25,10 @@ export default function RoleDetail() {
       .catch((e) => setError(e.message));
   }, [id]);
 
+  // Same AI-scoring panel as the standalone fit page, keyed off this
+  // application's posting (undefined until the application loads).
+  const fit = useRoleFit(app?.job_postings?.id);
+
   if (error) return <p className="error">{error}</p>;
   if (!app) return <p className="muted">Loading…</p>;
 
@@ -42,6 +47,8 @@ export default function RoleDetail() {
         {posting?.remote_policy ? ` · ${posting.remote_policy}` : ""}
         {posting?.url && <> · <a href={posting.url} target="_blank" rel="noreferrer">posting ↗</a></>}
       </p>
+
+      <RoleFitPanel data={fit.data} judging={fit.judging} onJudge={fit.judge} error={fit.error} />
 
       <div className="cols">
         <section className="card">

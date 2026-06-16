@@ -43,6 +43,15 @@ export interface Application {
   job_postings?: JobPosting;
 }
 
+// A role/posting plus any applications against it. Drives the role-centric
+// views (the "All roles" table), which must show roles you're tracking even
+// before you've applied — so it reads job_postings, not applications.
+export interface PostingRow extends JobPosting {
+  posted_date: string | null;
+  source: Source | null;
+  applications?: Array<{ id: string; status: ApplicationStatus; applied_date: string | null }>;
+}
+
 export interface StatusHistoryRow {
   id: string;
   from_status: string | null;

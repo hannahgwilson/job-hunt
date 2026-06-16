@@ -16,11 +16,13 @@ query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
 
 | Route | What |
 |---|---|
-| `/` | Dashboard — counts, status breakdown, next interviews |
-| `/pipeline` | Kanban by status (Realtime), posting links, one-click advance, **+ Add a role** |
+| `/` | Dashboard — counts, **conversion funnel** (+ median time-in-stage), status breakdown, next interviews |
+| `/pipeline` | **Top-of-funnel "to apply" cards**, Kanban by status (Realtime), one-click advance, **+ Add a role**, and a **sortable table of all roles** |
 | `/queue` | Action queue — roles to apply, follow-ups, interviews, networking |
-| `/funnel` | Conversion + median time-in-stage from `application_status_history` |
 | `/role/:id` | Stage-history timeline + interviews with go/no-go decisions |
+
+The funnel no longer has its own route — it lives on the Dashboard, and the
+top-of-funnel "to apply" list moved onto the Pipeline page.
 
 ## Run
 

@@ -1,0 +1,62 @@
+# Shared semantic model — entities, dimensions, and the stage ladder that the
+# individual metric files reference. Kept in one place so every metric agrees on
+# what an "application" is and what order the stages go in.
+
+version: 1
+owner: hannah
+
+entities:
+  application:
+    description: One submitted application. The grain of the funnel.
+    table: applications
+    primary_key: id
+    foreign_keys:
+      job_posting_id: job_posting.id
+      referral_contact_id: contacts.id
+
+  application_status_event:
+    description: >
+      One status transition, auto-logged by trigger. The factual basis for every
+      funnel metric — we trust the log, not the current-status snapshot.
+    table: application_status_history
+    primary_key: id
+    foreign_keys:
+      application_id: application.id
+
+  job_posting:
+    description: A role at an organization. Descriptive dim behind each application.
+    table: job_postings
+    primary_key: id
+    foreign_keys:
+      organization_id: organizations.id
+
+# The canonical funnel order. Metrics index into this; the UI mirrors it in
+# PIPELINE_COLUMNS. Change it in one place and both conversion and time-in-stage
+# follow.
+stage_ladder:
+  - applied
+  - screening
+  - interviewing
+  - offer
+  - accepted
+
+# Terminal states — outcomes, not funnel stages. Excluded from conversion math.
+terminal_states:
+  - rejected
+  - withdrawn
+
+dimensions:
+  organization:
+    description: The company. Slice any metric by employer.
+    expression: organizations.name
+  remote_policy:
+    description: remote | hybrid | onsite, from the posting.
+    expression: job_postings.remote_policy
+  source:
+    description: Where the role came from (linkedin, referral, recruiter, …).
+    expression: job_postings.source
+  window_days:
+    description: >
+      Optional trailing window. When set, only status events in the last N days
+      count — passed to get_funnel_metrics(p_window_days).
+    type: parameter

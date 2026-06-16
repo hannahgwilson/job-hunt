@@ -1,0 +1,48 @@
+# Metric: conversion rate
+# Share of applications that advance from one funnel stage to the next.
+
+version: 1
+metric:
+  name: conversion_rate
+  label: Conversion Rate
+  status: implemented
+  description: >
+    For each adjacent pair of stages, the fraction of applications that ever
+    reached the earlier stage which also reached the later one. Counts are based
+    on whether an application *ever* reached a stage (from the status-history
+    log), not its current snapshot — so an application now in `offer` still
+    counts toward applied→screening and screening→interviewing.
+
+  type: ratio
+  unit: percent          # surfaced 0..1; the UI multiplies by 100
+  grain: [stage_transition]   # one value per adjacent pair in the ladder
+
+  source:
+    table: application_status_history
+    implemented_by: get_funnel_metrics()
+    surfaced_as: conversion_rates       # JSON key, e.g. "applied_to_screening"
+    # Logic (see functions.sql): for stages s_i -> s_{i+1},
+    #   numerator   = count(distinct application reaching s_{i+1})
+    #   denominator = count(distinct application reaching s_i)
+    #   rate = numerator / nullif(denominator, 0)
+
+  transitions:
+    - { from: applied,      to: screening,     key: applied_to_screening }
+    - { from: screening,    to: interviewing,  key: screening_to_interviewing }
+    - { from: interviewing, to: offer,         key: interviewing_to_offer }
+    - { from: offer,        to: accepted,      key: offer_to_accepted }
+
+  dimensions:
+    - window_days
+
+  surfaces:
+    - web: Dashboard → "Conversion funnel" (the "% from <prev>" labels)
+    - mcp: get_funnel_metrics tool
+
+  caveats:
+    - >
+      Small-sample noise: with a handful of applications a single outcome swings
+      the rate hard. get_funnel_metrics returns sample_size — show it alongside.
+    - >
+      Terminal states (rejected, withdrawn) are not stages; an application that
+      was rejected after screening still counts as having reached screening.

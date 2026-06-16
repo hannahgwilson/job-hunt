@@ -79,6 +79,7 @@ label.checkbox input { width: auto; }
 .pill-rejected { color: var(--red); }
 .pill-withdrawn { color: var(--muted); }
 .pill-warn { color: var(--warn); border-color: var(--warn); }
+.pill-none { color: var(--muted); }
 
 /* Status bars (dashboard) */
 .bar-row { display: grid; grid-template-columns: 110px 1fr 28px; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
@@ -95,6 +96,37 @@ label.checkbox input { width: auto; }
 .kc-title { font-weight: 600; font-size: 0.9rem; }
 .kc-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 0.5rem; font-size: 0.8rem; }
 .empty { text-align: center; padding: 1rem 0; }
+
+/* Banners */
+.banner-error { border-color: var(--red); margin: 1rem 0; }
+.banner-warn { border-color: var(--warn); margin: 1rem 0; }
+.banner-error strong, .banner-warn strong { display: block; margin-bottom: 0.4rem; }
+code { background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 0.05rem 0.35rem; font-size: 0.85em; }
+
+/* Top of funnel (Pipeline) */
+.tof { margin: 1rem 0 0.5rem; }
+.tof-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.6rem; }
+.tof-head h2 { margin: 0; }
+.tof-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.75rem; }
+.tof-card { display: flex; flex-direction: column; gap: 0.25rem; }
+.tof-card.closing { border-color: var(--warn); }
+.tof-title { font-weight: 600; }
+.tof-meta { text-transform: capitalize; }
+.tof-card .pill-warn { align-self: flex-start; margin-left: 0; margin-top: 0.2rem; }
+.tof-foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 0.5rem; }
+
+/* Sortable roles table (Pipeline) */
+.all-roles { margin-top: 1.25rem; }
+.table-wrap { overflow-x: auto; }
+.roles-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.roles-table th, .roles-table td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.roles-table th { color: var(--muted); font-weight: 600; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--panel); }
+.roles-table th:hover { color: var(--text); }
+.roles-table th.sorted { color: var(--text); }
+.roles-table th.num, .roles-table td.num { text-align: right; }
+.roles-table tbody tr { cursor: pointer; }
+.roles-table tbody tr:hover { background: var(--panel-2); }
+.sort-caret { font-size: 0.7rem; }
 
 /* Funnel */
 .funnel { display: grid; gap: 0.6rem; }

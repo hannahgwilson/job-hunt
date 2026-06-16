@@ -1,0 +1,48 @@
+# Metric: time in stage
+# How long it takes to *reach* each funnel stage, measured from the day applied.
+
+version: 1
+metric:
+  name: time_in_stage
+  label: Time in Stage
+  status: implemented
+  description: >
+    Median number of days from an application's `applied` event to the first
+    time it reaches a given later stage. Uses MIN(changed_at) per (application,
+    stage) so re-entering a stage doesn't distort it. The honest "how long is
+    this actually taking?" number.
+
+  type: median
+  unit: days
+  grain: [stage]                 # one value per stage in the ladder (except `applied`)
+
+  source:
+    table: application_status_history
+    implemented_by: get_funnel_metrics()
+    surfaced_as: median_days_from_applied   # JSON key in the function's return
+    # Logic (see functions.sql `medians` CTE):
+    #   per application: applied_at = MIN(changed_at WHERE to_status='applied')
+    #   per stage s:     reached_at = MIN(changed_at WHERE to_status=s)
+    #   metric = percentile_cont(0.5) WITHIN GROUP (
+    #              ORDER BY (reached_at - applied_at) in days
+    #            )  grouped by stage
+
+  stages: [screening, interviewing, offer, accepted]  # `applied` is the t=0 baseline
+
+  dimensions:
+    - window_days     # restrict to a trailing window
+    # organization / remote_policy / source: defined in the model; not yet
+    # exposed as parameters on get_funnel_metrics — see Roadmap.
+
+  surfaces:
+    - web: Dashboard → "Conversion funnel" (the "median Nd from applied" labels)
+    - mcp: get_funnel_metrics tool
+
+  interpretation: >
+    Rising medians = the search is slowing down (or you're chasing slow
+    pipelines). Pairs with conversion_rate: high conversion + low time-in-stage
+    is the healthy quadrant.
+
+  roadmap:
+    - Per-dimension breakdowns (by organization / remote_policy) once
+      get_funnel_metrics accepts a group-by parameter.

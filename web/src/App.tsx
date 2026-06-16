@@ -5,7 +5,6 @@ import { supabase } from "./lib/supabase";
 import Dashboard from "./pages/Dashboard";
 import Pipeline from "./pages/Pipeline";
 import ActionQueue from "./pages/ActionQueue";
-import Funnel from "./pages/Funnel";
 import RoleDetail from "./pages/RoleDetail";
 
 function Login() {
@@ -53,7 +52,6 @@ const NAV: { to: string; label: string; end: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/pipeline", label: "Pipeline", end: false },
   { to: "/queue", label: "Action Queue", end: false },
-  { to: "/funnel", label: "Funnel", end: false },
 ];
 
 export default function App() {
@@ -92,7 +90,6 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/queue" element={<ActionQueue />} />
-          <Route path="/funnel" element={<Funnel />} />
           <Route path="/role/:id" element={<RoleDetail />} />
         </Routes>
       </main>

@@ -1,0 +1,90 @@
+# Metric: prioritization score   ⚠️ DEFINITION ONLY
+# The force-rank that decides the order to work applications. Designed here so
+# the contract is fixed; the scoring ALGORITHM is built in a separate worktree
+# (per the dashboard feedback). This file is the spec that worktree implements.
+
+version: 1
+metric:
+  name: prioritization_score
+  label: Prioritization Score
+  status: planned
+  description: >
+    A composite 0..100 score that force-ranks open job postings into the order I
+    should work them. Surfaces in the action queue as the apply order — the top
+    of the list is what to do next.
+
+  type: weighted_sum
+  unit: score                  # 0..100, higher = work sooner
+  grain: [job_posting]         # one score per open posting
+
+  source:
+    table: job_postings
+    implemented_by: null               # TODO — separate worktree
+    surfaced_as: prioritization_score  # planned: add to get_action_queue roles_to_apply
+    # Planned home: a score_postings() function in functions.sql, called by
+    # get_action_queue to ORDER BY score DESC instead of applied_date.
+
+  # The four criteria from the feedback. Weights are a starting point for the
+  # algo worktree to tune — they are the *contract*, not the final numbers.
+  criteria:
+    - name: experience_alignment
+      weight: 0.40
+      description: >
+        Semantic match between the posting's requirements and my background.
+      inputs:
+        - job_postings.requirements
+        - job_postings.title
+        - resume_profile        # see inputs.resume_profile below (placeholder)
+      method: >
+        Embed requirements + resume_profile, score cosine similarity. Placeholder
+        resume lives in inputs until the long-form resume is wired in.
+
+    - name: role_features
+      weight: 0.25
+      description: Compensation, benefits, and location fit.
+      inputs:
+        - job_postings.salary_min
+        - job_postings.salary_max
+        - job_postings.location
+        - job_postings.remote_policy
+      location_preference:      # explicit ranking from the feedback
+        - { match: "hybrid in NYC",        points: 1.0 }
+        - { match: "remote",               points: 0.7 }
+        - { match: "hybrid elsewhere",     points: 0.4 }
+        - { match: "onsite elsewhere",     points: 0.1 }
+
+    - name: career_trajectory
+      weight: 0.20
+      description: Whether the role is a lateral move or a step up (never a step down).
+      inputs:
+        - job_postings.title
+        - resume_profile        # current level/title for comparison
+      method: Map titles to a seniority ladder; score forward/lateral > 0, down ≈ 0.
+
+    - name: company_growth_stage
+      weight: 0.15
+      description: Whether the company looks like a growth-stage bet with upside.
+      inputs:
+        - organizations.name
+        - organizations.industry
+      method: >
+        Enrichment signal (stage / headcount trend). May call out to research;
+        for v1 a manual stage tag on the organization is acceptable.
+
+  inputs:
+    resume_profile:
+      type: placeholder
+      description: >
+        A long-form version of my resume, used by experience_alignment and
+        career_trajectory. PLACEHOLDER until provided — store outside this public
+        repo (it's personal data). The algo worktree reads it from config, not
+        from a committed file.
+
+  surfaces:
+    - mcp: get_action_queue → roles_to_apply, ordered by this score
+    - web: "Pipeline → To apply cards, ordered by this score (today by applied_date)"
+
+  roadmap:
+    - Implement score_postings() in functions.sql (separate worktree).
+    - Wire resume_profile from runtime config (never committed).
+    - Order get_action_queue.roles_to_apply by score; mirror in the web "To apply" section.

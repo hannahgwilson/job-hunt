@@ -4,8 +4,24 @@
 
 import { supabase } from "./supabase";
 import type {
-  Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
+  Application, ActionQueue, FunnelMetrics, Interview, PostingRow, StatusHistoryRow,
 } from "./types";
+
+// Every tracked role, with any applications embedded. Role-centric so postings
+// you haven't applied to yet still appear (the dashboard's apps-only views hide
+// them). One left-join, RLS-scoped like everything else.
+export async function fetchPostings(): Promise<PostingRow[]> {
+  const { data, error } = await supabase
+    .from("job_postings")
+    .select(`
+      id, title, url, location, remote_policy, salary_min, salary_max, closing_date, posted_date, source,
+      organizations:organization_id ( id, name ),
+      applications ( id, status, applied_date )
+    `)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as unknown as PostingRow[];
+}
 
 export async function fetchApplications(): Promise<Application[]> {
   const { data, error } = await supabase

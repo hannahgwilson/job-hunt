@@ -152,6 +152,41 @@ table.data a { white-space: nowrap; }
 .file-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .saved-tag { color: var(--green); font-size: 0.85rem; }
 
+/* Resume variants (Resumes page) */
+.resume-tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0; }
+.resume-tab { background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.85rem; }
+.resume-tab.active { border-color: var(--accent); color: var(--accent); }
+.default-star { color: var(--warn); margin-right: 0.25rem; }
+.resume-editor-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.resume-label { flex: 1; min-width: 180px; }
+.default-toggle { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+button.danger { color: var(--red); border-color: var(--red); }
+
+/* Notice banner (e.g. un-judged role) */
+.notice { border-left: 3px solid var(--warn); background: rgba(176, 116, 0, 0.06); margin-top: 1rem; }
+
+/* Role fit cards */
+.fit-card { display: flex; flex-direction: column; gap: 0.5rem; }
+.fit-card.recommended { border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
+.fit-card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.fit-list { margin-top: 0.25rem; }
+.fit-list h4 { margin: 0 0 0.25rem; font-size: 0.82rem; }
+.fit-list ul, .tweaks ul, .reqs { margin: 0; padding-left: 1.1rem; }
+.fit-list li, .reqs li { font-size: 0.85rem; margin-bottom: 0.15rem; }
+.spikes-h { color: var(--green); }
+.gaps-h { color: var(--warn); }
+.tweaks { margin-top: 0.25rem; }
+.tweaks summary { cursor: pointer; font-size: 0.85rem; color: var(--accent); }
+.tweaks li { font-size: 0.85rem; margin: 0.35rem 0; }
+.tweak-section { font-weight: 600; }
+
+/* Company page */
+.company-links { display: flex; gap: 0.9rem; }
+.count { color: var(--muted); font-weight: 400; font-size: 0.85rem; margin-left: 0.3rem; }
+.connection, .company-role { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+.connection:last-child, .company-role:last-child { border-bottom: none; }
+.role-title a.ext { margin-left: 0.4rem; font-weight: 400; }
+
 /* Modal */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: grid; place-items: center; z-index: 50; }
 .modal { width: 460px; max-width: 92vw; }

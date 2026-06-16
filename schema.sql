@@ -184,6 +184,57 @@ CREATE TABLE IF NOT EXISTS job_search_profile (
 );
 
 -- ============================================================================
+-- resumes
+-- Dim: one row per resume variant (e.g. a senior-IC resume and a manager
+-- resume). Supersedes the single-row job_search_profile; get_resume() reads the
+-- default variant for back-compat. The agent scores each against a posting.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS resumes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    label TEXT NOT NULL,                         -- "Senior IC", "Manager"
+    variant TEXT CHECK (variant IN ('ic', 'manager', 'other') OR variant IS NULL),
+    resume_text TEXT,
+    resume_filename TEXT,
+    is_default BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resumes_user ON resumes(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_resumes_one_default
+    ON resumes(user_id) WHERE is_default;
+
+-- ============================================================================
+-- role_fit
+-- Fact: one row per (posting × resume) AI-judge read. Holds the fit score the
+-- priority framework consumes (lifted into job_postings.experience_alignment by
+-- save_role_fit) plus the human-facing summary / spikes / gaps / tweaks.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS role_fit (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    job_posting_id UUID NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+
+    alignment NUMERIC(3,2)
+        CHECK ((alignment BETWEEN 0 AND 1) OR alignment IS NULL),
+    summary TEXT,
+    spikes JSONB,
+    gaps JSONB,
+    tweaks JSONB,
+    model TEXT,
+    judged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    UNIQUE (job_posting_id, resume_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_fit_user ON role_fit(user_id);
+CREATE INDEX IF NOT EXISTS idx_role_fit_posting ON role_fit(job_posting_id);
+
+-- ============================================================================
 -- Triggers
 -- ============================================================================
 
@@ -209,6 +260,18 @@ CREATE TRIGGER update_interviews_updated_at
 DROP TRIGGER IF EXISTS update_job_search_profile_updated_at ON job_search_profile;
 CREATE TRIGGER update_job_search_profile_updated_at
     BEFORE UPDATE ON job_search_profile
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_resumes_updated_at ON resumes;
+CREATE TRIGGER update_resumes_updated_at
+    BEFORE UPDATE ON resumes
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_role_fit_updated_at ON role_fit;
+CREATE TRIGGER update_role_fit_updated_at
+    BEFORE UPDATE ON role_fit
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
@@ -241,6 +304,8 @@ ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE application_status_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE interviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_search_profile ENABLE ROW LEVEL SECURITY;
+ALTER TABLE resumes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE role_fit ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS job_postings_user_policy ON job_postings;
 CREATE POLICY job_postings_user_policy ON job_postings
@@ -260,4 +325,12 @@ CREATE POLICY interviews_user_policy ON interviews
 
 DROP POLICY IF EXISTS job_search_profile_user_policy ON job_search_profile;
 CREATE POLICY job_search_profile_user_policy ON job_search_profile
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS resumes_user_policy ON resumes;
+CREATE POLICY resumes_user_policy ON resumes
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS role_fit_user_policy ON role_fit;
+CREATE POLICY role_fit_user_policy ON role_fit
     FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);

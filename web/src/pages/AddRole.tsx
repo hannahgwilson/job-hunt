@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { intakeRole, submitApplication } from "../lib/api";
+import { intakeRole, runJudge, submitApplication } from "../lib/api";
 import type { CareerTrajectory, GrowthStage } from "../lib/types";
 
 export default function AddRole({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
@@ -33,6 +33,14 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
           fitNum !== undefined && !Number.isNaN(fitNum) ? fitNum : undefined,
       });
       if (alsoApply && posting_id) await submitApplication(posting_id);
+      // Auto-judge new roles that weren't given a manual fit, so they don't sit
+      // at the neutral 0.5 default (the "stuck at 65" problem). Fire-and-forget:
+      // intake shouldn't block on two LLM calls, and the pipeline's realtime
+      // subscription re-ranks the role when save_role_fit lands the score. If no
+      // resume exists yet the judge no-ops — the fit page button stays available.
+      if (posting_id && fitNum === undefined) {
+        runJudge(posting_id).catch(() => { /* no resumes / transient — judge on demand later */ });
+      }
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -63,7 +71,7 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
               </select>
             </label>
           </div>
-          <p className="muted small">Prioritization signals (optional — feeds the force-ranking; Claude fills these from the JD + your resume).</p>
+          <p className="muted small">Prioritization signals (optional — feeds the force-ranking; Claude fills these from the JD + your resume). Leave <strong>Fit</strong> blank and the AI judge scores it against your resumes automatically.</p>
           <div className="form-row">
             <label>Career move
               <select value={career} onChange={(e) => setCareer(e.target.value)}>

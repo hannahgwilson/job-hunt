@@ -26,6 +26,10 @@ const strOrNull = (s: string): string | null => (s.trim() === "" ? null : s);
 
 export default function CareerProfilePanel() {
   const [p, setP] = useState<CareerProfile>(BLANK);
+  // The two list fields are edited as raw text and only parsed to arrays on save —
+  // parsing on every keystroke would strip the comma you just typed.
+  const [forwardText, setForwardText] = useState("");
+  const [lateralText, setLateralText] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -33,7 +37,13 @@ export default function CareerProfilePanel() {
 
   useEffect(() => {
     getCareerProfile()
-      .then((r) => { if (r.profile) setP({ ...BLANK, ...r.profile }); })
+      .then((r) => {
+        if (r.profile) {
+          setP({ ...BLANK, ...r.profile });
+          setForwardText(fromList(r.profile.forward_means));
+          setLateralText(fromList(r.profile.lateral_domains));
+        }
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -47,7 +57,11 @@ export default function CareerProfilePanel() {
     setBusy(true);
     setError(null);
     try {
-      await saveCareerProfile(p);
+      await saveCareerProfile({
+        ...p,
+        forward_means: toList(forwardText),
+        lateral_domains: toList(lateralText),
+      });
       setSaved(true);
     } catch (e) {
       setError((e as Error).message);
@@ -121,10 +135,10 @@ export default function CareerProfilePanel() {
         <input type="number" value={p.target_comp_floor ?? ""} onChange={(e) => set("target_comp_floor", numOrNull(e.target.value))} placeholder="230000" />
       </label>
       <label>A step up means… (comma-separated)
-        <input value={fromList(p.forward_means)} onChange={(e) => set("forward_means", toList(e.target.value))} placeholder="more scope, more comp, earlier-stage, more autonomy" />
+        <input value={forwardText} onChange={(e) => { setForwardText(e.target.value); setSaved(false); }} placeholder="more scope, more comp, earlier-stage, more autonomy" />
       </label>
       <label>Domains you’d accept as a lateral pivot (comma-separated)
-        <input value={fromList(p.lateral_domains)} onChange={(e) => set("lateral_domains", toList(e.target.value))} placeholder="data infra, ML tooling" />
+        <input value={lateralText} onChange={(e) => { setLateralText(e.target.value); setSaved(false); }} placeholder="data infra, ML tooling" />
       </label>
       <label>Anything else that defines “forward”
         <textarea value={p.notes ?? ""} onChange={(e) => set("notes", strOrNull(e.target.value))} rows={2} placeholder="e.g. only want roles with real ML ownership, not glue work" />

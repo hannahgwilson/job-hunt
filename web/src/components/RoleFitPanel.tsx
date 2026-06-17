@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getRoleFit, runJudge } from "../lib/api";
+import { getRoleFit, runJudge, runCareerJudge, runGrowthJudge } from "../lib/api";
 import type { ResumeFitEntry, RoleFitResponse } from "../lib/types";
 
 // The AI-scoring UI for one posting: a "Run judge" button, the better-fit
@@ -21,22 +21,30 @@ export function alignClass(a: number | null): string {
 
 // Fetch + (re-)judge a posting's fit. postingId may be undefined while a parent
 // is still loading (e.g. RoleDetail waiting on its application) — it no-ops then.
+type JudgeKind = "experience" | "career" | "growth";
+
+const RUNNERS: Record<JudgeKind, (id: string) => Promise<RoleFitResponse>> = {
+  experience: (id) => runJudge(id),
+  career: runCareerJudge,
+  growth: runGrowthJudge,
+};
+
 export function useRoleFit(postingId?: string) {
   const [data, setData] = useState<RoleFitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [judging, setJudging] = useState(false);
+  const [busy, setBusy] = useState<JudgeKind | null>(null);
 
   useEffect(() => {
     if (!postingId) return;
     getRoleFit(postingId).then(setData).catch((e) => setError(e.message));
   }, [postingId]);
 
-  async function judge() {
+  async function run(kind: JudgeKind) {
     if (!postingId) return;
-    setJudging(true);
+    setBusy(kind);
     setError(null);
     try {
-      const fresh = await runJudge(postingId);
+      const fresh = await RUNNERS[kind](postingId);
       if ((fresh as RoleFitResponse).success === false) {
         throw new Error((fresh as unknown as { error?: string }).error ?? "judge failed");
       }
@@ -44,11 +52,20 @@ export function useRoleFit(postingId?: string) {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setJudging(false);
+      setBusy(null);
     }
   }
 
-  return { data, error, judging, judge };
+  return {
+    data,
+    error,
+    judging: busy === "experience",
+    judge: () => run("experience"),
+    judgingCareer: busy === "career",
+    judgeCareer: () => run("career"),
+    judgingGrowth: busy === "growth",
+    judgeGrowth: () => run("growth"),
+  };
 }
 
 function Verdict({ resumes }: { resumes: ResumeFitEntry[] }) {

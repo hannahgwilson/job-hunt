@@ -60,18 +60,29 @@ Apply these schemas **before** job-hunt:
 # 1. Apply the SQL, in order, in the Supabase SQL editor:
 #      schema.sql      — tables, triggers, RLS
 #      functions.sql   — read aggregations + write RPCs (the shared logic layer)
-#    On a database that already ran an earlier schema.sql, also apply:
-#      migrations/001_interview_decisions.sql   — adds interview go/no-go columns
-#      migrations/002_priority_scoring.sql      — adds the prioritization signals
-#      migrations/003_resume_profile.sql         — adds the resume/profile table
-#    (then re-run functions.sql — it adds compute_priority / get_prioritized_roles
-#     / get_resume / upsert_resume)
+#    On a database that already ran an earlier schema.sql, also apply, in order:
+#      migrations/001_interview_decisions.sql    — interview go/no-go columns
+#      migrations/002_priority_scoring.sql        — the prioritization signals
+#      migrations/003_resume_profile.sql          — the resume/profile table
+#      migrations/004_resumes_and_fit.sql         — resume variants + role_fit (AI fit judge)
+#      migrations/005_org_company_fields.sql      — org/company page fields
+#      migrations/006_career_growth_judges.sql    — career_profile + career/growth judge storage
+#      migrations/007_resume_feedback.sql         — resume_feedback_synthesis (feedback digest)
+#    (then re-run functions.sql — CREATE OR REPLACE, so it's safe to re-apply; it
+#     adds the read/write RPCs the new tables need, e.g. get_resume_feedback /
+#     save_resume_synthesis / get_role_fit / the career & growth judge RPCs)
 
 # 2. Deploy the MCP Edge Function (copy index.ts AND deno.json together)
 cp index.ts   <open-brain>/supabase/functions/job-hunt-mcp/index.ts
 cp deno.json  <open-brain>/supabase/functions/job-hunt-mcp/deno.json
 cd <open-brain>
 supabase functions deploy job-hunt-mcp --no-verify-jwt
+
+# 3. Deploy the AI-judge Edge Functions (each is a folder with index.ts + deno.json).
+#    They make a server-side Anthropic call, so they need secrets set once:
+#      supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   # JUDGE_MODEL optional
+#    Then deploy each (judge-growth also uses web search):
+supabase functions deploy judge-fit judge-career judge-growth synthesize-feedback
 ```
 
 Add as a Claude Desktop connector with `?key=<MCP_ACCESS_KEY>`.

@@ -25,10 +25,12 @@ components:
     criterion: Alignment with my job experience
     input: job_postings.experience_alignment   # NUMERIC(3,2), 0..1
     source: agent-judged
+    judge: supabase/functions/judge-fit   # "Run AI judge" on the role page
     how: >
-      The agent reads the posting's requirements against my resume
-      (resume/resume.example.md — a placeholder for the real long-form resume)
-      and assigns a 0..1 alignment. 1.0 = I clearly clear the bar; 0.5 = stretch.
+      The agent (or the judge-fit edge function) reads the posting's requirements
+      against my resume and assigns a 0..1 alignment. 1.0 = I clearly clear the
+      bar; 0.5 = stretch. judge-fit scores every resume variant and lifts this
+      column to the best fit via save_role_fit.
     null_default: 0.5   # unscored → neutral, so an un-enriched role isn't buried
 
   location:
@@ -51,15 +53,22 @@ components:
     how: >
       Linearly normalize the salary midpoint between a floor and a target band.
       <= floor scores ~0, >= target scores 1.0, clamped.
-    band:
-      floor:  200000   # p_comp_floor default — placeholder, tune to my market
-      target: 250000   # p_comp_target default
+    band:                # MUST match the DEFAULTs in functions.sql:compute_priority
+      floor:  120000   # p_comp_floor default — <= floor scores ~0
+      target: 220000   # p_comp_target default — >= target scores 1.0
     null_default: 0.40   # no posted salary → mild penalty, not zero
 
   career:
     criterion: Lateral or step-forward move
     input: job_postings.career_trajectory   # enum
     source: agent-judged
+    judge: supabase/functions/judge-career   # "Judge career move" on the role page
+    needs: >
+      A career_profile row (baseline + ambition). career_trajectory is RELATIVE
+      and PERSONAL — the same role is a step_up for one person and lateral for
+      another. judge-career reads the JD against that profile; without it the call
+      falls back to guessing seniority from the title (and says so). Set the
+      profile on the Resumes page → Career profile.
     scale:
       step_up:   1.00
       lateral:   0.75
@@ -70,6 +79,14 @@ components:
     criterion: Growth-stage company with potential
     input: job_postings.growth_stage   # enum
     source: agent-judged
+    judge: supabase/functions/judge-growth   # "Judge company growth" on the role page
+    needs: >
+      External company signals (funding stage, last round, headcount trend,
+      momentum) that aren't in our tables. judge-growth web-searches them, judges
+      ONCE PER COMPANY, and caches the signals on the organizations row
+      (growth_signals/sources/rationale) so every role at that company is scored
+      from one fetch. save_growth_judgment writes the stage to all the company's
+      postings.
     scale:
       growth: 1.00     # scaling, clear traction
       early:  0.90     # early but promising
@@ -100,8 +117,15 @@ implemented_by:
     - get_prioritized_roles(p_user_id, ...)          # standalone ranked list
     - get_action_queue(...).roles_to_apply           # ordered by score desc
   surfaced_in:
-    - web/src/pages/ActionQueue.tsx   # rank + score + component breakdown
+    - web/src/pages/ActionQueue.tsx   # rank + score + component fit-bars
+    - web/src/components/PriorityBreakdown.tsx   # role pages: inputs expanded (raw · weight · points)
     - MCP tools get_prioritized_roles, get_action_queue
+  mirrored_by:
+    - web/src/lib/priority.ts   # client mirror of compute_priority for the role-page breakdown — KEEP IN SYNC
+  judged_by:                    # the subjective inputs are AI-judged from the role page
+    - supabase/functions/judge-fit      # experience_alignment
+    - supabase/functions/judge-career   # career_trajectory (reads career_profile)
+    - supabase/functions/judge-growth   # growth_stage (web search, per-company, cached on org)
 
 interpretation: >
   The roles_to_apply bucket comes back already sorted highest-first, so "what do
@@ -112,6 +136,12 @@ interpretation: >
 caveats:
   - Only ranks postings with no live (non-draft) application — it's a
     top-of-funnel triage metric, not a measure of in-flight applications.
-  - experience / career / growth are subjective agent reads; re-running enrichment
-    can shift them. location / comp are deterministic from the columns.
+  - experience / career / growth are subjective agent reads; re-running the judges
+    (or set_priority_signals) can shift them. location / comp are deterministic.
+  - career is only as good as the career_profile behind it; growth reflects when it
+    was last judged (organizations.growth_judged_at) — re-judge a company if stale.
   - Weights are a personal value judgement. Change them here + in functions.sql.
+  - The role-page breakdown duplicates this algorithm in web/src/lib/priority.ts
+    (no runtime path computes priority for an already-applied posting). Any change
+    to weights / scales / comp band must land in all three: here, functions.sql,
+    and priority.ts.

@@ -6,7 +6,7 @@ import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
-  CompanyData, FitCoveragePosting,
+  CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -247,12 +247,81 @@ export async function runJudge(jobPostingId: string, resumeId?: string): Promise
   return data as RoleFitResponse;
 }
 
+// Judge the career move (step_up/lateral/step_back) for a posting against the
+// user's career_profile. Writes career_judgment + lifts career_trajectory.
+// Implemented by the judge-career edge function. Returns the fresh get_role_fit.
+export async function runCareerJudge(jobPostingId: string): Promise<RoleFitResponse> {
+  const { data, error } = await supabase.functions.invoke("judge-career", {
+    body: { job_posting_id: jobPostingId },
+  });
+  if (error) throw error;
+  return data as RoleFitResponse;
+}
+
+// Judge the company's growth stage via web search. Caches signals on the org and
+// writes growth_stage to every one of the company's postings. judge-growth.
+export async function runGrowthJudge(jobPostingId: string): Promise<RoleFitResponse> {
+  const { data, error } = await supabase.functions.invoke("judge-growth", {
+    body: { job_posting_id: jobPostingId },
+  });
+  if (error) throw error;
+  return data as RoleFitResponse;
+}
+
+// The career profile (baseline + ambition) judge-career reads. Edited on Profile.
+export async function getCareerProfile(): Promise<{ has_profile: boolean; profile: CareerProfile | null }> {
+  const { data, error } = await supabase.rpc("get_career_profile", {});
+  if (error) throw error;
+  const d = data as { has_profile: boolean; profile: CareerProfile | null };
+  return { has_profile: d.has_profile, profile: d.profile };
+}
+
+export async function saveCareerProfile(p: CareerProfile): Promise<void> {
+  const { error } = await supabase.rpc("save_career_profile", {
+    p_current_title: p.current_title,
+    p_current_level: p.current_level,
+    p_current_track: p.current_track,
+    p_current_span: p.current_span,
+    p_years_experience: p.years_experience,
+    p_current_comp: p.current_comp,
+    p_primary_domain: p.primary_domain,
+    p_target_track: p.target_track,
+    p_target_level: p.target_level,
+    p_target_comp_floor: p.target_comp_floor,
+    p_forward_means: p.forward_means,
+    p_lateral_domains: p.lateral_domains,
+    p_notes: p.notes,
+  });
+  if (error) throw error;
+}
+
 // Fit coverage: every posting + which resume_ids have already been judged
 // against it. Drives the backfill button and per-resume targeting.
 export async function fetchFitCoverage(): Promise<FitCoveragePosting[]> {
   const { data, error } = await supabase.rpc("get_fit_coverage", {});
   if (error) throw error;
   return (data as { postings: FitCoveragePosting[] }).postings ?? [];
+}
+
+// Every judge read for one resume, rolled up across all roles it's been scored
+// against. Powers the Resumes-tab feedback digest (the inverse of getRoleFit).
+export async function fetchResumeFeedback(resumeId: string): Promise<ResumeFeedbackResponse> {
+  const { data, error } = await supabase.rpc("get_resume_feedback", {
+    p_resume_id: resumeId,
+  });
+  if (error) throw error;
+  return data as ResumeFeedbackResponse;
+}
+
+// Run the synthesis judge for a resume: clusters every role's tweaks into ranked
+// themes and caches them (save_resume_synthesis). Returns the fresh feedback
+// payload (roles + synthesis). Implemented by the synthesize-feedback edge function.
+export async function synthesizeFeedback(resumeId: string): Promise<ResumeFeedbackResponse> {
+  const { data, error } = await supabase.functions.invoke("synthesize-feedback", {
+    body: { resume_id: resumeId },
+  });
+  if (error) throw error;
+  return data as ResumeFeedbackResponse;
 }
 
 export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {

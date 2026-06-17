@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchRole } from "../lib/api";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
+import PriorityBreakdown from "../components/PriorityBreakdown";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
 const DECISION_PILL: Record<string, string> = {
@@ -47,6 +48,21 @@ export default function RoleDetail() {
         {posting?.remote_policy ? ` · ${posting.remote_policy}` : ""}
         {posting?.url && <> · <a href={posting.url} target="_blank" rel="noreferrer">posting ↗</a></>}
       </p>
+
+      {fit.data?.posting && (
+        <PriorityBreakdown
+          inputs={fit.data.posting}
+          judges={{
+            career: fit.data.career,
+            growth: fit.data.growth,
+            onJudgeCareer: fit.judgeCareer,
+            onJudgeGrowth: fit.judgeGrowth,
+            judgingCareer: fit.judgingCareer,
+            judgingGrowth: fit.judgingGrowth,
+            error: fit.error,
+          }}
+        />
+      )}
 
       <RoleFitPanel data={fit.data} judging={fit.judging} onJudge={fit.judge} error={fit.error} />
 

@@ -6,7 +6,7 @@ import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
-  CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile,
+  CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -102,6 +102,14 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
       application_status: p.applications?.[0]?.status ?? null,
     })),
   };
+}
+
+// Every posting with its judged signals, priority components, comp + location,
+// and per-signal "judged yet?" flags. Powers the Insights scatter + signal backfill.
+export async function fetchRolesAnalytics(): Promise<RoleAnalytics[]> {
+  const { data, error } = await supabase.rpc("get_roles_analytics", {});
+  if (error) throw error;
+  return (data as { roles: RoleAnalytics[] }).roles ?? [];
 }
 
 export async function fetchActionQueue(): Promise<ActionQueue> {

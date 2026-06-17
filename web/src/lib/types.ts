@@ -88,6 +88,28 @@ export type RankedRole = JobPosting & {
   priority: Priority;
 };
 
+// ── get_roles_analytics() — the Insights signal map (scatter + backfill) ─────
+// One posting with its judged signals, derived priority components, raw comp +
+// location for plotting, and per-signal "judged yet?" flags.
+export interface RoleAnalytics {
+  posting_id: string;
+  title: string;
+  organization_id: string;
+  organization_name: string;
+  location: string | null;
+  remote_policy: RemotePolicy | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  experience_alignment: number | null;
+  career_trajectory: CareerTrajectory | null;
+  growth_stage: GrowthStage | null;
+  priority: Priority;
+  application_status: ApplicationStatus | null;
+  has_fit: boolean;
+  has_career: boolean;
+  has_growth: boolean;
+}
+
 // ── get_resume() return shape ────────────────────────────────────────────────
 export interface ResumeProfile {
   success: boolean;

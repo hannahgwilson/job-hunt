@@ -249,6 +249,19 @@ button.danger { color: var(--red); border-color: var(--red); }
 .feedback-role > summary { cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
 .feedback-role[open] > summary { margin-bottom: 0.5rem; }
 
+/* Insights scatter — fit vs (career + growth) */
+.scatter-wrap { width: 100%; }
+.scatter { width: 100%; height: auto; display: block; }
+.scatter-grid { stroke: var(--border); stroke-width: 1; }
+.scatter-tick { fill: var(--muted); font-size: 11px; }
+.scatter-axis { fill: var(--text); font-size: 12px; font-weight: 600; }
+.scatter-sweet { fill: var(--green); opacity: 0.06; }
+.scatter-pt circle { fill: var(--accent); fill-opacity: 0.55; stroke: var(--accent-700); stroke-width: 1; }
+.scatter-pt:hover circle { fill-opacity: 0.8; }
+.scatter-pt.unjudged circle { fill: var(--muted); fill-opacity: 0.18; stroke-dasharray: 2 2; }
+.scatter-label { fill: var(--muted); font-size: 10px; }
+.scatter-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
+
 /* Company page */
 .company-links { display: flex; gap: 0.9rem; }
 .count { color: var(--muted); font-weight: 400; font-size: 0.85rem; margin-left: 0.3rem; }

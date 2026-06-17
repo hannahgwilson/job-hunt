@@ -1,0 +1,14 @@
+-- Migration 008 — roles analytics (the Insights signal map)
+-- ============================================================================
+-- Adds get_roles_analytics(): every posting with its three judged signals, the
+-- derived priority components, raw comp + location, and per-signal "judged yet?"
+-- flags. One read powers both the Insights fit-vs-(career+growth) scatter and the
+-- "judge career + growth for all roles" backfill (it targets the un-judged rows).
+--
+-- No schema change — a pure read over existing tables (job_postings, role_fit,
+-- career_judgment, organizations.growth_judged_at). The function lives in
+-- functions.sql (CREATE OR REPLACE) — re-run it after this migration so the
+-- definition + grant apply.
+-- ============================================================================
+
+-- (definition is in functions.sql — get_roles_analytics / its GRANT)

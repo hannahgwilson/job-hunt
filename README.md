@@ -68,6 +68,7 @@ Apply these schemas **before** job-hunt:
 #      migrations/005_org_company_fields.sql      — org/company page fields
 #      migrations/006_career_growth_judges.sql    — career_profile + career/growth judge storage
 #      migrations/007_resume_feedback.sql         — resume_feedback_synthesis (feedback digest)
+#      migrations/008_roles_analytics.sql         — get_roles_analytics (Insights scatter + signal backfill)
 #    (then re-run functions.sql — CREATE OR REPLACE, so it's safe to re-apply; it
 #     adds the read/write RPCs the new tables need, e.g. get_resume_feedback /
 #     save_resume_synthesis / get_role_fit / the career & growth judge RPCs)

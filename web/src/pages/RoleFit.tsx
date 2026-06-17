@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
+import PriorityBreakdown from "../components/PriorityBreakdown";
 
 // Posting-scoped fit page (reached from the to-apply table, for roles with no
 // application yet). The scoring UI itself lives in RoleFitPanel, which the
@@ -7,7 +8,8 @@ import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 
 export default function RoleFit() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, judging, judge } = useRoleFit(id);
+  const fit = useRoleFit(id);
+  const { data, error, judging, judge } = fit;
 
   if (error && !data) return <p className="error">{error}</p>;
   if (!data) return <p className="muted">Loading…</p>;
@@ -25,6 +27,19 @@ export default function RoleFit() {
         {p.remote_policy ? ` · ${p.remote_policy}` : ""}
         {p.url && <> · <a href={p.url} target="_blank" rel="noreferrer">posting ↗</a></>}
       </p>
+
+      <PriorityBreakdown
+        inputs={p}
+        judges={{
+          career: data.career,
+          growth: data.growth,
+          onJudgeCareer: fit.judgeCareer,
+          onJudgeGrowth: fit.judgeGrowth,
+          judgingCareer: fit.judgingCareer,
+          judgingGrowth: fit.judgingGrowth,
+          error,
+        }}
+      />
 
       <RoleFitPanel data={data} judging={judging} onJudge={judge} error={error} />
 

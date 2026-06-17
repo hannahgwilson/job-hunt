@@ -144,6 +144,86 @@ export interface FitCoveragePosting {
   judged_resume_ids: string[]; // resumes already scored against this posting
 }
 
+// One role a resume has been judged against, with that judge's feedback —
+// the per-resume roll-up returned by get_resume_feedback (Resumes-tab digest).
+export interface ResumeFeedbackRole {
+  posting_id: string;
+  title: string;
+  organization_name: string;
+  alignment: number | null;  // 0..1
+  summary: string | null;
+  spikes: string[] | null;
+  gaps: string[] | null;
+  tweaks: ResumeTweak[] | null;
+  model: string | null;
+  judged_at: string | null;
+}
+
+// One synthesized, cross-role theme — a bucket of similar tweaks the
+// synthesize-feedback judge merged and ranked (see save_resume_synthesis).
+export type ThemePriority = "high" | "medium" | "low";
+export type ThemeCategory =
+  | "Summary" | "Experience" | "Skills & keywords" | "Structure & formatting" | "Other";
+
+export interface FeedbackTheme {
+  title: string;
+  category: ThemeCategory;
+  priority: ThemePriority;
+  role_count: number;
+  recommendation: string;
+  rationale: string | null;
+  roles: string[] | null;
+}
+
+// The cached synthesis for a resume (null until the judge has run).
+export interface FeedbackSynthesis {
+  themes: FeedbackTheme[] | null;
+  headline: string | null;
+  source_count: number | null;  // # of judge reads it was built from
+  model: string | null;
+  synthesized_at: string | null;
+}
+
+export interface ResumeFeedbackResponse {
+  success: boolean;
+  resume_id: string;
+  roles: ResumeFeedbackRole[];
+  synthesis: FeedbackSynthesis | null;
+}
+
+// ── career-trajectory judge (see migration 006 + judge-career edge function) ──
+export type DeltaDir = "up" | "flat" | "down" | "n/a";
+
+export interface CareerJudgment {
+  trajectory: CareerTrajectory | null;
+  confidence: number | null;
+  deltas: Partial<Record<"seniority" | "scope" | "comp" | "track" | "domain", DeltaDir>> | null;
+  rationale: string | null;
+  model: string | null;
+  judged_at: string | null;
+}
+
+// ── growth judge (cached per-company on organizations; see judge-growth) ──────
+export interface GrowthSignals {
+  funding_stage?: string;
+  last_round_date?: string;
+  total_raised?: string;
+  headcount?: string;
+  headcount_trend?: string;
+  momentum?: string[];
+  risks?: string[];
+}
+
+export interface GrowthJudgment {
+  stage: GrowthStage | null;
+  confidence: number | null;
+  signals: GrowthSignals | null;
+  sources: string[] | null;
+  rationale: string | null;
+  model: string | null;
+  judged_at: string | null;
+}
+
 export interface RoleFitResponse {
   success: boolean;
   posting: {
@@ -164,6 +244,28 @@ export interface RoleFitResponse {
   } | null;
   resumes: ResumeFitEntry[];
   recommended_resume_id: string | null;
+  career: CareerJudgment | null;  // null until judge-career has run
+  growth: GrowthJudgment | null;  // null until judge-growth has run for the company
+}
+
+// ── career profile (the personal baseline judge-career reads; migration 006) ──
+export type CareerTrack = "ic" | "manager";
+export type TargetTrack = "ic" | "manager" | "either";
+
+export interface CareerProfile {
+  current_title: string | null;
+  current_level: string | null;
+  current_track: CareerTrack | null;
+  current_span: number | null;
+  years_experience: number | null;
+  current_comp: number | null;
+  primary_domain: string | null;
+  target_track: TargetTrack | null;
+  target_level: string | null;
+  target_comp_floor: number | null;
+  forward_means: string[] | null;
+  lateral_domains: string[] | null;
+  notes: string | null;
 }
 
 // ── company page ─────────────────────────────────────────────────────────────

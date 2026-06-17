@@ -121,6 +121,22 @@ Five weighted components (weights sum to 1.0):
 - Set the signals at intake (Play 1) or later with `set_priority_signals`.
 - Un-scored signals fall back to neutral (0.5), so a role is never *buried* just
   for being un-enriched — but enrich it so the ranking is real.
+- **All three subjective signals also have AI judges in the tracking-hub UI**, so
+  they don't have to be hand-set. On a role page (`/posting/:id` or `/role/:id`)
+  the **Priority breakdown** card at the top shows every input expanded (raw value
+  · weight · points), with a button per judged signal:
+  - **experience** → "Run AI judge" (judge-fit): scores every resume variant vs
+    the JD, lifts `experience_alignment` to the best fit.
+  - **career** → "Judge career move" (judge-career): reads the JD against the
+    user's **career profile** (Resumes page → Career profile) and returns
+    step_up/lateral/step_back. Without a profile set the call is un-personalized
+    (it warns), so fill the profile in first.
+  - **growth** → "Judge company growth" (judge-growth): web-searches the company's
+    funding/headcount/momentum, classifies the stage **once per company**, and
+    caches the signals on the `organizations` row (so other roles at that company
+    are scored for free). Costs an external search — the per-company caching is why.
+  Each judge writes the same column `compute_priority` reads, so a freshly judged
+  role re-ranks immediately. See [`supabase/functions/JUDGE_SIGNALS_SPEC.md`](supabase/functions/JUDGE_SIGNALS_SPEC.md).
 - To re-weight the search (e.g. care more about comp), edit the YAML **and** the
   matching `DEFAULT`s in `functions.sql` (`compute_priority` / `get_prioritized_roles`),
   then re-apply `functions.sql`. The YAML is the source of truth.

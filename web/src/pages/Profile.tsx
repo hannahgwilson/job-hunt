@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { listResumes, upsertResumeVariant, setDefaultResume, deleteResume, fetchFitCoverage } from "../lib/api";
 import type { Resume, ResumeVariant, FitCoveragePosting } from "../lib/types";
 import ResumeScoringPanel from "../components/ResumeScoringPanel";
+import ResumeFeedbackPanel from "../components/ResumeFeedbackPanel";
+import CareerProfilePanel from "../components/CareerProfilePanel";
 
 // Resume management: multiple named variants (e.g. a senior-IC resume and a
 // manager resume). The default variant is what get_resume()/the MCP read; the
@@ -234,10 +236,16 @@ export default function Profile() {
               onDone={loadCoverage}
             />
           )}
+
+          {draft.id && (
+            <ResumeFeedbackPanel resumeId={draft.id} resumeLabel={draft.label} />
+          )}
         </section>
       )}
 
       {!draft && error && <p className="error">{error}</p>}
+
+      <CareerProfilePanel />
     </div>
   );
 }

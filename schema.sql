@@ -334,3 +334,99 @@ CREATE POLICY resumes_user_policy ON resumes
 DROP POLICY IF EXISTS role_fit_user_policy ON role_fit;
 CREATE POLICY role_fit_user_policy ON role_fit
     FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+-- ============================================================================
+-- career_profile / career_judgment  (the career_trajectory judge — migration 006)
+-- One row per user holds the baseline + ambition the judge needs; career_judgment
+-- holds its per-posting reasoning. The trajectory enum still lives on
+-- job_postings.career_trajectory (written by save_career_judgment), so
+-- compute_priority is unchanged. See supabase/functions/JUDGE_SIGNALS_SPEC.md.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS career_profile (
+    user_id UUID PRIMARY KEY,
+    current_title     TEXT,
+    current_level     TEXT,
+    current_track     TEXT CHECK (current_track IN ('ic', 'manager') OR current_track IS NULL),
+    current_span      INTEGER,
+    years_experience  NUMERIC(4,1),
+    current_comp      INTEGER,
+    primary_domain    TEXT,
+    target_track      TEXT CHECK (target_track IN ('ic', 'manager', 'either') OR target_track IS NULL),
+    target_level      TEXT,
+    target_comp_floor INTEGER,
+    forward_means     TEXT[],
+    lateral_domains   TEXT[],
+    notes             TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS career_judgment (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    job_posting_id UUID NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
+    trajectory  TEXT CHECK (trajectory IN ('step_up', 'lateral', 'step_back') OR trajectory IS NULL),
+    confidence  NUMERIC(3,2) CHECK ((confidence BETWEEN 0 AND 1) OR confidence IS NULL),
+    deltas      JSONB,
+    rationale   TEXT,
+    model       TEXT,
+    judged_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (job_posting_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_career_judgment_user ON career_judgment(user_id);
+CREATE INDEX IF NOT EXISTS idx_career_judgment_posting ON career_judgment(job_posting_id);
+
+DROP TRIGGER IF EXISTS update_career_profile_updated_at ON career_profile;
+CREATE TRIGGER update_career_profile_updated_at
+    BEFORE UPDATE ON career_profile
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_career_judgment_updated_at ON career_judgment;
+CREATE TRIGGER update_career_judgment_updated_at
+    BEFORE UPDATE ON career_judgment
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+ALTER TABLE career_profile ENABLE ROW LEVEL SECURITY;
+ALTER TABLE career_judgment ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS career_profile_user_policy ON career_profile;
+CREATE POLICY career_profile_user_policy ON career_profile
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS career_judgment_user_policy ON career_judgment;
+CREATE POLICY career_judgment_user_policy ON career_judgment
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+
+-- ============================================================================
+-- resume_feedback_synthesis  (the cross-role feedback digest — migration 007)
+-- One row per resume caches the synthesize-feedback judge's roll-up of every
+-- role_fit tweak for that resume into ranked, bucketed themes. Derived data —
+-- safe to delete and re-synthesize. source_count records how many judge reads
+-- fed the synthesis so the UI can flag it as stale when new judgements land.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS resume_feedback_synthesis (
+    resume_id UUID PRIMARY KEY REFERENCES resumes(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    themes        JSONB,        -- [{ title, category, priority, role_count, recommendation, rationale, roles }]
+    headline      TEXT,         -- one-line "fix this first"
+    source_count  INTEGER,      -- # of role_fit rows the synthesis was built from
+    model         TEXT,
+    synthesized_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_feedback_synthesis_user ON resume_feedback_synthesis(user_id);
+
+DROP TRIGGER IF EXISTS update_resume_feedback_synthesis_updated_at ON resume_feedback_synthesis;
+CREATE TRIGGER update_resume_feedback_synthesis_updated_at
+    BEFORE UPDATE ON resume_feedback_synthesis
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+ALTER TABLE resume_feedback_synthesis ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS resume_feedback_synthesis_user_policy ON resume_feedback_synthesis;
+CREATE POLICY resume_feedback_synthesis_user_policy ON resume_feedback_synthesis
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);

@@ -7,6 +7,8 @@ import Pipeline from "./pages/Pipeline";
 import ActionQueue from "./pages/ActionQueue";
 import Funnel from "./pages/Funnel";
 import RoleDetail from "./pages/RoleDetail";
+import RoleFit from "./pages/RoleFit";
+import Company from "./pages/Company";
 import Profile from "./pages/Profile";
 
 function Login() {
@@ -55,7 +57,7 @@ const NAV: { to: string; label: string; end: boolean }[] = [
   { to: "/pipeline", label: "Pipeline", end: false },
   { to: "/queue", label: "Action Queue", end: false },
   { to: "/funnel", label: "Funnel", end: false },
-  { to: "/resume", label: "Resume", end: false },
+  { to: "/resume", label: "Resumes", end: false },
 ];
 
 export default function App() {
@@ -97,6 +99,8 @@ export default function App() {
           <Route path="/funnel" element={<Funnel />} />
           <Route path="/resume" element={<Profile />} />
           <Route path="/role/:id" element={<RoleDetail />} />
+          <Route path="/posting/:id" element={<RoleFit />} />
+          <Route path="/company/:id" element={<Company />} />
         </Routes>
       </main>
     </div>

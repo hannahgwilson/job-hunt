@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { PriorityComponents, RankedRole } from "../lib/types";
 
 // Sortable "roles to apply" table — the force-ranked top-of-funnel. Click a
@@ -111,7 +112,10 @@ export default function RolesToApplyTable({
               </td>
               <td><FitBars c={r.priority.components} /></td>
               <td className="role-title">
-                {r.url ? <a href={r.url} target="_blank" rel="noreferrer">{r.title} ↗</a> : r.title}
+                <Link to={`/posting/${r.id}`}>{r.title}</Link>
+                {r.url && (
+                  <a className="ext" href={r.url} target="_blank" rel="noreferrer" title="Open posting">↗</a>
+                )}
               </td>
               <td>{r.organization_name}</td>
               <td>{locationLabel(r)}</td>

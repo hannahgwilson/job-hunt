@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { advanceApplication, fetchApplications, fetchActionQueue, submitApplication } from "../lib/api";
-import { PIPELINE_COLUMNS, type Application, type ActionQueue } from "../lib/types";
+import { advanceApplication, fetchApplications, fetchActionQueue, fetchFitCoverage, submitApplication } from "../lib/api";
+import { PIPELINE_COLUMNS, type Application, type ActionQueue, type FitCoveragePosting } from "../lib/types";
+import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
 import RolesToApplyTable from "../components/RolesToApplyTable";
 
@@ -17,14 +18,25 @@ const NEXT: Record<string, string | null> = {
 export default function Pipeline() {
   const [apps, setApps] = useState<Application[]>([]);
   const [queue, setQueue] = useState<ActionQueue | null>(null);
+  const [coverage, setCoverage] = useState<FitCoveragePosting[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const navigate = useNavigate();
+  const batch = useBatchJudge();
 
   function load() {
     fetchApplications().then(setApps).catch((e) => setError(e.message));
     fetchActionQueue().then(setQueue).catch((e) => setError(e.message));
+    fetchFitCoverage().then(setCoverage).catch((e) => setError(e.message));
+  }
+
+  // Backfill: postings nobody has judged yet (skips the ones done by hand).
+  const unjudged = coverage.filter((p) => p.judged_resume_ids.length === 0);
+
+  async function backfill() {
+    await batch.run(unjudged.map((p) => ({ jobPostingId: p.id })));
+    load();
   }
 
   useEffect(() => {
@@ -79,7 +91,21 @@ export default function Pipeline() {
           <h2>
             Roles to apply <span className="count">{queue?.roles_to_apply.length ?? 0}</span>
           </h2>
-          <span className="muted small">ranked by priority — click a header to re-sort</span>
+          <div className="section-head-actions">
+            {batch.running ? (
+              <span className="muted small">Judging {batch.done}/{batch.total}…</span>
+            ) : (
+              <button
+                className="ghost sm"
+                disabled={unjudged.length === 0}
+                onClick={backfill}
+                title="Score every un-judged role against your resumes"
+              >
+                {unjudged.length === 0 ? "All roles judged" : `Judge ${unjudged.length} un-judged`}
+              </button>
+            )}
+            <span className="muted small">ranked by priority — click a header to re-sort</span>
+          </div>
         </div>
         {!queue ? <p className="muted">Loading…</p> : (
           <RolesToApplyTable roles={queue.roles_to_apply} onApply={apply} applyingId={applyingId} />

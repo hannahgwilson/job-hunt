@@ -594,7 +594,12 @@ $$;
 -- RESUME  (the experience_alignment input — see priority_score.yaml)
 -- ============================================================================
 
--- get_resume — the stored long-form resume for scoring experience alignment.
+-- Resume storage is the `resumes` dim (one row per variant — e.g. a senior-IC
+-- resume and a manager resume). get_resume / upsert_resume below are kept as
+-- thin shims over the DEFAULT variant so the MCP and the old single-resume path
+-- keep working; the variant-aware functions follow them.
+
+-- get_resume — the default resume, for scoring experience alignment.
 CREATE OR REPLACE FUNCTION get_resume(
     p_user_id uuid DEFAULT auth.uid()
 )
@@ -604,16 +609,22 @@ STABLE
 AS $$
     SELECT jsonb_build_object(
         'success', true,
-        'resume_text', p.resume_text,
-        'resume_filename', p.resume_filename,
-        'updated_at', p.updated_at,
-        'has_resume', (p.resume_text IS NOT NULL AND length(trim(p.resume_text)) > 0)
+        'resume_text', r.resume_text,
+        'resume_filename', r.resume_filename,
+        'updated_at', r.updated_at,
+        'has_resume', (r.resume_text IS NOT NULL AND length(trim(r.resume_text)) > 0)
     )
     FROM (SELECT p_user_id AS uid) base
-    LEFT JOIN job_search_profile p ON p.user_id = base.uid;
+    LEFT JOIN LATERAL (
+        SELECT resume_text, resume_filename, updated_at
+        FROM resumes
+        WHERE user_id = base.uid
+        ORDER BY is_default DESC, created_at
+        LIMIT 1
+    ) r ON true;
 $$;
 
--- upsert_resume — save / replace the resume text (one row per user).
+-- upsert_resume — save / replace the DEFAULT resume's text (back-compat shim).
 CREATE OR REPLACE FUNCTION upsert_resume(
     p_resume_text text,
     p_resume_filename text DEFAULT NULL,
@@ -623,25 +634,606 @@ RETURNS jsonb
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_row job_search_profile;
+    v_id uuid;
 BEGIN
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'upsert_resume: no user_id';
     END IF;
 
-    INSERT INTO job_search_profile (user_id, resume_text, resume_filename)
-    VALUES (p_user_id, p_resume_text, p_resume_filename)
-    ON CONFLICT (user_id) DO UPDATE
-        SET resume_text = EXCLUDED.resume_text,
-            resume_filename = EXCLUDED.resume_filename
-    RETURNING * INTO v_row;
+    SELECT id INTO v_id FROM resumes
+    WHERE user_id = p_user_id
+    ORDER BY is_default DESC, created_at
+    LIMIT 1;
+
+    IF v_id IS NULL THEN
+        INSERT INTO resumes (user_id, label, variant, resume_text, resume_filename, is_default)
+        VALUES (p_user_id, 'My resume', 'other', p_resume_text, p_resume_filename, true)
+        RETURNING id INTO v_id;
+    ELSE
+        UPDATE resumes
+        SET resume_text = p_resume_text, resume_filename = p_resume_filename
+        WHERE id = v_id;
+    END IF;
 
     RETURN jsonb_build_object(
         'success', true,
-        'resume_filename', v_row.resume_filename,
-        'updated_at', v_row.updated_at,
-        'length', length(coalesce(v_row.resume_text, ''))
+        'id', v_id,
+        'resume_filename', p_resume_filename,
+        'length', length(coalesce(p_resume_text, ''))
     );
+END;
+$$;
+
+-- list_resumes — every resume variant for the user, default first.
+CREATE OR REPLACE FUNCTION list_resumes(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'resumes', COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'id', r.id,
+                'label', r.label,
+                'variant', r.variant,
+                'resume_text', r.resume_text,
+                'resume_filename', r.resume_filename,
+                'is_default', r.is_default,
+                'updated_at', r.updated_at
+            ) ORDER BY r.is_default DESC, r.created_at
+        ), '[]'::jsonb)
+    )
+    FROM resumes r
+    WHERE r.user_id = p_user_id;
+$$;
+
+-- upsert_resume_variant — create (p_id NULL) or update a named resume variant.
+-- The first resume a user creates becomes the default automatically. Setting
+-- is_default = true clears any other default first (single-default invariant).
+CREATE OR REPLACE FUNCTION upsert_resume_variant(
+    p_label text,
+    p_resume_text text,
+    p_variant text DEFAULT 'other',
+    p_resume_filename text DEFAULT NULL,
+    p_id uuid DEFAULT NULL,
+    p_is_default boolean DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row resumes;
+    v_make_default boolean;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'upsert_resume_variant: no user_id';
+    END IF;
+
+    IF p_id IS NULL THEN
+        -- new variant: honour p_is_default, else default only if it's the first
+        v_make_default := COALESCE(
+            p_is_default,
+            NOT EXISTS (SELECT 1 FROM resumes WHERE user_id = p_user_id)
+        );
+        -- clear an existing default BEFORE inserting to satisfy the unique index
+        IF v_make_default THEN
+            UPDATE resumes SET is_default = false
+            WHERE user_id = p_user_id AND is_default;
+        END IF;
+        INSERT INTO resumes (user_id, label, variant, resume_text, resume_filename, is_default)
+        VALUES (p_user_id, p_label, p_variant, p_resume_text, p_resume_filename, v_make_default)
+        RETURNING * INTO v_row;
+    ELSE
+        v_make_default := COALESCE(
+            p_is_default,
+            (SELECT is_default FROM resumes WHERE id = p_id AND user_id = p_user_id)
+        );
+        IF v_make_default THEN
+            UPDATE resumes SET is_default = false
+            WHERE user_id = p_user_id AND id <> p_id AND is_default;
+        END IF;
+        UPDATE resumes SET
+            label = p_label,
+            variant = p_variant,
+            resume_text = p_resume_text,
+            resume_filename = p_resume_filename,
+            is_default = v_make_default
+        WHERE id = p_id AND user_id = p_user_id
+        RETURNING * INTO v_row;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'upsert_resume_variant: resume % not found', p_id;
+        END IF;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'id', v_row.id,
+        'is_default', v_row.is_default,
+        'updated_at', v_row.updated_at
+    );
+END;
+$$;
+
+-- set_default_resume — make one variant the default (clears the others).
+CREATE OR REPLACE FUNCTION set_default_resume(
+    p_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE resumes SET is_default = false
+    WHERE user_id = p_user_id AND is_default AND id <> p_id;
+
+    UPDATE resumes SET is_default = true
+    WHERE id = p_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'set_default_resume: resume % not found', p_id;
+    END IF;
+
+    RETURN jsonb_build_object('success', true, 'id', p_id);
+END;
+$$;
+
+-- delete_resume — remove a variant; promote another to default if it was one.
+CREATE OR REPLACE FUNCTION delete_resume(
+    p_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_was_default boolean;
+BEGIN
+    DELETE FROM resumes
+    WHERE id = p_id AND user_id = p_user_id
+    RETURNING is_default INTO v_was_default;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'delete_resume: resume % not found', p_id;
+    END IF;
+
+    IF v_was_default THEN
+        UPDATE resumes SET is_default = true
+        WHERE id = (
+            SELECT id FROM resumes WHERE user_id = p_user_id
+            ORDER BY created_at LIMIT 1
+        );
+    END IF;
+
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- ============================================================================
+-- ROLE FIT  (the AI-judge read of each resume against a posting)
+-- ============================================================================
+
+-- get_role_fit — a posting + every resume's fit judgement, plus which resume
+-- is recommended (highest alignment). Powers the role fit page.
+CREATE OR REPLACE FUNCTION get_role_fit(
+    p_job_posting_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'posting', (
+            SELECT to_jsonb(x) FROM (
+                SELECT jp.id, jp.title, jp.url, jp.location, jp.remote_policy,
+                       jp.salary_min, jp.salary_max, jp.requirements, jp.nice_to_haves,
+                       jp.experience_alignment, jp.career_trajectory, jp.growth_stage,
+                       o.id AS organization_id, o.name AS organization_name
+                FROM job_postings jp
+                JOIN organizations o ON o.id = jp.organization_id
+                WHERE jp.id = p_job_posting_id AND jp.user_id = p_user_id
+            ) x
+        ),
+        'resumes', (
+            SELECT COALESCE(jsonb_agg(
+                jsonb_build_object(
+                    'resume_id', r.id,
+                    'label', r.label,
+                    'variant', r.variant,
+                    'is_default', r.is_default,
+                    'fit', (
+                        SELECT to_jsonb(f) FROM (
+                            SELECT rf.alignment, rf.summary, rf.spikes, rf.gaps,
+                                   rf.tweaks, rf.model, rf.judged_at
+                            FROM role_fit rf
+                            WHERE rf.resume_id = r.id
+                              AND rf.job_posting_id = p_job_posting_id
+                        ) f
+                    )
+                ) ORDER BY r.is_default DESC, r.created_at
+            ), '[]'::jsonb)
+            FROM resumes r WHERE r.user_id = p_user_id
+        ),
+        'recommended_resume_id', (
+            SELECT rf.resume_id FROM role_fit rf
+            WHERE rf.job_posting_id = p_job_posting_id
+              AND rf.user_id = p_user_id
+              AND rf.alignment IS NOT NULL
+            ORDER BY rf.alignment DESC, rf.judged_at DESC
+            LIMIT 1
+        ),
+        -- The career-trajectory judge's read of THIS posting (null until judged).
+        'career', (
+            SELECT to_jsonb(c) FROM (
+                SELECT cj.trajectory, cj.confidence, cj.deltas, cj.rationale,
+                       cj.model, cj.judged_at
+                FROM career_judgment cj
+                WHERE cj.job_posting_id = p_job_posting_id AND cj.user_id = p_user_id
+            ) c
+        ),
+        -- The growth judge's read of this posting's COMPANY (cached on the org).
+        'growth', (
+            SELECT to_jsonb(g) FROM (
+                SELECT jp.growth_stage AS stage, o.growth_signals AS signals,
+                       o.growth_sources AS sources, o.growth_confidence AS confidence,
+                       o.growth_rationale AS rationale, o.growth_model AS model,
+                       o.growth_judged_at AS judged_at
+                FROM job_postings jp
+                JOIN organizations o ON o.id = jp.organization_id
+                WHERE jp.id = p_job_posting_id AND jp.user_id = p_user_id
+            ) g
+        )
+    );
+$$;
+
+-- get_fit_coverage — every posting with the set of resume_ids already judged
+-- against it. Powers the backfill button (postings with an empty set are
+-- un-judged) and per-resume targeting (postings missing a given resume_id).
+CREATE OR REPLACE FUNCTION get_fit_coverage(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'postings', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'id', jp.id,
+                    'title', jp.title,
+                    'organization_name', o.name,
+                    'judged_resume_ids', COALESCE((
+                        SELECT jsonb_agg(rf.resume_id)
+                        FROM role_fit rf
+                        WHERE rf.job_posting_id = jp.id
+                          AND rf.user_id = p_user_id
+                          AND rf.alignment IS NOT NULL
+                    ), '[]'::jsonb)
+                ) ORDER BY o.name, jp.title
+            )
+            FROM job_postings jp
+            JOIN organizations o ON o.id = jp.organization_id
+            WHERE jp.user_id = p_user_id
+        ), '[]'::jsonb)
+    );
+$$;
+
+-- get_resume_feedback — the inverse cut of get_role_fit: every judge read for
+-- ONE resume, rolled up across all the roles it's been scored against. Powers
+-- the Resumes-tab feedback digest so the proposed tweaks can be worked in one
+-- place. Newest judgement first; only rows that were actually judged
+-- (alignment IS NOT NULL) are included.
+CREATE OR REPLACE FUNCTION get_resume_feedback(
+    p_resume_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'resume_id', p_resume_id,
+        'roles', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'posting_id', jp.id,
+                    'title', jp.title,
+                    'organization_name', o.name,
+                    'alignment', rf.alignment,
+                    'summary', rf.summary,
+                    'spikes', rf.spikes,
+                    'gaps', rf.gaps,
+                    'tweaks', rf.tweaks,
+                    'model', rf.model,
+                    'judged_at', rf.judged_at
+                ) ORDER BY rf.judged_at DESC
+            )
+            FROM role_fit rf
+            JOIN job_postings jp ON jp.id = rf.job_posting_id
+            JOIN organizations o ON o.id = jp.organization_id
+            WHERE rf.resume_id = p_resume_id
+              AND rf.user_id = p_user_id
+              AND rf.alignment IS NOT NULL
+        ), '[]'::jsonb),
+        -- The cached cross-role synthesis (null until synthesize-feedback runs).
+        -- source_count lets the UI flag it stale when newer judgements exist.
+        'synthesis', (
+            SELECT to_jsonb(s) FROM (
+                SELECT fs.themes, fs.headline, fs.source_count, fs.model, fs.synthesized_at
+                FROM resume_feedback_synthesis fs
+                WHERE fs.resume_id = p_resume_id AND fs.user_id = p_user_id
+            ) s
+        )
+    );
+$$;
+
+-- save_resume_synthesis — cache the synthesize-feedback judge's ranked, bucketed
+-- themes for one resume (one row per resume, overwritten each run). Called by the
+-- synthesize-feedback edge function (service_role, passes p_user_id).
+CREATE OR REPLACE FUNCTION save_resume_synthesis(
+    p_resume_id uuid,
+    p_themes jsonb,
+    p_headline text DEFAULT NULL,
+    p_source_count int DEFAULT NULL,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_resume_synthesis: no user_id';
+    END IF;
+    -- ownership: the resume must belong to the caller
+    IF NOT EXISTS (SELECT 1 FROM resumes WHERE id = p_resume_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_resume_synthesis: resume % not found', p_resume_id;
+    END IF;
+
+    INSERT INTO resume_feedback_synthesis (resume_id, user_id, themes, headline,
+                                           source_count, model, synthesized_at)
+    VALUES (p_resume_id, p_user_id, p_themes, p_headline, p_source_count, p_model, now())
+    ON CONFLICT (resume_id) DO UPDATE SET
+        themes         = EXCLUDED.themes,
+        headline       = EXCLUDED.headline,
+        source_count   = EXCLUDED.source_count,
+        model          = EXCLUDED.model,
+        synthesized_at = now();
+
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- save_role_fit — upsert one (posting × resume) judgement AND lift the posting's
+-- experience_alignment to the best fit across resumes, so compute_priority's
+-- force-ranking reflects the judge instead of the neutral 0.5 fallback.
+-- Called by the judge-fit edge function (service_role, passes p_user_id).
+CREATE OR REPLACE FUNCTION save_role_fit(
+    p_job_posting_id uuid,
+    p_resume_id uuid,
+    p_alignment numeric,
+    p_summary text DEFAULT NULL,
+    p_spikes jsonb DEFAULT NULL,
+    p_gaps jsonb DEFAULT NULL,
+    p_tweaks jsonb DEFAULT NULL,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_best numeric;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_role_fit: no user_id';
+    END IF;
+
+    INSERT INTO role_fit (user_id, job_posting_id, resume_id, alignment,
+                          summary, spikes, gaps, tweaks, model, judged_at)
+    VALUES (p_user_id, p_job_posting_id, p_resume_id, p_alignment,
+            p_summary, p_spikes, p_gaps, p_tweaks, p_model, now())
+    ON CONFLICT (job_posting_id, resume_id) DO UPDATE SET
+        alignment = EXCLUDED.alignment,
+        summary = EXCLUDED.summary,
+        spikes = EXCLUDED.spikes,
+        gaps = EXCLUDED.gaps,
+        tweaks = EXCLUDED.tweaks,
+        model = EXCLUDED.model,
+        judged_at = now();
+
+    SELECT max(alignment) INTO v_best FROM role_fit
+    WHERE job_posting_id = p_job_posting_id AND user_id = p_user_id;
+
+    UPDATE job_postings SET experience_alignment = v_best
+    WHERE id = p_job_posting_id AND user_id = p_user_id;
+
+    RETURN jsonb_build_object('success', true, 'experience_alignment', v_best);
+END;
+$$;
+
+
+-- ============================================================================
+-- CAREER TRAJECTORY  (the career_trajectory input — see priority_score.yaml)
+-- judge-career reads the JD against career_profile (baseline + ambition) and
+-- writes its verdict here; save_career_judgment lifts the enum onto the posting.
+-- ============================================================================
+
+-- get_career_profile — the user's baseline + ambition vector (one row, or an
+-- empty shell). judge-career reads this so step_up/lateral is personal, not a
+-- guess from the title; the Profile page edits it.
+CREATE OR REPLACE FUNCTION get_career_profile(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'has_profile', (cp.user_id IS NOT NULL),
+        'profile', to_jsonb(cp)
+    )
+    FROM (SELECT p_user_id AS uid) base
+    LEFT JOIN career_profile cp ON cp.user_id = base.uid;
+$$;
+
+-- save_career_profile — upsert the whole profile (one row per user). Every field
+-- is overwritten with the value passed (the editor always sends the full form).
+CREATE OR REPLACE FUNCTION save_career_profile(
+    p_current_title text DEFAULT NULL,
+    p_current_level text DEFAULT NULL,
+    p_current_track text DEFAULT NULL,
+    p_current_span int DEFAULT NULL,
+    p_years_experience numeric DEFAULT NULL,
+    p_current_comp int DEFAULT NULL,
+    p_primary_domain text DEFAULT NULL,
+    p_target_track text DEFAULT NULL,
+    p_target_level text DEFAULT NULL,
+    p_target_comp_floor int DEFAULT NULL,
+    p_forward_means text[] DEFAULT NULL,
+    p_lateral_domains text[] DEFAULT NULL,
+    p_notes text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_career_profile: no user_id';
+    END IF;
+
+    INSERT INTO career_profile (
+        user_id, current_title, current_level, current_track, current_span,
+        years_experience, current_comp, primary_domain, target_track,
+        target_level, target_comp_floor, forward_means, lateral_domains, notes
+    ) VALUES (
+        p_user_id, p_current_title, p_current_level, p_current_track, p_current_span,
+        p_years_experience, p_current_comp, p_primary_domain, p_target_track,
+        p_target_level, p_target_comp_floor, p_forward_means, p_lateral_domains, p_notes
+    )
+    ON CONFLICT (user_id) DO UPDATE SET
+        current_title     = EXCLUDED.current_title,
+        current_level     = EXCLUDED.current_level,
+        current_track     = EXCLUDED.current_track,
+        current_span      = EXCLUDED.current_span,
+        years_experience  = EXCLUDED.years_experience,
+        current_comp      = EXCLUDED.current_comp,
+        primary_domain    = EXCLUDED.primary_domain,
+        target_track      = EXCLUDED.target_track,
+        target_level      = EXCLUDED.target_level,
+        target_comp_floor = EXCLUDED.target_comp_floor,
+        forward_means     = EXCLUDED.forward_means,
+        lateral_domains   = EXCLUDED.lateral_domains,
+        notes             = EXCLUDED.notes;
+
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- save_career_judgment — upsert one posting's career read AND lift the enum onto
+-- job_postings.career_trajectory, so compute_priority's force-ranking reflects
+-- the judge instead of the neutral 0.5 fallback. Called by judge-career
+-- (service_role, passes p_user_id).
+CREATE OR REPLACE FUNCTION save_career_judgment(
+    p_job_posting_id uuid,
+    p_trajectory text,
+    p_confidence numeric DEFAULT NULL,
+    p_deltas jsonb DEFAULT NULL,
+    p_rationale text DEFAULT NULL,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_career_judgment: no user_id';
+    END IF;
+
+    INSERT INTO career_judgment (user_id, job_posting_id, trajectory, confidence,
+                                 deltas, rationale, model, judged_at)
+    VALUES (p_user_id, p_job_posting_id, p_trajectory, p_confidence,
+            p_deltas, p_rationale, p_model, now())
+    ON CONFLICT (job_posting_id) DO UPDATE SET
+        trajectory = EXCLUDED.trajectory,
+        confidence = EXCLUDED.confidence,
+        deltas     = EXCLUDED.deltas,
+        rationale  = EXCLUDED.rationale,
+        model      = EXCLUDED.model,
+        judged_at  = now();
+
+    UPDATE job_postings SET career_trajectory = p_trajectory
+    WHERE id = p_job_posting_id AND user_id = p_user_id;
+
+    RETURN jsonb_build_object('success', true, 'career_trajectory', p_trajectory);
+END;
+$$;
+
+
+-- ============================================================================
+-- GROWTH STAGE  (the growth_stage input — see priority_score.yaml)
+-- Growth is a COMPANY property: judge-growth fetches external signals once per
+-- company and caches them on organizations; save_growth_judgment lifts the stage
+-- enum onto EVERY one of that company's postings owned by the user.
+-- ============================================================================
+
+-- save_growth_judgment — cache the company's growth signals on the org and write
+-- the stage to all the user's postings at that org. Called by judge-growth
+-- (service_role, passes p_user_id). p_organization_id is verified to be one the
+-- user actually has a posting for, so a caller can't scribble on arbitrary orgs.
+CREATE OR REPLACE FUNCTION save_growth_judgment(
+    p_organization_id uuid,
+    p_stage text,
+    p_confidence numeric DEFAULT NULL,
+    p_signals jsonb DEFAULT NULL,
+    p_sources jsonb DEFAULT NULL,
+    p_rationale text DEFAULT NULL,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_owned boolean;
+    v_count int;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_growth_judgment: no user_id';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM job_postings
+        WHERE organization_id = p_organization_id AND user_id = p_user_id
+    ) INTO v_owned;
+    IF NOT v_owned THEN
+        RAISE EXCEPTION 'save_growth_judgment: org % not in your search', p_organization_id;
+    END IF;
+
+    UPDATE organizations SET
+        growth_signals    = p_signals,
+        growth_sources    = p_sources,
+        growth_confidence = p_confidence,
+        growth_rationale  = p_rationale,
+        growth_model      = p_model,
+        growth_judged_at  = now()
+    WHERE id = p_organization_id;
+
+    UPDATE job_postings SET growth_stage = p_stage
+    WHERE organization_id = p_organization_id AND user_id = p_user_id;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+
+    RETURN jsonb_build_object('success', true, 'growth_stage', p_stage,
+                              'postings_updated', v_count);
 END;
 $$;
 
@@ -660,3 +1252,16 @@ GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO a
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume(uuid)                          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION upsert_resume(text, text, uuid)           TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION list_resumes(uuid)                        TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION upsert_resume_variant(text, text, text, text, uuid, boolean, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION set_default_resume(uuid, uuid)            TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION delete_resume(uuid, uuid)                TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_role_fit(uuid, uuid)                 TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_fit_coverage(uuid)                   TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_resume_feedback(uuid, uuid)          TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_resume_synthesis(uuid, jsonb, text, int, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_career_profile(uuid)                 TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_career_profile(text, text, text, int, numeric, int, text, text, text, int, text[], text[], text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_career_judgment(uuid, text, numeric, jsonb, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_growth_judgment(uuid, text, numeric, jsonb, jsonb, text, text, uuid) TO authenticated, service_role;

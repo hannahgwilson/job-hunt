@@ -88,6 +88,25 @@ label.checkbox input { width: auto; }
 .bar-fill { background: var(--accent); height: 100%; }
 .bar-num { text-align: right; color: var(--muted); font-size: 0.85rem; }
 
+/* Priority breakdown (role pages) — the five inputs to the priority score */
+.priority-breakdown .pb-rows { display: flex; flex-direction: column; gap: 0.55rem; }
+.pb-row { display: grid; grid-template-columns: 130px 1fr 90px 48px; align-items: center; gap: 0.6rem; }
+.pb-label { font-weight: 600; font-size: 0.9rem; }
+.pb-weight { color: var(--muted); font-weight: 400; font-size: 0.78rem; margin-left: 0.35rem; }
+.pb-input { font-size: 0.85rem; text-align: right; }
+.pb-points { text-align: right; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 560px) {
+  .pb-row { grid-template-columns: 1fr 64px; }
+  .pb-row .bar, .pb-input { display: none; }
+}
+.pb-judges { margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.8rem; display: grid; gap: 0.8rem; }
+.pb-judge-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.pb-judge-title { font-weight: 600; font-size: 0.9rem; }
+.pb-judge p { margin: 0.35rem 0 0; }
+.pb-judge .mono { font-family: ui-monospace, monospace; }
+.pb-signals { margin: 0.4rem 0 0; padding-left: 1.1rem; display: grid; gap: 0.15rem; }
+.pb-career-profile label { margin-bottom: 0; }
+
 /* Kanban */
 .board-title { margin: 1.5rem 0 0; }
 .kanban { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin-top: 0.75rem; }
@@ -151,6 +170,91 @@ table.data a { white-space: nowrap; }
 .resume-text { width: 100%; min-height: 360px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.45; resize: vertical; }
 .file-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
 .saved-tag { color: var(--green); font-size: 0.85rem; }
+
+/* Resume variants (Resumes page) */
+.resume-tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0; }
+.resume-tab { background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.85rem; }
+.resume-tab.active { border-color: var(--accent); color: var(--accent); }
+.default-star { color: var(--warn); margin-right: 0.25rem; }
+.resume-editor-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.resume-label { flex: 1; min-width: 180px; }
+.default-toggle { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+button.danger { color: var(--red); border-color: var(--red); }
+
+/* Notice banner (e.g. un-judged role) */
+.notice { border-left: 3px solid var(--warn); background: rgba(176, 116, 0, 0.06); padding: 0.6rem 0.8rem; border-radius: 6px; margin: 0.5rem 0; }
+.fit-section .section-head { margin-bottom: 0.75rem; }
+
+/* Role fit verdict banner */
+.verdict { margin-top: 1rem; padding: 0.75rem 1rem; border: 1px solid var(--border); border-left-width: 4px; border-radius: var(--radius); background: var(--panel); }
+.verdict.score-high { border-left-color: var(--green); }
+.verdict.score-mid { border-left-color: var(--warn); }
+.verdict.score-low { border-left-color: var(--muted); }
+.verdict-main { display: flex; align-items: center; gap: 0.6rem; }
+.verdict-label { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.verdict-track { font-size: 1.1rem; }
+.verdict-main .score-badge { margin-left: auto; }
+.verdict-detail { margin-top: 0.3rem; }
+.warn-text { color: var(--warn); }
+
+/* Role fit cards */
+.fit-card { display: flex; flex-direction: column; gap: 0.5rem; }
+.fit-card.recommended { border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
+.fit-card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.fit-list { margin-top: 0.25rem; }
+.fit-list h4 { margin: 0 0 0.25rem; font-size: 0.82rem; }
+.fit-list ul, .tweaks ul, .reqs { margin: 0; padding-left: 1.1rem; }
+.fit-list li, .reqs li { font-size: 0.85rem; margin-bottom: 0.15rem; }
+.spikes-h { color: var(--green); }
+.gaps-h { color: var(--warn); }
+.tweaks { margin-top: 0.25rem; }
+.tweaks summary { cursor: pointer; font-size: 0.85rem; color: var(--accent); }
+.tweaks li { font-size: 0.85rem; margin: 0.35rem 0; }
+.tweak-section { font-weight: 600; }
+
+/* Batch judging (Pipeline backfill + per-resume scoring) */
+.section-head-actions { display: flex; align-items: center; gap: 0.75rem; }
+.scoring-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
+.scoring-panel summary { cursor: pointer; font-size: 0.9rem; }
+.scoring-actions { display: flex; align-items: center; gap: 0.75rem; margin: 0.6rem 0; }
+.scoring-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
+.scoring-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
+.scoring-list label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+
+/* Resume feedback digest — every judge's read of this resume, synthesized */
+.feedback-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
+.feedback-panel > h3 { margin: 0; font-size: 0.95rem; }
+.feedback-panel .section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.7rem; }
+
+/* Synthesis — the ranked, bucketed themes */
+.synthesis-headline { margin: 0 0 0.7rem; font-weight: 600; }
+.theme-list { list-style: none; margin: 0 0 0.6rem; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.theme { border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; padding: 0.6rem 0.7rem; background: var(--panel); }
+.theme-high { border-left-color: var(--red); }
+.theme-medium { border-left-color: var(--warn); }
+.theme-low { border-left-color: var(--border); }
+.theme-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.theme-title { font-size: 0.9rem; }
+.theme-meta { margin-left: auto; }
+.theme-rec { margin: 0.4rem 0 0; }
+.theme-from { margin-top: 0.3rem; font-style: italic; }
+.pill.priority-high { color: var(--red); border-color: var(--red); }
+.pill.priority-medium { color: var(--warn); border-color: var(--warn); }
+.pill.priority-low { color: var(--muted); }
+
+/* Raw per-role drill-down (collapsed by default, below the synthesis) */
+.feedback-raw { margin-top: 0.5rem; }
+.feedback-raw > summary { cursor: pointer; font-size: 0.88rem; color: var(--accent); }
+.feedback-roles { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem; }
+.feedback-role > summary { cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.feedback-role[open] > summary { margin-bottom: 0.5rem; }
+
+/* Company page */
+.company-links { display: flex; gap: 0.9rem; }
+.count { color: var(--muted); font-weight: 400; font-size: 0.85rem; margin-left: 0.3rem; }
+.connection, .company-role { padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+.connection:last-child, .company-role:last-child { border-bottom: none; }
+.role-title a.ext { margin-left: 0.4rem; font-weight: 400; }
 
 /* Modal */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: grid; place-items: center; z-index: 50; }

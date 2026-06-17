@@ -235,37 +235,54 @@ export async function getRoleFit(jobPostingId: string): Promise<RoleFitResponse>
   return data as RoleFitResponse;
 }
 
+// supabase-js throws a FunctionsHttpError on ANY non-2xx from an Edge Function,
+// whose .message is just "Edge Function returned a non-2xx status code". The real
+// reason is in the response body our functions return as { success:false, error }.
+// Pull it out (and also handle functions that report failure with a 200 body) so
+// the UI shows something actionable instead of the opaque generic message.
+async function invokeFunction<T>(name: string, body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (error) {
+    let detail = error.message;
+    const res = (error as { context?: Response }).context;
+    if (res && typeof res.json === "function") {
+      try {
+        const parsed = await res.json();
+        if (parsed?.error) detail = parsed.error;
+      } catch {
+        /* body wasn't JSON — keep the generic message */
+      }
+    }
+    throw new Error(detail);
+  }
+  if ((data as { success?: boolean })?.success === false) {
+    throw new Error((data as { error?: string }).error ?? `${name} failed`);
+  }
+  return data as T;
+}
+
 // Run the AI judge for a posting. Scores every resume vs the JD, or just one
 // when resumeId is given (used to score a newly added resume against a subset of
 // roles). Writes role_fit and lifts the posting's experience_alignment.
 // Implemented by the judge-fit edge function — see supabase/functions/judge-fit.
 export async function runJudge(jobPostingId: string, resumeId?: string): Promise<RoleFitResponse> {
-  const { data, error } = await supabase.functions.invoke("judge-fit", {
-    body: { job_posting_id: jobPostingId, resume_id: resumeId ?? null },
+  return invokeFunction<RoleFitResponse>("judge-fit", {
+    job_posting_id: jobPostingId,
+    resume_id: resumeId ?? null,
   });
-  if (error) throw error;
-  return data as RoleFitResponse;
 }
 
 // Judge the career move (step_up/lateral/step_back) for a posting against the
 // user's career_profile. Writes career_judgment + lifts career_trajectory.
 // Implemented by the judge-career edge function. Returns the fresh get_role_fit.
 export async function runCareerJudge(jobPostingId: string): Promise<RoleFitResponse> {
-  const { data, error } = await supabase.functions.invoke("judge-career", {
-    body: { job_posting_id: jobPostingId },
-  });
-  if (error) throw error;
-  return data as RoleFitResponse;
+  return invokeFunction<RoleFitResponse>("judge-career", { job_posting_id: jobPostingId });
 }
 
 // Judge the company's growth stage via web search. Caches signals on the org and
 // writes growth_stage to every one of the company's postings. judge-growth.
 export async function runGrowthJudge(jobPostingId: string): Promise<RoleFitResponse> {
-  const { data, error } = await supabase.functions.invoke("judge-growth", {
-    body: { job_posting_id: jobPostingId },
-  });
-  if (error) throw error;
-  return data as RoleFitResponse;
+  return invokeFunction<RoleFitResponse>("judge-growth", { job_posting_id: jobPostingId });
 }
 
 // The career profile (baseline + ambition) judge-career reads. Edited on Profile.
@@ -317,11 +334,7 @@ export async function fetchResumeFeedback(resumeId: string): Promise<ResumeFeedb
 // themes and caches them (save_resume_synthesis). Returns the fresh feedback
 // payload (roles + synthesis). Implemented by the synthesize-feedback edge function.
 export async function synthesizeFeedback(resumeId: string): Promise<ResumeFeedbackResponse> {
-  const { data, error } = await supabase.functions.invoke("synthesize-feedback", {
-    body: { resume_id: resumeId },
-  });
-  if (error) throw error;
-  return data as ResumeFeedbackResponse;
+  return invokeFunction<ResumeFeedbackResponse>("synthesize-feedback", { resume_id: resumeId });
 }
 
 export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {

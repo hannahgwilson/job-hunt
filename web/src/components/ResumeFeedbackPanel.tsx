@@ -81,9 +81,6 @@ export default function ResumeFeedbackPanel({
     setError(null);
     try {
       const fresh = await synthesizeFeedback(resumeId);
-      if ((fresh as { success?: boolean }).success === false) {
-        throw new Error((fresh as unknown as { error?: string }).error ?? "synthesis failed");
-      }
       setRoles(fresh.roles);
       setSynthesis(fresh.synthesis);
     } catch (e) {
@@ -93,8 +90,13 @@ export default function ResumeFeedbackPanel({
     }
   }
 
-  if (error) return <div className="feedback-panel"><h3>Judge feedback</h3><p className="error">{error}</p></div>;
-  if (roles == null) return <p className="muted small">Loading judge feedback…</p>;
+  // Only collapse the panel when the initial load itself failed; a synthesize
+  // error keeps the panel (and its retry button) so it stays usable.
+  if (roles == null) {
+    return error
+      ? <div className="feedback-panel"><h3>Judge feedback</h3><p className="error">{error}</p></div>
+      : <p className="muted small">Loading judge feedback…</p>;
+  }
 
   if (roles.length === 0) {
     return (
@@ -119,6 +121,8 @@ export default function ResumeFeedbackPanel({
           {synthesizing ? "Synthesizing…" : synthesis ? "Re-synthesize" : "Synthesize across roles"}
         </button>
       </div>
+
+      {error && <p className="error">{error}</p>}
 
       {synthesis && synthesis.themes && synthesis.themes.length > 0 ? (
         <Synthesis synthesis={synthesis} roleCount={roles.length} />

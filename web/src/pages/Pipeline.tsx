@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { advanceApplication, fetchApplications, fetchActionQueue, fetchFitCoverage, submitApplication } from "../lib/api";
 import { PIPELINE_COLUMNS, type Application, type ActionQueue, type FitCoveragePosting } from "../lib/types";
@@ -23,6 +23,8 @@ export default function Pipeline() {
   const [showAdd, setShowAdd] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const highlightId = params.get("role"); // set by the Insights scatter click-through
   const batch = useBatchJudge();
 
   function load() {
@@ -108,7 +110,7 @@ export default function Pipeline() {
           </div>
         </div>
         {!queue ? <p className="muted">Loading…</p> : (
-          <RolesToApplyTable roles={queue.roles_to_apply} onApply={apply} applyingId={applyingId} />
+          <RolesToApplyTable roles={queue.roles_to_apply} onApply={apply} applyingId={applyingId} highlightId={highlightId} />
         )}
       </section>
 

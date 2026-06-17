@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { RoleAnalytics } from "../lib/types";
 
 // fit-vs-(career+growth) scatter. X = resume fit (experience component), Y = the
@@ -23,6 +24,9 @@ function compMid(r: RoleAnalytics): number | null {
 const TICKS = [0, 0.25, 0.5, 0.75, 1];
 
 export default function FitScatter({ roles }: { roles: RoleAnalytics[] }) {
+  const navigate = useNavigate();
+  const [hover, setHover] = useState<string | null>(null);
+
   const points = useMemo(() => {
     const comps = roles.map(compMid).filter((c): c is number => c != null);
     const minC = comps.length ? Math.min(...comps) : 0;
@@ -48,6 +52,8 @@ export default function FitScatter({ roles }: { roles: RoleAnalytics[] }) {
   }, [roles]);
 
   if (roles.length === 0) return <p className="muted small">No roles yet.</p>;
+
+  const hovered = points.find((p) => p.r.posting_id === hover) ?? null;
 
   return (
     <div className="scatter-wrap">
@@ -78,18 +84,16 @@ export default function FitScatter({ roles }: { roles: RoleAnalytics[] }) {
           Career move + company growth →
         </text>
 
-        {/* bubbles */}
+        {/* bubbles — hover for the title, click through to the pipeline */}
         {points.map((p) => (
-          <g key={p.r.posting_id} className={`scatter-pt${p.judged ? "" : " unjudged"}`}>
-            <circle cx={p.cx} cy={p.cy} r={p.radius}>
-              <title>
-                {`${p.r.title} · ${p.r.organization_name}\n`}
-                {`fit ${Math.round(p.r.priority.components.experience * 100)}% · `}
-                {`career ${p.r.career_trajectory ?? "—"} · growth ${p.r.growth_stage ?? "—"}\n`}
-                {`comp ${p.comp != null ? `$${Math.round(p.comp / 1000)}k` : "—"}`}
-                {p.judged ? "" : "\n(signals not fully judged — neutral 0.5)"}
-              </title>
-            </circle>
+          <g
+            key={p.r.posting_id}
+            className={`scatter-pt${p.judged ? "" : " unjudged"}${hover === p.r.posting_id ? " hover" : ""}`}
+            onMouseEnter={() => setHover(p.r.posting_id)}
+            onMouseLeave={() => setHover((h) => (h === p.r.posting_id ? null : h))}
+            onClick={() => navigate(`/pipeline?role=${p.r.posting_id}`)}
+          >
+            <circle cx={p.cx} cy={p.cy} r={p.radius} />
             {p.r.location && (
               <text x={p.cx} y={p.cy - p.radius - 3} className="scatter-label" textAnchor="middle">
                 {p.r.location.length > 18 ? p.r.location.slice(0, 17) + "…" : p.r.location}
@@ -97,12 +101,35 @@ export default function FitScatter({ roles }: { roles: RoleAnalytics[] }) {
             )}
           </g>
         ))}
+
+        {/* hover tooltip — drawn last so it sits on top of every bubble */}
+        {hovered && (() => {
+          const fitPct = Math.round(hovered.r.priority.components.experience * 100);
+          const comp = hovered.comp != null ? `$${Math.round(hovered.comp / 1000)}k` : "comp —";
+          const sub = `${hovered.r.organization_name} · fit ${fitPct}% · ${comp}`
+            + ` · ${hovered.r.career_trajectory ?? "career —"} · ${hovered.r.growth_stage ?? "growth —"}`;
+          const w = Math.min(360, Math.max(hovered.r.title.length, sub.length) * 6.3 + 18);
+          const tx = Math.max(x0, Math.min(hovered.cx - w / 2, x1 - w));
+          const above = hovered.cy - hovered.radius - 42 >= y1;
+          const ty = above ? hovered.cy - hovered.radius - 42 : hovered.cy + hovered.radius + 8;
+          return (
+            <g className="scatter-tip" pointerEvents="none">
+              <rect x={tx} y={ty} width={w} height={36} rx={5} />
+              <text x={tx + 9} y={ty + 15} className="scatter-tip-title">
+                {hovered.r.title.length > 52 ? hovered.r.title.slice(0, 51) + "…" : hovered.r.title}
+              </text>
+              <text x={tx + 9} y={ty + 29} className="scatter-tip-sub">
+                {sub.length > 56 ? sub.slice(0, 55) + "…" : sub}
+              </text>
+            </g>
+          );
+        })()}
       </svg>
 
       <div className="scatter-legend muted small">
         <span>● bubble size = comp</span>
         <span>· faded = signals not fully judged</span>
-        <span>· top-right = strong fit + strong move</span>
+        <span>· hover for the role · click to open it in the pipeline</span>
       </div>
     </div>
   );

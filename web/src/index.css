@@ -256,11 +256,22 @@ button.danger { color: var(--red); border-color: var(--red); }
 .scatter-tick { fill: var(--muted); font-size: 11px; }
 .scatter-axis { fill: var(--text); font-size: 12px; font-weight: 600; }
 .scatter-sweet { fill: var(--green); opacity: 0.06; }
+.scatter-pt { cursor: pointer; }
 .scatter-pt circle { fill: var(--accent); fill-opacity: 0.55; stroke: var(--accent-700); stroke-width: 1; }
-.scatter-pt:hover circle { fill-opacity: 0.8; }
+.scatter-pt.hover circle { fill-opacity: 0.9; stroke-width: 2.5; }
 .scatter-pt.unjudged circle { fill: var(--muted); fill-opacity: 0.18; stroke-dasharray: 2 2; }
-.scatter-label { fill: var(--muted); font-size: 10px; }
+.scatter-label { fill: var(--muted); font-size: 10px; pointer-events: none; }
+.scatter-tip rect { fill: var(--text); opacity: 0.96; }
+.scatter-tip-title { fill: #fff; font-size: 12px; font-weight: 600; }
+.scatter-tip-sub { fill: #cbd5e1; font-size: 10.5px; }
 .scatter-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
+
+/* roles-to-apply row arrived-at from the Insights scatter */
+.row-highlight { animation: rowpulse 2.4s ease-out 1; }
+@keyframes rowpulse {
+  0%, 40% { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  100% { background: transparent; }
+}
 
 /* Company page */
 .company-links { display: flex; gap: 0.9rem; }

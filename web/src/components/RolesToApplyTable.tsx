@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { PriorityComponents, RankedRole } from "../lib/types";
 
@@ -51,23 +51,14 @@ function FitBars({ c }: { c: PriorityComponents }) {
 }
 
 export default function RolesToApplyTable({
-  roles, onApply, applyingId, highlightId,
+  roles, onApply, applyingId,
 }: {
   roles: RankedRole[];
   onApply?: (postingId: string) => void;
   applyingId?: string | null;
-  highlightId?: string | null; // posting id to scroll to + flag (e.g. from the Insights scatter)
 }) {
   const [sort, setSort] = useState<SortKey>("score");
   const [dir, setDir] = useState<Dir>("desc");
-  const highlightRow = useRef<HTMLTableRowElement>(null);
-
-  // When arriving with ?role=… scroll that row into view and let it pulse.
-  useEffect(() => {
-    if (highlightId && highlightRow.current) {
-      highlightRow.current.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [highlightId, roles]);
 
   function clickSort(key: SortKey) {
     if (key === sort) setDir(dir === "asc" ? "desc" : "asc");
@@ -115,11 +106,7 @@ export default function RolesToApplyTable({
         </thead>
         <tbody>
           {sorted.map((r) => (
-            <tr
-              key={r.id}
-              ref={r.id === highlightId ? highlightRow : undefined}
-              className={r.id === highlightId ? "row-highlight" : undefined}
-            >
+            <tr key={r.id}>
               <td>
                 <span className={`score-badge ${scoreClass(r.priority.score)}`}>{r.priority.score}</span>
               </td>

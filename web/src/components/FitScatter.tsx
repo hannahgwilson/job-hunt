@@ -91,7 +91,7 @@ export default function FitScatter({ roles }: { roles: RoleAnalytics[] }) {
             className={`scatter-pt${p.judged ? "" : " unjudged"}${hover === p.r.posting_id ? " hover" : ""}`}
             onMouseEnter={() => setHover(p.r.posting_id)}
             onMouseLeave={() => setHover((h) => (h === p.r.posting_id ? null : h))}
-            onClick={() => navigate(`/pipeline?role=${p.r.posting_id}`)}
+            onClick={() => navigate(`/posting/${p.r.posting_id}`)}
           >
             <circle cx={p.cx} cy={p.cy} r={p.radius} />
             {p.r.location && (
@@ -129,7 +129,7 @@ export default function FitScatter({ roles }: { roles: RoleAnalytics[] }) {
       <div className="scatter-legend muted small">
         <span>● bubble size = comp</span>
         <span>· faded = signals not fully judged</span>
-        <span>· hover for the role · click to open it in the pipeline</span>
+        <span>· hover for the role · click to open its page</span>
       </div>
     </div>
   );

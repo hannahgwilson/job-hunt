@@ -266,13 +266,6 @@ button.danger { color: var(--red); border-color: var(--red); }
 .scatter-tip-sub { fill: #cbd5e1; font-size: 10.5px; }
 .scatter-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
 
-/* roles-to-apply row arrived-at from the Insights scatter */
-.row-highlight { animation: rowpulse 2.4s ease-out 1; }
-@keyframes rowpulse {
-  0%, 40% { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-  100% { background: transparent; }
-}
-
 /* Company page */
 .company-links { display: flex; gap: 0.9rem; }
 .count { color: var(--muted); font-weight: 400; font-size: 0.85rem; margin-left: 0.3rem; }

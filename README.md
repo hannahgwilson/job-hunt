@@ -1,204 +1,178 @@
-# Extension 6: Job Hunt Pipeline (v2)
+# Job Hunt Pipeline
 
-> Tracks a job search as facts on top of the canonical dims. Companies live in `organizations`, recruiters and hiring managers live in `contacts`, and the only job-hunt-specific tables are `job_postings`, `applications`, `application_status_history`, and `interviews`.
+> A job search run as a data pipeline — not a spreadsheet.
 
-## What's different from v1
+Postings, applications, interviews, and funnel metrics are modeled as **facts on
+shared `organizations` + `contacts` dimensions**, force-ranked by a transparent
+0–100 **priority score**, and worked from two surfaces that share one logic layer:
 
-v1 carried its own `companies` and `job_contacts` tables and had a `link_contact_to_professional_crm` bridge tool. v2 drops all three:
+- **A conversational agent** — an MCP you drive from Claude ("I'm tracking a role
+  at Anthropic", "I have a screen Tuesday", "how's it going?").
+- **A tracking-hub dashboard** — a React SPA ([`web/`](web/)) for the pipeline,
+  funnel, résumés, and insights.
 
-| v1 | v2 |
-|---|---|
-| `companies` table | `organizations` (shared dim) |
-| `job_contacts` table | `contacts` with `tags=['professional','job-hunt']` |
-| `professional_crm_contact_id` UUID on each job contact | (gone — contacts are in CRM by construction) |
-| `applications.referral_contact` TEXT | `applications.referral_contact_id` UUID FK → contacts |
-| `interviews.interviewer_name` + `interviewer_title` TEXT | `interviews.interviewer_contact_id` UUID FK → contacts |
-| Status snapshot only | Auto-logged `application_status_history` for true funnel metrics |
-| (no calendar surface) | Optional `interviews.event_id` writes through to `events` for week-view surfacing |
+**AI judges** score each role against your résumé, your career trajectory, and the
+company's growth, so the queue reflects real fit instead of gut feel.
 
-## Why
+Built as extension 6 of the open-brain learning path; it runs against that stack's
+canonical Supabase schemas (organizations, contacts, events) with row-level
+security, so a recruiter is just a `contact` and an employer is just an
+`organization` — reusable long after the search ends.
 
-A recruiter you're talking to is also a contact worth maintaining. Modeling them in a separate `job_contacts` table fragments the contacts ontology and means you have to bridge back to CRM with a special tool. With v2 they're just contacts with extra tags — every CRM operation already works on them.
+---
 
-Same logic for companies. "TechCorp" the employer you're applying to and "TechCorp" the company your friend works at are the same real-world institution. Modeling them as one `organizations` row means a single update is enough.
+## Features
 
-## Schema
+**Track** — one transactional `intake_role` call finds-or-creates the company and
+adds the posting; applications, status transitions, and interviews are logged
+automatically (an `application_status_history` trigger makes the funnel
+trustworthy). Interviews can write through to your calendar.
+
+**Prioritize** — every un-applied role gets a 0–100 score from five weighted
+components (fit · location · comp · career · growth). The apply queue is
+force-ranked, so "what do I work next" is the top card. Weights live in a
+[YAML semantic layer](semantic/), not buried in code.
+
+**Judge with AI** — four server-side judges (Claude) fill the subjective signals:
+- `judge-fit` scores each résumé variant against a JD (spikes / gaps / tweaks),
+- `judge-career` reads the JD against your career profile → step_up / lateral / step_back,
+- `judge-growth` web-searches the company's stage and momentum,
+- `synthesize-feedback` rolls every judge's résumé tweaks into ranked, bucketed themes.
+
+**Analyze** — true conversion + median time-in-stage from the status history; a
+résumé-fit-vs-(career+growth) scatter on the Insights page; per-company pages.
+
+---
+
+## Getting started
+
+### Prerequisites
+
+- A Supabase project with the open-brain canonical schemas already applied:
+  **organizations**, **family-calendar** (`contacts`, `events`, and the shared
+  `update_updated_at_column()`), and **professional-crm**. These provide the dims
+  this extension layers facts onto.
+- The **Supabase CLI**, and an **Anthropic API key** (for the AI judges).
+- Node 18+ to run the dashboard.
+
+### 1. Apply the database layer
+
+In the Supabase SQL editor, run in order:
 
 ```
-job_postings              -- descriptive dim: a role at an org
-  organization_id FK -> organizations
-  title, url, salary_min/max, requirements[], remote_policy, source,
-  posted_date, closing_date, ...
-
-applications              -- fact: one row per submitted application
-  job_posting_id FK -> job_postings
-  referral_contact_id FK -> contacts
-  status, applied_date, response_date, resume_version, ...
-
-application_status_history -- auto-logged fact, populated by trigger
-  application_id FK -> applications
-  from_status, to_status, changed_at, notes
-
-interviews                -- fact: one row per interview event
-  application_id FK -> applications
-  interviewer_contact_id FK -> contacts
-  event_id FK -> events            (optional calendar bridge)
-  interview_type, scheduled_at, status, rating, feedback, ...
+schema.sql        # tables, triggers, RLS
+functions.sql     # the shared logic layer (reads + transactional writes)
 ```
 
-## Prerequisites
+On a database that already ran an earlier `schema.sql`, apply the new
+[`migrations/`](migrations/) in numeric order (001 → 008) first, then **re-run
+`functions.sql`** — every function is `CREATE OR REPLACE`, so re-applying is safe
+and is how the RPCs behind each migration get installed.
 
-Apply these schemas **before** job-hunt:
+### 2. Deploy the agent (MCP)
 
-1. Family calendar — `contacts`, `locations`, `events`, plus the `update_updated_at_column()` function shared with this extension. ([extensions/family-calendar/](../family-calendar/))
-2. Professional CRM — `contact_interactions`, `opportunities`, contacts FTS. ([extensions/professional-crm/](../professional-crm/))
-3. Organizations — the `organizations` dim plus `contacts.organization_id` and `entities.organization_id` FKs. ([schemas/organizations/](../../schemas/organizations/))
-
-## Deploy
+Copy `index.ts` **and** `deno.json` together into your open-brain functions dir,
+then deploy:
 
 ```bash
-# 1. Apply the SQL, in order, in the Supabase SQL editor:
-#      schema.sql      — tables, triggers, RLS
-#      functions.sql   — read aggregations + write RPCs (the shared logic layer)
-#    On a database that already ran an earlier schema.sql, also apply, in order:
-#      migrations/001_interview_decisions.sql    — interview go/no-go columns
-#      migrations/002_priority_scoring.sql        — the prioritization signals
-#      migrations/003_resume_profile.sql          — the resume/profile table
-#      migrations/004_resumes_and_fit.sql         — resume variants + role_fit (AI fit judge)
-#      migrations/005_org_company_fields.sql      — org/company page fields
-#      migrations/006_career_growth_judges.sql    — career_profile + career/growth judge storage
-#      migrations/007_resume_feedback.sql         — resume_feedback_synthesis (feedback digest)
-#      migrations/008_roles_analytics.sql         — get_roles_analytics (Insights scatter + signal backfill)
-#    (then re-run functions.sql — CREATE OR REPLACE, so it's safe to re-apply; it
-#     adds the read/write RPCs the new tables need, e.g. get_resume_feedback /
-#     save_resume_synthesis / get_role_fit / the career & growth judge RPCs)
-
-# 2. Deploy the MCP Edge Function (copy index.ts AND deno.json together)
-cp index.ts   <open-brain>/supabase/functions/job-hunt-mcp/index.ts
-cp deno.json  <open-brain>/supabase/functions/job-hunt-mcp/deno.json
-cd <open-brain>
 supabase functions deploy job-hunt-mcp --no-verify-jwt
+```
 
-# 3. Deploy the AI-judge Edge Functions (each is a folder with index.ts + deno.json).
-#    They make a server-side Anthropic call, so they need secrets set once:
-#      supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   # JUDGE_MODEL optional
-#    Then deploy each (judge-growth also uses web search):
+Add it to Claude as a connector with `?key=<MCP_ACCESS_KEY>`.
+
+### 3. Deploy the AI judges
+
+Each judge is a folder under [`supabase/functions/`](supabase/functions/) with its
+own `index.ts` + `deno.json`. Set the secret once, then deploy them:
+
+```bash
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   # JUDGE_MODEL optional
 supabase functions deploy judge-fit judge-career judge-growth synthesize-feedback
 ```
 
-Add as a Claude Desktop connector with `?key=<MCP_ACCESS_KEY>`.
+### 4. Run the dashboard
 
-### Two planes, one logic layer
+```bash
+cd web
+cp .env.example .env.local      # fill in your Supabase URL + anon key
+npm install
+npm run dev                     # http://localhost:5173
+```
 
-The aggregations and multi-step writes live in **`functions.sql`** as Postgres
-functions, so they are written once and called from both sides:
+Sign in with the magic link as the Supabase Auth user whose `auth.uid()` owns the
+data. See [`web/README.md`](web/README.md) for the page-by-page tour.
 
-- **The agent (this MCP)** — tools are thin `supabase.rpc(...)` wrappers; the
-  service role passes `p_user_id` explicitly.
-- **The tracking-hub SPA** (`web/`) — calls the same `rpc(...)` directly via
-  supabase-js, scoped by RLS to the logged-in user (`p_user_id` defaults to
-  `auth.uid()`).
+### 5. Track your first role
 
-This is why "paste a job link → build the org → start tracking" is one
-transactional `intake_role` call instead of brittle chained inserts.
+In Claude: *"I'm tracking a Senior AI Engineer role at Anthropic — here's the
+link."* The agent enriches the JD and calls `intake_role`. Upload a résumé on the
+dashboard's **Resumes** tab, then hit **Run AI judge** on the role to score it for
+real. The full agent playbook is in [`CLAUDE.md`](CLAUDE.md).
 
-## Prioritization & the semantic layer
+---
 
-The action queue doesn't just list roles to apply to — it **force-ranks** them by
-a 0–100 priority score, so "what do I work next" is the top card. The score is a
-weighted sum of five components, defined once and consumed everywhere:
+## How it works
+
+**Two planes, one logic layer.** The aggregations and multi-step writes live in
+[`functions.sql`](functions.sql) as Postgres functions, called from both sides:
+the **agent** (MCP tools are thin `rpc(...)` wrappers, service role passing
+`p_user_id`) and the **dashboard** (supabase-js `rpc(...)`, RLS-scoped to
+`auth.uid()`). So "paste a link → create the org → start tracking" is one
+transactional `intake_role`, never brittle chained inserts — and the two surfaces
+can't drift.
+
+**The priority score** is a weighted sum, defined once and consumed everywhere:
 
 ```
 priority_score = 100 * (
-    0.35 * experience   // fit of the JD vs my resume          (agent-judged 0..1)
-  + 0.15 * location     // hybrid-NYC > remote > onsite-NYC …   (derived)
-  + 0.15 * comp         // salary midpoint normalized to a band (derived)
-  + 0.20 * career       // step_up > lateral > step_back        (agent-judged)
-  + 0.15 * growth       // growth/early > late/seed > public    (agent-judged)
+    0.35 * experience   // résumé vs JD            (AI-judged 0..1)
+  + 0.15 * location     // hybrid-NYC > remote > … (derived)
+  + 0.15 * comp         // salary midpoint → band  (derived)
+  + 0.20 * career       // step_up > lateral > …   (AI-judged)
+  + 0.15 * growth       // growth/early > … public (AI-judged)
 )
 ```
 
-Three of the signals are subjective reads the agent supplies from the JD and my
-résumé. The résumé is **uploaded from the tracking hub** (the Resume page → stored
-in `job_search_profile`, RLS-scoped) and the agent reads it via `get_resume` when
-judging `experience_alignment`; `resume/resume.example.md` is just the committed
-placeholder that documents the expected shape. Location and comp are scored
-deterministically from columns intake already captured.
-
-**The metric definitions live in a lightweight YAML semantic layer**, not buried
-in code — see [`semantic/`](semantic/). Each metric (`time_in_stage`,
-`conversion_rate`, `priority_score`) is a spec that points at the SQL function
-implementing it, so there's one canonical definition the agent, the UI, and I all
-read. The priority weights are the source of truth in
+The three subjective signals come from the AI judges (or can be set by hand);
+location and comp are derived from columns intake already captured. Weights are the
+source of truth in
 [`semantic/metrics/priority_score.yaml`](semantic/metrics/priority_score.yaml) and
 mirrored as `DEFAULT`s on `compute_priority()` so the function runs standalone.
 
-| Surface | What it shows |
-|---|---|
-| `compute_priority()` | pure scoring of one posting → `{ score, components, weights }` |
-| `get_prioritized_roles()` / `get_action_queue().roles_to_apply` | the unapplied roles, ranked high→low |
-| Action Queue page (`web/`) | rank + score badge + per-component fit bars |
+**Résumés** are a dimension (`resumes`) of named variants (e.g. a senior-IC and a
+manager résumé), one marked default. The agent reads the default via `get_resume`;
+the judge scores every variant against a role and recommends one.
 
-## Tools
+---
 
-| Tool | Purpose |
-|---|---|
-| `intake_role` | One-call intake: find-or-create the org **by name** + add the posting (wraps `intake_role()`). Also accepts the prioritization signals. Replaces `add_job_posting` + a separate org lookup. |
-| `set_priority_signals` | Update a posting's prioritization signals (`experience_alignment`, `career_trajectory`, `growth_stage`) after intake; returns the recomputed score. |
-| `get_prioritized_roles` | Force-rank the roles I haven't applied to yet by priority score (0–100), with per-role component breakdown. |
-| `get_resume` | Fetch the stored long-form resume — read it before judging `experience_alignment`. |
-| `set_resume` | Save / replace the stored resume text. |
-| `submit_application` | Record a new application; status defaults to `'applied'`. Tracking starts here. |
-| `update_application_status` | Move an application to a new status (wraps `advance_application()`). Transition auto-logged. |
-| `schedule_interview` | Schedule an interview. `add_to_calendar: true` also writes a row in `events`. |
-| `log_interview_notes` | Feedback + rating **+ go/no-go `advance_decision`**; marks status `completed`. |
-| `list_postings` | List postings, optional org filter. |
-| `list_applications` | List applications, optional status + org filter. |
-| `get_pipeline_overview` | Status breakdown + upcoming interviews. The "how's it going?" tool. |
-| `get_upcoming_interviews` | Scheduled interviews in the next N days. |
-| `get_action_queue` | The to-do list: roles to apply, follow-ups, upcoming interviews, stale networking contacts. |
-| `get_funnel_metrics` | True conversion rates between stages + median time-from-applied. |
-
-## Typical flow with Claude
+## Project layout
 
 ```
-You: "I'm tracking a Senior AI Engineer role at Anthropic."
-
-Claude:
-  1. organizations-mcp `org_find_or_create({ name: "Anthropic" })` -> org_id
-  2. job-hunt `add_job_posting({ organization_id: org_id, title: "Senior AI Engineer", ... })` -> posting_id
-
-You: "I submitted the application today. Jessica Lee referred me — recruiter at Anthropic."
-
-Claude:
-  1. professional-crm `crm_add_contact({ name: "Jessica Lee", company: "Anthropic", ... tags: ["professional", "job-hunt"] })` -> contact_id
-  2. organizations-mcp `org_link_contact({ contact_id, org_id })`
-  3. job-hunt `submit_application({ job_posting_id: posting_id, referral_contact_id: contact_id, applied_date: "2026-06-12" })`
-
-You: "I have a phone screen with Jessica Tuesday at 2pm — put it on the calendar."
-
-Claude:
-  job-hunt `schedule_interview({
-    application_id, interview_type: "phone_screen",
-    scheduled_at: "2026-06-16T14:00:00-04:00", duration_minutes: 30,
-    interviewer_contact_id: jessica_id, add_to_calendar: true
-  })`
-
-You: "How's the search going overall?"
-
-Claude:
-  job-hunt `get_pipeline_overview()` + optionally `get_funnel_metrics()`
+schema.sql            Tables, triggers, RLS
+functions.sql         The shared logic layer (reads + write RPCs)
+migrations/           Ordered deltas (001–008); re-run functions.sql after
+index.ts / deno.json  The job-hunt MCP (agent surface)
+supabase/functions/   AI judges: judge-fit, judge-career, judge-growth,
+                      synthesize-feedback
+semantic/             YAML metric specs → the SQL that implements them
+resume/               resume.example.md — the expected long-form shape
+web/                  The tracking-hub SPA (Vite + React)
+CLAUDE.md             How to drive the search from Claude (the agent plays)
 ```
 
-## What this unblocks
+## Going deeper
 
-- **Cross-extension queries.** "All my interviews at remote-friendly enterprise companies" is now one `interviews ⨝ applications ⨝ job_postings ⨝ organizations` query.
-- **Reusable recruiter network.** When the job search ends, the recruiters don't go away — they're still in `contacts` with all their interaction history in `contact_interactions`. Searching CRM for "Jessica Lee" still finds her.
-- **True funnel analytics.** Because every status transition gets logged, `get_funnel_metrics` can give you "your phone-screen → onsite conversion is 60%, median 5 days" without trusting the writer to remember.
-- **Calendar surfacing.** Scheduled interviews appear in the weekly schedule generator alongside swim lessons and dinner duty.
+- [`CLAUDE.md`](CLAUDE.md) — the repeatable plays the agent runs (intake, track,
+  weekly review, prioritize).
+- [`web/README.md`](web/README.md) — the dashboard: pages, RPCs, and the judges.
+- [`semantic/`](semantic/) — the metric definitions (`priority_score`,
+  `conversion_rate`, `time_in_stage`).
 
 ## Notes
 
-- No migration script here because v2 is the canonical target state and this extension hasn't been deployed to Supabase yet. If you ever applied v1's `schema.sql` somewhere, write a separate one-shot migration that mirrors `schemas/organizations/migrations/001_backfill_contacts_company.sql` — same idea, different source tables.
-- `application_status_history` is populated only on INSERT to `applications` and on UPDATE OF `status` (see the trigger). If you change other columns, the history isn't touched.
-- `interviews.interviewer_contact_id` is single-valued. Panel interviews currently store the primary interviewer; a junction table can replace this if it ever matters.
+- `application_status_history` is logged only on INSERT to `applications` and on
+  UPDATE OF `status` — other column edits don't touch the history.
+- `interviews.interviewer_contact_id` is single-valued; panel interviews store the
+  primary interviewer (a junction table can replace it if needed).
+- Nothing personal lives in the repo: real résumés (`resume/resume.md`) and env
+  files are git-ignored; only the placeholder and schema are committed.

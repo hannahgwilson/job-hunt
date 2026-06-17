@@ -15,6 +15,10 @@ export function useBatchJudge() {
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
   const [errors, setErrors] = useState(0);
+  // The last failure's message, so the UI can show *why* a judge didn't run —
+  // not just that some did. Kept as the most recent reason (the common case is
+  // every job failing the same way: no API key, no resume, model error).
+  const [lastError, setLastError] = useState<string | null>(null);
 
   async function run(jobs: JudgeJob[], onEach?: () => void) {
     if (jobs.length === 0) return;
@@ -22,11 +26,13 @@ export function useBatchJudge() {
     setTotal(jobs.length);
     setDone(0);
     setErrors(0);
+    setLastError(null);
     for (const job of jobs) {
       try {
         await runJudge(job.jobPostingId, job.resumeId);
-      } catch {
-        setErrors((e) => e + 1);
+      } catch (e) {
+        setErrors((n) => n + 1);
+        setLastError((e as Error).message);
       } finally {
         setDone((d) => d + 1);
         onEach?.();
@@ -35,5 +41,5 @@ export function useBatchJudge() {
     setRunning(false);
   }
 
-  return { run, running, done, total, errors };
+  return { run, running, done, total, errors, lastError };
 }

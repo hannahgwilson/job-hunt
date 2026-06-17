@@ -137,9 +137,14 @@ Five weighted components (weights sum to 1.0):
     are scored for free). Costs an external search — the per-company caching is why.
   Each judge writes the same column `compute_priority` reads, so a freshly judged
   role re-ranks immediately. See [`supabase/functions/JUDGE_SIGNALS_SPEC.md`](supabase/functions/JUDGE_SIGNALS_SPEC.md).
-- To re-weight the search (e.g. care more about comp), edit the YAML **and** the
-  matching `DEFAULT`s in `functions.sql` (`compute_priority` / `get_prioritized_roles`),
-  then re-apply `functions.sql`. The YAML is the source of truth.
+- To re-weight the search (e.g. care more about comp) **for this user**, move the
+  sliders on the **Pipeline page** — they persist to the `priority_weights` table
+  and `resolve_priority_weights()` feeds them into the force-ranking, so the queue
+  (UI *and* MCP/`get_action_queue`) re-ranks immediately. To move the **default**
+  everyone falls back to, edit the YAML **and** the matching `DEFAULT`s in
+  `functions.sql` (`compute_priority` / `get_prioritized_roles` / the literal in
+  `resolve_priority_weights`), then re-apply `functions.sql`. The YAML is the
+  source of truth for the defaults.
 
 ## Notes for the assistant
 

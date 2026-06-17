@@ -1,6 +1,8 @@
 import { Link, useParams } from "react-router-dom";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
+import TailoredResumePanel from "../components/TailoredResumePanel";
+import { usePriorityWeights } from "../lib/usePriorityWeights";
 
 // Posting-scoped fit page (reached from the to-apply table, for roles with no
 // application yet). The scoring UI itself lives in RoleFitPanel, which the
@@ -9,6 +11,7 @@ import PriorityBreakdown from "../components/PriorityBreakdown";
 export default function RoleFit() {
   const { id } = useParams<{ id: string }>();
   const fit = useRoleFit(id);
+  const weights = usePriorityWeights();
   const { data, error, judging, judge } = fit;
 
   if (error && !data) return <p className="error">{error}</p>;
@@ -30,6 +33,7 @@ export default function RoleFit() {
 
       <PriorityBreakdown
         inputs={p}
+        weights={weights}
         judges={{
           career: data.career,
           growth: data.growth,
@@ -42,6 +46,8 @@ export default function RoleFit() {
       />
 
       <RoleFitPanel data={data} judging={judging} onJudge={judge} error={error} />
+
+      <TailoredResumePanel jobPostingId={p.id} baseResumeId={data.recommended_resume_id} />
 
       {(p.requirements?.length ?? 0) > 0 && (
         <section className="card">

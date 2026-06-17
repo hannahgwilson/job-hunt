@@ -6,6 +6,7 @@ import { PIPELINE_COLUMNS, type Application, type ActionQueue, type FitCoverageP
 import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
 import RolesToApplyTable from "../components/RolesToApplyTable";
+import PriorityWeightsPanel from "../components/PriorityWeightsPanel";
 
 const NEXT: Record<string, string | null> = {
   applied: "screening",
@@ -104,9 +105,15 @@ export default function Pipeline() {
                 {unjudged.length === 0 ? "All roles judged" : `Judge ${unjudged.length} un-judged`}
               </button>
             )}
+            {!batch.running && batch.errors > 0 && (
+              <span className="error small" title={batch.lastError ?? undefined}>
+                {batch.errors} judge{batch.errors === 1 ? "" : "s"} failed{batch.lastError ? ` — ${batch.lastError}` : ""}
+              </span>
+            )}
             <span className="muted small">ranked by priority — click a header to re-sort</span>
           </div>
         </div>
+        <PriorityWeightsPanel onSaved={() => fetchActionQueue().then(setQueue).catch((e) => setError(e.message))} />
         {!queue ? <p className="muted">Loading…</p> : (
           <RolesToApplyTable roles={queue.roles_to_apply} onApply={apply} applyingId={applyingId} />
         )}

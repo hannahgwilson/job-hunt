@@ -57,7 +57,9 @@ export default function ResumeScoringPanel({
           </button>
         )}
         {!batch.running && batch.errors > 0 && (
-          <span className="error small">{batch.errors} failed</span>
+          <span className="error small" title={batch.lastError ?? undefined}>
+            {batch.errors} failed{batch.lastError ? ` — ${batch.lastError}` : ""}
+          </span>
         )}
       </div>
 

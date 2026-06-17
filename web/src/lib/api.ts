@@ -7,6 +7,8 @@ import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
   CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
+  PriorityComponents, PriorityWeightsResponse,
+  ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -110,6 +112,28 @@ export async function fetchRolesAnalytics(): Promise<RoleAnalytics[]> {
   const { data, error } = await supabase.rpc("get_roles_analytics", {});
   if (error) throw error;
   return (data as { roles: RoleAnalytics[] }).roles ?? [];
+}
+
+// ── priority weights (the adjustable force-ranking levers; migration 009) ─────
+
+export async function fetchPriorityWeights(): Promise<PriorityWeightsResponse> {
+  const { data, error } = await supabase.rpc("get_priority_weights", {});
+  if (error) throw error;
+  return data as PriorityWeightsResponse;
+}
+
+// Persist the five levers. The RPC normalizes them to sum 1.0, so the sliders can
+// move freely; returns the fresh (normalized) weights.
+export async function savePriorityWeights(w: PriorityComponents): Promise<PriorityWeightsResponse> {
+  const { data, error } = await supabase.rpc("save_priority_weights", {
+    p_experience: w.experience,
+    p_location: w.location,
+    p_comp: w.comp,
+    p_career: w.career,
+    p_growth: w.growth,
+  });
+  if (error) throw error;
+  return data as PriorityWeightsResponse;
 }
 
 export async function fetchActionQueue(): Promise<ActionQueue> {
@@ -343,6 +367,99 @@ export async function fetchResumeFeedback(resumeId: string): Promise<ResumeFeedb
 // payload (roles + synthesis). Implemented by the synthesize-feedback edge function.
 export async function synthesizeFeedback(resumeId: string): Promise<ResumeFeedbackResponse> {
   return invokeFunction<ResumeFeedbackResponse>("synthesize-feedback", { resume_id: resumeId });
+}
+
+// Persist a hand-reorder (and any text edits) of a resume's synthesis themes
+// without re-running the judge. Flags the synthesis manual_order so the panel
+// keeps this order instead of re-sorting by the model's priority.
+export async function saveSynthesisOrder(resumeId: string, themes: FeedbackTheme[]): Promise<void> {
+  const { error } = await supabase.rpc("save_synthesis_order", {
+    p_resume_id: resumeId,
+    p_themes: themes,
+  });
+  if (error) throw error;
+}
+
+// ── bullet library (buildable resume; migration 010) ─────────────────────────
+
+export async function listBullets(): Promise<ResumeBullet[]> {
+  const { data, error } = await supabase.rpc("list_bullets", {});
+  if (error) throw error;
+  return (data as { bullets: ResumeBullet[] }).bullets ?? [];
+}
+
+export async function upsertBullet(input: {
+  id?: string;
+  section: BulletSection;
+  text: string;
+  org_label?: string | null;
+  tags?: string[];
+  sort_order?: number;
+  is_active?: boolean;
+  source?: BulletSource;
+}): Promise<{ id: string }> {
+  const { data, error } = await supabase.rpc("upsert_bullet", {
+    p_section: input.section,
+    p_text: input.text,
+    p_org_label: input.org_label ?? null,
+    p_tags: input.tags ?? [],
+    p_sort_order: input.sort_order ?? null,
+    p_is_active: input.is_active ?? true,
+    p_source: input.source ?? "manual",
+    p_id: input.id ?? null,
+  });
+  if (error) throw error;
+  return { id: (data as { id: string }).id };
+}
+
+export async function deleteBullet(id: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_bullet", { p_id: id });
+  if (error) throw error;
+}
+
+export async function reorderBullets(ids: string[]): Promise<void> {
+  const { error } = await supabase.rpc("reorder_bullets", { p_ids: ids });
+  if (error) throw error;
+}
+
+// ── JD-targeted assembly (the one-page generator) ────────────────────────────
+
+export async function getAssembledResume(jobPostingId: string): Promise<AssembledResume | null> {
+  const { data, error } = await supabase.rpc("get_assembled_resume", {
+    p_job_posting_id: jobPostingId,
+  });
+  if (error) throw error;
+  return (data as { assembled: AssembledResume | null }).assembled ?? null;
+}
+
+// Run the assemble-resume judge: AI-selects + orders the best library bullets for
+// this JD and drafts a tailored one-pager. Implemented by the assemble-resume
+// edge function. Returns the fresh get_assembled_resume payload.
+export async function assembleResume(
+  jobPostingId: string,
+  baseResumeId?: string,
+): Promise<{ success: boolean; assembled: AssembledResume | null }> {
+  return invokeFunction("assemble-resume", {
+    job_posting_id: jobPostingId,
+    base_resume_id: baseResumeId ?? null,
+  });
+}
+
+// Save a hand-edited assembled one-pager (the user tweaks the AI draft).
+export async function saveAssembledResume(input: {
+  job_posting_id: string;
+  body_md: string;
+  base_resume_id?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.rpc("save_assembled_resume", {
+    p_job_posting_id: input.job_posting_id,
+    p_body_md: input.body_md,
+    p_selected_bullet_ids: null,
+    p_rationale: null,
+    p_base_resume_id: input.base_resume_id ?? null,
+    p_model: null,
+  });
+  if (error) throw error;
 }
 
 export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {

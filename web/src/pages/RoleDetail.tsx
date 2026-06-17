@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { fetchRole } from "../lib/api";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
+import TailoredResumePanel from "../components/TailoredResumePanel";
+import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
 const DECISION_PILL: Record<string, string> = {
@@ -29,6 +31,7 @@ export default function RoleDetail() {
   // Same AI-scoring panel as the standalone fit page, keyed off this
   // application's posting (undefined until the application loads).
   const fit = useRoleFit(app?.job_postings?.id);
+  const weights = usePriorityWeights();
 
   if (error) return <p className="error">{error}</p>;
   if (!app) return <p className="muted">Loading…</p>;
@@ -52,6 +55,7 @@ export default function RoleDetail() {
       {fit.data?.posting && (
         <PriorityBreakdown
           inputs={fit.data.posting}
+          weights={weights}
           judges={{
             career: fit.data.career,
             growth: fit.data.growth,
@@ -65,6 +69,10 @@ export default function RoleDetail() {
       )}
 
       <RoleFitPanel data={fit.data} judging={fit.judging} onJudge={fit.judge} error={fit.error} />
+
+      {posting?.id && (
+        <TailoredResumePanel jobPostingId={posting.id} baseResumeId={fit.data?.recommended_resume_id} />
+      )}
 
       <div className="cols">
         <section className="card">

@@ -80,6 +80,14 @@ export interface Priority {
   weights: PriorityComponents;
 }
 
+// get_priority_weights() — the user's adjustable priority levers (migration 009).
+// is_custom = they've moved the sliders off the neutral spec default.
+export interface PriorityWeightsResponse {
+  success: boolean;
+  is_custom: boolean;
+  weights: PriorityComponents;
+}
+
 // A ranked roles_to_apply entry: the posting + scoring metadata.
 export type RankedRole = JobPosting & {
   organization_name: string;
@@ -204,6 +212,35 @@ export interface FeedbackSynthesis {
   source_count: number | null;  // # of judge reads it was built from
   model: string | null;
   synthesized_at: string | null;
+  manual_order?: boolean;       // true → themes kept in the user's hand-set order
+}
+
+// ── buildable resume: bullet library + JD-targeted assembly (migration 010) ───
+export type BulletSection = "Summary" | "Experience" | "Skills" | "Education" | "Other";
+export const BULLET_SECTIONS: BulletSection[] = ["Summary", "Experience", "Skills", "Education", "Other"];
+export type BulletSource = "manual" | "synthesis" | "judge";
+
+export interface ResumeBullet {
+  id: string;
+  section: BulletSection;
+  org_label: string | null;
+  text: string;
+  tags: string[];
+  sort_order: number;
+  is_active: boolean;
+  source: BulletSource;
+  updated_at: string | null;
+}
+
+// The AI-built one-pager for a posting (null until assemble-resume runs).
+export interface AssembledResume {
+  job_posting_id: string;
+  base_resume_id: string | null;
+  body_md: string | null;
+  selected_bullet_ids: string[] | null;
+  rationale: string | null;
+  model: string | null;
+  generated_at: string | null;
 }
 
 export interface ResumeFeedbackResponse {

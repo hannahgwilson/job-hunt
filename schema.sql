@@ -430,3 +430,99 @@ ALTER TABLE resume_feedback_synthesis ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS resume_feedback_synthesis_user_policy ON resume_feedback_synthesis;
 CREATE POLICY resume_feedback_synthesis_user_policy ON resume_feedback_synthesis
     FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+-- ============================================================================
+-- priority_weights  (user-adjustable priority levers — migration 009)
+-- One row per user holding the five compute_priority component weights, edited
+-- by the Pipeline sliders. No row → the neutral spec default (see
+-- semantic/metrics/priority_score.yaml). resolve_priority_weights() reads this;
+-- get_action_queue / get_prioritized_roles feed it to compute_priority so the
+-- force-ranking the UI and the MCP/agent see stays in sync.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS priority_weights (
+    user_id     UUID PRIMARY KEY,
+    experience  NUMERIC(4,3) NOT NULL DEFAULT 0.350,
+    location    NUMERIC(4,3) NOT NULL DEFAULT 0.150,
+    comp        NUMERIC(4,3) NOT NULL DEFAULT 0.150,
+    career      NUMERIC(4,3) NOT NULL DEFAULT 0.200,
+    growth      NUMERIC(4,3) NOT NULL DEFAULT 0.150,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT priority_weights_range CHECK (
+        experience BETWEEN 0 AND 1 AND location BETWEEN 0 AND 1
+        AND comp BETWEEN 0 AND 1 AND career BETWEEN 0 AND 1 AND growth BETWEEN 0 AND 1
+    )
+);
+
+DROP TRIGGER IF EXISTS update_priority_weights_updated_at ON priority_weights;
+CREATE TRIGGER update_priority_weights_updated_at
+    BEFORE UPDATE ON priority_weights
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+ALTER TABLE priority_weights ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS priority_weights_user_policy ON priority_weights;
+CREATE POLICY priority_weights_user_policy ON priority_weights
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+-- ============================================================================
+-- resume_bullets / assembled_resumes  (buildable resume — migration 010)
+-- resume_bullets is a library of reusable, tagged, orderable bullets; the
+-- assemble-resume edge function scores them against a JD and writes a one-page
+-- draft into assembled_resumes (one per posting). resume_feedback_synthesis
+-- gains manual_order so its themes can be hand-ranked.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS resume_bullets (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL,
+    section     TEXT NOT NULL,                       -- 'Summary' | 'Experience' | 'Skills' | 'Education' | 'Other'
+    org_label   TEXT,                                -- e.g. "Acme — Staff Engineer"
+    text        TEXT NOT NULL,
+    tags        TEXT[] NOT NULL DEFAULT '{}',
+    sort_order  NUMERIC NOT NULL DEFAULT 0,
+    is_active   BOOLEAN NOT NULL DEFAULT true,
+    source      TEXT NOT NULL DEFAULT 'manual'
+                CHECK (source IN ('manual','synthesis','judge')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_bullets_user ON resume_bullets(user_id);
+CREATE INDEX IF NOT EXISTS idx_resume_bullets_section ON resume_bullets(user_id, section);
+
+DROP TRIGGER IF EXISTS update_resume_bullets_updated_at ON resume_bullets;
+CREATE TRIGGER update_resume_bullets_updated_at
+    BEFORE UPDATE ON resume_bullets
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+ALTER TABLE resume_bullets ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS resume_bullets_user_policy ON resume_bullets;
+CREATE POLICY resume_bullets_user_policy ON resume_bullets
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+CREATE TABLE IF NOT EXISTS assembled_resumes (
+    job_posting_id UUID PRIMARY KEY REFERENCES job_postings(id) ON DELETE CASCADE,
+    user_id        UUID NOT NULL,
+    base_resume_id UUID REFERENCES resumes(id) ON DELETE SET NULL,
+    body_md        TEXT,
+    selected_bullet_ids JSONB,
+    rationale      TEXT,
+    model          TEXT,
+    generated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_assembled_resumes_user ON assembled_resumes(user_id);
+
+DROP TRIGGER IF EXISTS update_assembled_resumes_updated_at ON assembled_resumes;
+CREATE TRIGGER update_assembled_resumes_updated_at
+    BEFORE UPDATE ON assembled_resumes
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+ALTER TABLE assembled_resumes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS assembled_resumes_user_policy ON assembled_resumes;
+CREATE POLICY assembled_resumes_user_policy ON assembled_resumes
+    FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+ALTER TABLE resume_feedback_synthesis
+    ADD COLUMN IF NOT EXISTS manual_order BOOLEAN NOT NULL DEFAULT false;

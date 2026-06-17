@@ -1,8 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchResumeFeedback, synthesizeFeedback } from "../lib/api";
+import { fetchResumeFeedback, synthesizeFeedback, saveSynthesisOrder, upsertBullet } from "../lib/api";
 import { pct, alignClass } from "./RoleFitPanel";
-import type { ResumeFeedbackRole, FeedbackSynthesis, FeedbackTheme } from "../lib/types";
+import type {
+  ResumeFeedbackRole, FeedbackSynthesis, FeedbackTheme, ThemeCategory, BulletSection,
+} from "../lib/types";
+
+// A synthesis theme is an edit recommendation; promoting it to the bullet library
+// turns it into reusable raw material for the JD-tailored resume generator.
+const CATEGORY_TO_SECTION: Record<ThemeCategory, BulletSection> = {
+  "Summary": "Summary",
+  "Experience": "Experience",
+  "Skills & keywords": "Skills",
+  "Structure & formatting": "Other",
+  "Other": "Other",
+};
 
 // The Resumes-tab digest: everything every judge has said about THIS resume,
 // pulled across all the roles it's been scored against. Leads with the
@@ -14,10 +26,29 @@ import type { ResumeFeedbackRole, FeedbackSynthesis, FeedbackTheme } from "../li
 
 const PRIORITY_RANK = { high: 0, medium: 1, low: 2 } as const;
 
-function ThemeCard({ theme }: { theme: FeedbackTheme }) {
+function prioritySorted(themes: FeedbackTheme[]): FeedbackTheme[] {
+  return themes.slice().sort(
+    (a, b) => (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) || b.role_count - a.role_count,
+  );
+}
+
+function ThemeCard({
+  theme, index, count, onMove, onPromote, promoted,
+}: {
+  theme: FeedbackTheme;
+  index: number;
+  count: number;
+  onMove: (dir: -1 | 1) => void;
+  onPromote: () => void;
+  promoted: boolean;
+}) {
   return (
     <li className={`theme theme-${theme.priority}`}>
       <div className="theme-head">
+        <div className="theme-move">
+          <button className="ghost xs" disabled={index === 0} onClick={() => onMove(-1)} title="Move up">↑</button>
+          <button className="ghost xs" disabled={index === count - 1} onClick={() => onMove(1)} title="Move down">↓</button>
+        </div>
         <span className={`pill priority-${theme.priority}`}>{theme.priority}</span>
         <strong className="theme-title">{theme.title}</strong>
         <span className="muted small theme-meta">
@@ -29,29 +60,105 @@ function ThemeCard({ theme }: { theme: FeedbackTheme }) {
       {theme.roles && theme.roles.length > 0 && (
         <p className="muted small theme-from">↳ {theme.roles.join(" · ")}</p>
       )}
+      <button className="ghost xs theme-promote" disabled={promoted} onClick={onPromote}>
+        {promoted ? "✓ added to library" : "+ add to bullet library"}
+      </button>
     </li>
   );
 }
 
-function Synthesis({ synthesis, roleCount }: { synthesis: FeedbackSynthesis; roleCount: number }) {
-  const themes = (synthesis.themes ?? [])
-    .slice()
-    .sort((a, b) => (PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]) || b.role_count - a.role_count);
+function Synthesis({
+  synthesis, roleCount, resumeId,
+}: {
+  synthesis: FeedbackSynthesis;
+  roleCount: number;
+  resumeId: string;
+}) {
+  // Working order: the user's saved order if they set one, else priority-sorted.
+  const [themes, setThemes] = useState<FeedbackTheme[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [promoted, setPromoted] = useState<Set<number>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const base = synthesis.themes ?? [];
+    setThemes(synthesis.manual_order ? base.slice() : prioritySorted(base));
+    setDirty(false);
+    setPromoted(new Set());
+  }, [synthesis]);
+
   // Newer judgements since the synthesis was cached → flag it stale.
   const stale = synthesis.source_count != null && synthesis.source_count < roleCount;
+
+  function move(index: number, dir: -1 | 1) {
+    const j = index + dir;
+    if (j < 0 || j >= themes.length) return;
+    const next = themes.slice();
+    [next[index], next[j]] = [next[j], next[index]];
+    setThemes(next);
+    setDirty(true);
+  }
+
+  async function saveOrder() {
+    setSaving(true);
+    setErr(null);
+    try {
+      await saveSynthesisOrder(resumeId, themes);
+      setDirty(false);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function promote(index: number, theme: FeedbackTheme) {
+    setErr(null);
+    try {
+      await upsertBullet({
+        section: CATEGORY_TO_SECTION[theme.category] ?? "Other",
+        text: theme.recommendation,
+        tags: ["from-synthesis"],
+        source: "synthesis",
+      });
+      setPromoted((prev) => new Set(prev).add(index));
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
 
   return (
     <div className="synthesis">
       {synthesis.headline && <p className="synthesis-headline">★ {synthesis.headline}</p>}
       <ol className="theme-list">
-        {themes.map((t, i) => <ThemeCard key={i} theme={t} />)}
+        {themes.map((t, i) => (
+          <ThemeCard
+            key={i}
+            theme={t}
+            index={i}
+            count={themes.length}
+            onMove={(d) => move(i, d)}
+            onPromote={() => promote(i, t)}
+            promoted={promoted.has(i)}
+          />
+        ))}
       </ol>
-      <p className="muted small">
-        synthesized {synthesis.synthesized_at ? new Date(synthesis.synthesized_at).toLocaleString() : ""}
-        {synthesis.source_count != null ? ` · from ${synthesis.source_count} judge read${synthesis.source_count === 1 ? "" : "s"}` : ""}
-        {synthesis.model ? ` · ${synthesis.model}` : ""}
-        {stale && <span className="warn-text"> · {roleCount - (synthesis.source_count ?? 0)} new since — re-synthesize</span>}
-      </p>
+      {err && <p className="error small">{err}</p>}
+      <div className="synthesis-foot">
+        {dirty && (
+          <button className="sm" disabled={saving} onClick={saveOrder}>
+            {saving ? "Saving…" : "Save order"}
+          </button>
+        )}
+        <span className="muted small">
+          {synthesis.manual_order && !dirty ? "custom order · " : ""}
+          synthesized {synthesis.synthesized_at ? new Date(synthesis.synthesized_at).toLocaleString() : ""}
+          {synthesis.source_count != null ? ` · from ${synthesis.source_count} judge read${synthesis.source_count === 1 ? "" : "s"}` : ""}
+          {synthesis.model ? ` · ${synthesis.model}` : ""}
+          {stale && <span className="warn-text"> · {roleCount - (synthesis.source_count ?? 0)} new since — re-synthesize</span>}
+        </span>
+      </div>
     </div>
   );
 }
@@ -125,7 +232,7 @@ export default function ResumeFeedbackPanel({
       {error && <p className="error">{error}</p>}
 
       {synthesis && synthesis.themes && synthesis.themes.length > 0 ? (
-        <Synthesis synthesis={synthesis} roleCount={roles.length} />
+        <Synthesis synthesis={synthesis} roleCount={roles.length} resumeId={resumeId} />
       ) : (
         <p className="muted small">
           {synthesizing

@@ -17,7 +17,12 @@ weights:
   comp:       0.15   # criterion 2b — features: pay
   career:     0.20   # criterion 3 — lateral or step-forward move
   growth:     0.15   # criterion 4 — growth-stage company with upside
-# weights MUST sum to 1.0. Mirrored as the p_weights DEFAULT in compute_priority().
+# weights MUST sum to 1.0. These are the DEFAULTS (the p_weights DEFAULT in
+# compute_priority + lib/priority.ts WEIGHTS). Since migration 009 they're also
+# per-user data: the priority_weights table, edited by the Pipeline page sliders
+# and resolved into the force-ranking by resolve_priority_weights(). A user who
+# never touches the sliders gets exactly these — change them to move the default
+# for everyone.
 
 components:
 

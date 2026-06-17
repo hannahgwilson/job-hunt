@@ -221,6 +221,21 @@ button.danger { color: var(--red); border-color: var(--red); }
 .scoring-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
 .scoring-list label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
 
+/* Priority weights — adjustable force-ranking levers on the Pipeline page */
+.weights-panel { margin: 0.25rem 0 1rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.75rem; background: var(--panel); }
+.weights-panel > summary { cursor: pointer; display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; font-weight: 600; }
+.weights-panel[open] > summary { margin-bottom: 0.7rem; }
+.weights-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.weight-row { display: grid; grid-template-columns: 220px 1fr 48px; align-items: center; gap: 0.75rem; }
+.weight-label { font-size: 0.88rem; }
+.weight-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+.weight-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
+.weights-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.7rem; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .weight-row { grid-template-columns: 1fr 44px; }
+  .weight-row input[type="range"] { grid-column: 1 / -1; }
+}
+
 /* Resume feedback digest — every judge's read of this resume, synthesized */
 .feedback-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
 .feedback-panel > h3 { margin: 0; font-size: 0.95rem; }
@@ -241,6 +256,37 @@ button.danger { color: var(--red); border-color: var(--red); }
 .pill.priority-high { color: var(--red); border-color: var(--red); }
 .pill.priority-medium { color: var(--warn); border-color: var(--warn); }
 .pill.priority-low { color: var(--muted); }
+
+/* Extra-small buttons + pills (bullet library, synthesis reorder) */
+button.xs { padding: 0.05rem 0.35rem; font-size: 0.72rem; line-height: 1.3; }
+.pill.xs { font-size: 0.62rem; padding: 0.02rem 0.35rem; margin-left: 0.3rem; }
+
+/* Synthesis reorder + promote-to-library controls */
+.theme-move { display: inline-flex; flex-direction: column; gap: 1px; margin-right: 0.1rem; }
+.theme-promote { margin-top: 0.45rem; }
+.synthesis-foot { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.3rem; }
+
+/* Bullet library — the buildable-resume raw material on the Resumes page */
+.bullet-library { margin-top: 1rem; }
+.bullet-editor { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; margin: 0.6rem 0; display: flex; flex-direction: column; gap: 0.5rem; background: var(--panel); }
+.bullet-editor-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.bullet-editor-row input { flex: 1; min-width: 200px; }
+.bullet-text { width: 100%; min-height: 60px; resize: vertical; }
+.bullet-editor-actions { display: flex; gap: 0.5rem; }
+.bullet-section { margin-top: 0.9rem; }
+.bullet-section-h { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 0.4rem; }
+.bullet-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.bullet-item { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 0.6rem; padding: 0.45rem 0.5rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.bullet-item.retired { opacity: 0.5; }
+.bullet-move { display: flex; flex-direction: column; gap: 1px; }
+.bullet-line { font-size: 0.88rem; }
+.bullet-meta { margin-top: 0.2rem; }
+.bullet-actions { display: flex; gap: 0.25rem; align-items: center; }
+
+/* Tailored one-pager generator (role pages) */
+.tailored-rationale { white-space: pre-wrap; color: var(--muted); }
+.tailored-text { width: 100%; min-height: 320px; font-family: var(--mono, ui-monospace, monospace); font-size: 0.85rem; }
+.tailored-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem; flex-wrap: wrap; }
 
 /* Raw per-role drill-down (collapsed by default, below the synthesis) */
 .feedback-raw { margin-top: 0.5rem; }

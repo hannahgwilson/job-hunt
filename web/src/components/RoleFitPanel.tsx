@@ -169,7 +169,13 @@ export default function RoleFitPanel({
   onJudge: () => void;
   error?: string | null;
 }) {
-  if (!data) return <p className="muted">Loading fit…</p>;
+  // Before the first fit read lands: show the error if it failed, else loading —
+  // never an eternal "Loading…" that hides why the judge panel is empty.
+  if (!data) {
+    return error
+      ? <section className="card fit-section"><h2>Resume fit</h2><p className="error">{error}</p></section>
+      : <p className="muted">Loading fit…</p>;
+  }
 
   const unjudged = data.posting?.experience_alignment == null;
 

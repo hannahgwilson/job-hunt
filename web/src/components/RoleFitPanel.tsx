@@ -1,7 +1,21 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getRoleFit, runJudge, runCareerJudge, runGrowthJudge } from "../lib/api";
-import type { ResumeFitEntry, RoleFitResponse } from "../lib/types";
+import type { ResumeFitEntry, RoleFitResponse, RoleType, ResumeVariant } from "../lib/types";
+
+const ROLE_TYPE_LABEL: Record<RoleType, string> = {
+  ic: "IC role",
+  manager: "Manager role",
+  hybrid: "Hybrid (player-coach)",
+  unclear: "Role type unclear",
+};
+
+// A track mismatch is the costly one: an IC resume aimed at a manager role, or
+// vice versa. hybrid / unclear roles and "other" resumes don't hard-conflict.
+function trackMismatch(roleType: RoleType | null, variant: ResumeVariant | null): boolean {
+  if (!roleType || !variant) return false;
+  return (roleType === "manager" && variant === "ic") || (roleType === "ic" && variant === "manager");
+}
 
 // The AI-scoring UI for one posting: a "Run judge" button, the better-fit
 // verdict, and side-by-side per-resume fit cards. Shared by the standalone fit
@@ -102,14 +116,16 @@ function Verdict({ resumes }: { resumes: ResumeFitEntry[] }) {
   );
 }
 
-function FitCard({ entry, recommended }: { entry: ResumeFitEntry; recommended: boolean }) {
+function FitCard({ entry, recommended, roleType }: { entry: ResumeFitEntry; recommended: boolean; roleType: RoleType | null }) {
   const fit = entry.fit;
+  const mismatch = trackMismatch(roleType, entry.variant);
   return (
     <section className={`card fit-card${recommended ? " recommended" : ""}`}>
       <div className="fit-card-head">
         <div>
           <strong>{entry.label}</strong>
           {entry.variant && <span className="pill">{entry.variant}</span>}
+          {mismatch && <span className="pill pill-warn" title={`This is a ${roleType} role`}>⚠ track mismatch</span>}
           {recommended && <span className="pill pill-accepted">★ recommended</span>}
         </div>
         <span className={`score-badge ${alignClass(fit?.alignment ?? null)}`}>{pct(fit?.alignment ?? null)}</span>
@@ -178,17 +194,34 @@ export default function RoleFitPanel({
   }
 
   const unjudged = data.posting?.experience_alignment == null;
+  const roleType = data.posting?.role_type ?? null;
+  // The strongest judged resume — if it's the wrong track for this role, say so loudly.
+  const best = [...data.resumes]
+    .filter((r) => r.fit?.alignment != null)
+    .sort((a, b) => (b.fit!.alignment as number) - (a.fit!.alignment as number))[0];
+  const bestMismatch = best ? trackMismatch(roleType, best.variant) : false;
 
   return (
     <section className="card fit-section">
       <div className="section-head">
-        <h2>Resume fit</h2>
+        <h2>
+          Resume fit
+          {roleType && <span className="pill" title="Role track judged from the JD">{ROLE_TYPE_LABEL[roleType]}</span>}
+        </h2>
         <button onClick={onJudge} disabled={judging}>
           {judging ? "Judging…" : unjudged ? "Run AI judge" : "Re-run AI judge"}
         </button>
       </div>
 
       {error && <p className="error">{error}</p>}
+
+      {bestMismatch && (
+        <div className="notice notice-warn">
+          ⚠ This reads as a <strong>{roleType === "manager" ? "people-management" : "hands-on IC"}</strong> role,
+          but your best-matching resume is a <strong>{best.variant}</strong> variant. Submitting the wrong track is
+          a real misalignment — lead with your {roleType === "manager" ? "manager" : "IC"} resume, or retarget this one.
+        </div>
+      )}
 
       {unjudged && (
         <div className="notice">
@@ -209,6 +242,7 @@ export default function RoleFitPanel({
               key={entry.resume_id}
               entry={entry}
               recommended={entry.resume_id === data.recommended_resume_id}
+              roleType={roleType}
             />
           ))
         )}

@@ -922,6 +922,7 @@ AS $$
                 SELECT jp.id, jp.title, jp.url, jp.location, jp.remote_policy,
                        jp.salary_min, jp.salary_max, jp.requirements, jp.nice_to_haves,
                        jp.experience_alignment, jp.career_trajectory, jp.growth_stage,
+                       jp.role_type,
                        o.id AS organization_id, o.name AS organization_name
                 FROM job_postings jp
                 JOIN organizations o ON o.id = jp.organization_id

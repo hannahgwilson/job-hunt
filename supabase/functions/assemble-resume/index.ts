@@ -210,15 +210,19 @@ Deno.serve(async (req) => {
         // Generous so a large library + many sections don't truncate the tool
         // output mid-selection (see synthesize-feedback for the same trap).
         max_tokens: 8000,
+        system:
+          "You are a sharp resume writer assembling a tight, one-page resume tailored to a specific job. Pick the " +
+          "strongest bullets from the candidate's library for THIS JD, order them so the most relevant land first, " +
+          "and write a tailored summary. Reference bullets ONLY by their exact id; do not invent or reword bullet " +
+          "text. Be selective — a one-pager can't hold everything; aim for roughly 12-20 bullets total and a summary " +
+          "of at most 3 lines. Judge whether the JD is an IC or a people-management role and lead with the bullets " +
+          "that matter for that track.",
         tools: [ASSEMBLY_TOOL],
         tool_choice: { type: "tool", name: "report_assembly" },
         messages: [
           {
             role: "user",
             content:
-              `You are a sharp resume writer assembling a tight, one-page resume tailored to a specific job. ` +
-              `Pick the strongest bullets from the candidate's library for THIS JD, order them so the most relevant land first, and write a tailored summary. ` +
-              `Reference bullets ONLY by their exact id; do not invent or reword bullet text. Be selective — a one-pager can't hold everything.\n\n` +
               `=== JOB DESCRIPTION ===\n${jd}\n\n` +
               `=== BULLET LIBRARY (choose by id) ===\n${libCtx}\n\n` +
               `Call report_assembly with the tailored summary and the ordered section → bullet-id selections.`,

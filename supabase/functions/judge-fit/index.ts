@@ -35,18 +35,30 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const FIT_TOOL = {
   name: "report_fit",
   description:
-    "Report how well a single resume fits a specific job description. Be concrete and specific to THIS resume and THIS JD — never generic.",
+    "Report how well a single resume fits a specific job description. First decide whether the JD is an individual-contributor or a people-management role, then judge the resume against the skills THAT role type demands. Be concrete and specific to THIS resume and THIS JD — never generic.",
   input_schema: {
     type: "object",
     properties: {
+      role_type: {
+        type: "string",
+        enum: ["ic", "manager", "hybrid", "unclear"],
+        description:
+          "What track is THIS JD, judged from its responsibilities (not just the title)? ic = individual contributor (own technical/functional delivery, no direct reports); manager = people leadership (direct reports, hiring, performance, org-building is the core of the job); hybrid = player-coach / lead (real IC work AND people leadership); unclear = the JD doesn't say. Decide this first — it sets which skills matter.",
+      },
+      track_alignment: {
+        type: "string",
+        enum: ["match", "stretch", "mismatch"],
+        description:
+          "How well the resume's own track matches role_type. match = the resume is clearly for this track; stretch = adjacent / could be argued (e.g. a senior IC reaching for a lead role); mismatch = wrong track (e.g. a pure people-manager resume for a hands-on IC role, or vice versa) — a real risk to the application, call it out.",
+      },
       alignment: {
         type: "number",
         description:
-          "0..1 fit of this resume vs the JD. 1.0 = clearly clears the bar on the core requirements; 0.5 = a stretch; below 0.4 = weak match.",
+          "0..1 fit, weighted by what matters for THIS role type. Weight the JD's core / must-have requirements far above nice-to-haves — missing a nice-to-have should barely move the score; missing a core requirement should. 100% is not required for a strong fit. Calibrate and SPREAD across the band: 0.90-1.0 = clears every core requirement with strong evidence, an obvious yes; 0.75-0.89 = clears the core, only minor/secondary gaps; 0.55-0.74 = meets most of the core but has one real core gap or thin evidence — a stretch worth a tailored resume; 0.35-0.54 = misses multiple core requirements OR a track mismatch (e.g. IC resume vs manager role); below 0.35 = wrong role. A track mismatch caps alignment in the 0.35-0.5 band even if other skills look strong.",
       },
       summary: {
         type: "string",
-        description: "2-4 sentence read of this resume against the JD.",
+        description: "2-4 sentence read of this resume against the JD. Name the role type and, if the resume is the wrong track for it, lead with that.",
       },
       spikes: {
         type: "array",
@@ -73,9 +85,21 @@ const FIT_TOOL = {
         },
       },
     },
-    required: ["alignment", "summary", "spikes", "gaps", "tweaks"],
+    required: ["role_type", "track_alignment", "alignment", "summary", "spikes", "gaps", "tweaks"],
   },
 };
+
+// Persona + stable rubric live in the system prompt (better adherence + lets the
+// JD/resume turn be cached). The variable JD + resume go in the user message.
+const FIT_SYSTEM =
+  "You are a sharp hiring manager who also knows how ATS / AI keyword screens work. " +
+  "You screen one resume against one job description and judge fit honestly — never inflate. " +
+  "Crucially: decide whether the JD is an individual-contributor role or a people-management role FIRST, " +
+  "because the skills that matter differ sharply. A people-manager role rewards leadership, hiring, " +
+  "headcount/org scope, cross-functional influence, and outcomes delivered THROUGH a team; an IC role " +
+  "rewards hands-on depth, individual ownership, and technical/functional craft. A resume aimed at the " +
+  "wrong track is a genuine misalignment — surface it rather than scoring around it. " +
+  "Weight the JD's core requirements above its nice-to-haves; a resume need not match everything to be a strong fit.";
 
 function jdContext(p: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -98,6 +122,8 @@ async function judgeOne(
   resumeLabel: string,
   resumeText: string,
 ): Promise<{
+  role_type: "ic" | "manager" | "hybrid" | "unclear";
+  track_alignment: "match" | "stretch" | "mismatch";
   alignment: number;
   summary: string;
   spikes: string[];
@@ -114,16 +140,17 @@ async function judgeOne(
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 1500,
+      system: FIT_SYSTEM,
       tools: [FIT_TOOL],
       tool_choice: { type: "tool", name: "report_fit" },
       messages: [
         {
           role: "user",
           content:
-            `You are screening one candidate resume against one job description, the way a sharp hiring manager who also knows how ATS keyword screens work would. Judge fit honestly — do not inflate.\n\n` +
+            `Decide the role type first, then judge fit against the skills that role type demands.\n\n` +
             `=== JOB DESCRIPTION ===\n${jd}\n\n` +
-            `=== RESUME (variant: ${resumeLabel}) ===\n${resumeText}\n\n` +
-            `Call report_fit with your assessment. Keep spikes/gaps/tweaks specific to this resume and this JD.`,
+            `=== RESUME (variant label: ${resumeLabel}) ===\n${resumeText}\n\n` +
+            `Call report_fit. Keep spikes/gaps/tweaks specific to this resume and this JD, and frame them for the role type you determined.`,
         },
       ],
     }),
@@ -213,14 +240,24 @@ Deno.serve(async (req) => {
           p_user_id: userId,
         });
         if (saveErr) throw saveErr;
-        return r.label;
+        return fit.role_type;
       }),
     );
 
-    const failed = results.filter((x) => x.status === "rejected");
-    if (failed.length === usable.length) {
-      const reason = (failed[0] as PromiseRejectedResult).reason;
+    const fulfilled = results.filter((x) => x.status === "fulfilled") as PromiseFulfilledResult<string>[];
+    if (fulfilled.length === 0) {
+      const reason = (results[0] as PromiseRejectedResult).reason;
       return json({ success: false, error: `judging failed: ${reason?.message ?? reason}` }, 502);
+    }
+
+    // role_type is a property of the JD (same across resumes) — cache it on the
+    // posting so the UI can flag an IC-resume-vs-manager-role track mismatch.
+    // Prefer a definite call over "unclear" if the resumes disagreed.
+    const roleType = fulfilled.map((x) => x.value).find((t) => t && t !== "unclear")
+      ?? fulfilled[0].value;
+    if (roleType) {
+      await admin.from("job_postings").update({ role_type: roleType })
+        .eq("id", job_posting_id).eq("user_id", userId);
     }
 
     // Return the fresh fit payload so the page re-renders with scores.

@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS job_postings (
     growth_stage TEXT                              -- the company's stage / upside
         CHECK (growth_stage IN ('seed', 'early', 'growth', 'late', 'public', 'unknown') OR growth_stage IS NULL),
 
+    -- role track judged from the JD by judge-fit (migration 011). A fit/feedback
+    -- signal — NOT a compute_priority input. Lets the UI flag a track mismatch
+    -- (e.g. an IC resume scored against a manager JD).
+    role_type TEXT
+        CHECK (role_type IN ('ic', 'manager', 'hybrid', 'unclear') OR role_type IS NULL),
+
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

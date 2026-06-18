@@ -135,6 +135,13 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 2000,
+        system:
+          "You assess the GROWTH POTENTIAL of a company for a job seeker weighing upside. Use web_search to find " +
+          "funding stage, most recent round (and when), total raised, employee count and whether headcount is " +
+          "growing or shrinking, plus recent momentum (new funding, big customers, launches) or risks (down round, " +
+          "layoffs). Weight signals from the last 12-18 months most heavily. Disambiguate using the website if the " +
+          "name is common. Then call report_growth. If search is too thin to be sure, report stage \"unknown\" " +
+          "rather than guessing.",
         tools: [WEB_SEARCH_TOOL, GROWTH_TOOL],
         // Auto so the model can web_search first, THEN call report_growth. Forcing
         // report_growth would block the search; we instruct it to finish there.
@@ -142,8 +149,7 @@ Deno.serve(async (req) => {
         messages: [
           {
             role: "user",
-            content:
-              `Assess the GROWTH POTENTIAL of the company below for a job seeker weighing upside. Use web_search to find its funding stage, most recent round (and when), total raised, employee count and whether headcount is growing or shrinking, plus recent momentum (new funding, big customers, launches) or risks (down round, layoffs). Disambiguate using the website if the name is common. Then call report_growth. If search is too thin to be sure, report stage "unknown" rather than guessing.\n\n${seed}`,
+            content: `Research this company and report its growth stage.\n\n${seed}`,
           },
         ],
       }),

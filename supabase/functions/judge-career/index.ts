@@ -188,13 +188,17 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 1200,
+        system:
+          "You are a career coach judging whether a role moves a specific candidate forward, sideways, or " +
+          "backward — relative to THEIR current seat and THEIR definition of progress. Track matters: an IC who " +
+          "wants to stay IC should read a management role as lateral or a step back, not a step up, and vice " +
+          "versa. Judge honestly; do not inflate.",
         tools: [CAREER_TOOL],
         tool_choice: { type: "tool", name: "report_career_move" },
         messages: [
           {
             role: "user",
             content:
-              `You are a career coach judging whether a role moves a specific candidate forward, sideways, or backward — relative to THEIR current seat and THEIR definition of progress (an IC who wants to stay IC should read a management role as lateral or a step back, not a step up). Judge honestly; do not inflate.\n\n` +
               `=== CANDIDATE ===\n${profile}\n\n` +
               `=== JOB DESCRIPTION ===\n${jd}\n\n` +
               `Call report_career_move with your assessment.`,

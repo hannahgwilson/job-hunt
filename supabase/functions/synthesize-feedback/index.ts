@@ -183,14 +183,19 @@ Deno.serve(async (req) => {
         // truncates the tool output mid-array (headline lands, themes is cut off
         // → undefined → the save RPC fires without p_themes). 8000 clears it.
         max_tokens: 8000,
+        system:
+          "You are a sharp resume coach. You are given feedback several AI judges gave on ONE resume, each scoring " +
+          "it against a different job description. Synthesize it into a short, prioritized plan: cluster overlapping " +
+          "suggestions into themes, merge ones that mean the same thing, and rank by value — recurring asks and edits " +
+          "that unblock high-fit roles come first. Be specific to what's actually in the feedback; do not invent " +
+          "generic advice.",
         tools: [SYNTH_TOOL],
         tool_choice: { type: "tool", name: "report_synthesis" },
         messages: [
           {
             role: "user",
             content:
-              `You are a sharp resume coach. Below is feedback several AI judges gave on ONE resume (variant: ${resume.label}), each scoring it against a different job description. ` +
-              `Synthesize it into a short, prioritized plan: cluster overlapping suggestions into themes, merge ones that mean the same thing, and rank by value — recurring asks and edits that unblock high-fit roles come first. Be specific to what's actually in this feedback; do not invent generic advice.\n\n` +
+              `Resume variant: ${resume.label}.\n\n` +
               `=== PER-ROLE FEEDBACK (${judged.length} roles) ===\n${ctx}\n\n` +
               `Call report_synthesis with the ranked themes.`,
           },

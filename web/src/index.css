@@ -183,6 +183,7 @@ button.danger { color: var(--red); border-color: var(--red); }
 
 /* Notice banner (e.g. un-judged role) */
 .notice { border-left: 3px solid var(--warn); background: rgba(176, 116, 0, 0.06); padding: 0.6rem 0.8rem; border-radius: 6px; margin: 0.5rem 0; }
+.notice-warn { border-left-color: var(--red); background: rgba(200, 40, 40, 0.06); }
 .fit-section .section-head { margin-bottom: 0.75rem; }
 
 /* Role fit verdict banner */

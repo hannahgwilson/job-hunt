@@ -65,6 +65,8 @@ export interface Interview {
 // ── prioritization (see semantic/metrics/priority_score.yaml) ────────────────
 export type CareerTrajectory = "step_up" | "lateral" | "step_back";
 export type GrowthStage = "seed" | "early" | "growth" | "late" | "public" | "unknown";
+// Role track judged from the JD by judge-fit (migration 011).
+export type RoleType = "ic" | "manager" | "hybrid" | "unclear";
 
 export interface PriorityComponents {
   experience: number;
@@ -298,6 +300,7 @@ export interface RoleFitResponse {
     experience_alignment: number | null;
     career_trajectory: CareerTrajectory | null;
     growth_stage: GrowthStage | null;
+    role_type: RoleType | null;
     organization_id: string;
     organization_name: string;
   } | null;

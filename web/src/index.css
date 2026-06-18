@@ -217,10 +217,18 @@ button.danger { color: var(--red); border-color: var(--red); }
 .section-head-actions { display: flex; align-items: center; gap: 0.75rem; }
 .scoring-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
 .scoring-panel summary { cursor: pointer; font-size: 0.9rem; }
-.scoring-actions { display: flex; align-items: center; gap: 0.75rem; margin: 0.6rem 0; }
-.scoring-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
-.scoring-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
-.scoring-list label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+.scoring-actions { display: flex; align-items: center; gap: 0.75rem; margin: 0.6rem 0 0.3rem; flex-wrap: wrap; }
+.scoring-select { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; }
+.linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
+.linklike:hover { text-decoration: underline; }
+.linklike:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+.scoring-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.scoring-list li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.6rem; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+.scoring-list li:last-child { border-bottom: none; }
+.scoring-list li:nth-child(even) { background: var(--panel-2); }
+.scoring-list label { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.5rem; cursor: pointer; min-width: 0; }
+.scoring-role { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.88rem; }
+.scoring-scored { white-space: nowrap; color: var(--green); }
 
 /* Priority weights — adjustable force-ranking levers on the Pipeline page */
 .weights-panel { margin: 0.25rem 0 1rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.75rem; background: var(--panel); }

@@ -14,18 +14,27 @@ import Profile from "./pages/Profile";
 
 function Login() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Two paths: a password (for the demo account / any non-deliverable email) or,
+  // when the password is left blank, a magic link to a real inbox.
   async function signIn(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin },
-    });
-    if (error) setError(error.message);
-    else setSent(true);
+    if (password) {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) setError(error.message);
+      // success → onAuthStateChange swaps in the app
+    } else {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      if (error) setError(error.message);
+      else setSent(true);
+    }
   }
 
   return (
@@ -44,7 +53,13 @@ function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-            <button type="submit">Send magic link</button>
+            <input
+              type="password"
+              placeholder="Password (leave blank for a magic link)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button type="submit">{password ? "Sign in" : "Send magic link"}</button>
             {error && <p className="error">{error}</p>}
           </form>
         )}

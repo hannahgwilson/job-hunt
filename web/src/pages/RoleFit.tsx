@@ -54,7 +54,14 @@ export default function RoleFit() {
         }}
       />
 
-      <RoleFitPanel data={data} judging={judging} onJudge={judge} error={error} />
+      <RoleFitPanel
+        data={data}
+        judging={judging}
+        onJudge={judge}
+        error={error}
+        onJudgeResume={fit.judgeResume}
+        judgingResumeId={fit.judgingResumeId}
+      />
 
       <TailoredResumePanel jobPostingId={p.id} baseResumeId={data.recommended_resume_id} />
 

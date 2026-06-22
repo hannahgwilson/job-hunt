@@ -82,7 +82,14 @@ export default function RoleDetail() {
         />
       )}
 
-      <RoleFitPanel data={fit.data} judging={fit.judging} onJudge={fit.judge} error={fit.error} />
+      <RoleFitPanel
+        data={fit.data}
+        judging={fit.judging}
+        onJudge={fit.judge}
+        error={fit.error}
+        onJudgeResume={fit.judgeResume}
+        judgingResumeId={fit.judgingResumeId}
+      />
 
       {posting?.id && (
         <TailoredResumePanel jobPostingId={posting.id} baseResumeId={fit.data?.recommended_resume_id} />

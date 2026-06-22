@@ -47,6 +47,9 @@ export function useRoleFit(postingId?: string) {
   const [data, setData] = useState<RoleFitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<JudgeKind | null>(null);
+  // Which single resume (if any) is being judged on its own card — distinct from
+  // the panel-level "judge all" so only that card spins.
+  const [busyResumeId, setBusyResumeId] = useState<string | null>(null);
 
   function load() {
     if (!postingId) return;
@@ -75,12 +78,33 @@ export function useRoleFit(postingId?: string) {
     }
   }
 
+  // Judge one resume against this posting (judge-fit's resume_id path) — for
+  // scoring a newly-added variant without re-running the others.
+  async function runOne(resumeId: string) {
+    if (!postingId) return;
+    setBusyResumeId(resumeId);
+    setError(null);
+    try {
+      const fresh = await runJudge(postingId, resumeId);
+      if (fresh.success === false) {
+        throw new Error((fresh as unknown as { error?: string }).error ?? "judge failed");
+      }
+      setData(fresh);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusyResumeId(null);
+    }
+  }
+
   return {
     data,
     error,
     reload: load,
     judging: busy === "experience",
     judge: () => run("experience"),
+    judgeResume: runOne,
+    judgingResumeId: busyResumeId,
     judgingCareer: busy === "career",
     judgeCareer: () => run("career"),
     judgingGrowth: busy === "growth",
@@ -122,7 +146,16 @@ function Verdict({ resumes }: { resumes: ResumeFitEntry[] }) {
   );
 }
 
-function FitCard({ entry, recommended, roleType }: { entry: ResumeFitEntry; recommended: boolean; roleType: RoleType | null }) {
+function FitCard({
+  entry, recommended, roleType, onJudge, judging, disabled,
+}: {
+  entry: ResumeFitEntry;
+  recommended: boolean;
+  roleType: RoleType | null;
+  onJudge?: (resumeId: string) => void;
+  judging?: boolean;
+  disabled?: boolean;
+}) {
   const fit = entry.fit;
   const mismatch = trackMismatch(roleType, entry.variant);
   return (
@@ -138,7 +171,14 @@ function FitCard({ entry, recommended, roleType }: { entry: ResumeFitEntry; reco
       </div>
 
       {!fit ? (
-        <p className="muted small">Not judged yet — run the AI judge to score this resume.</p>
+        <div className="fit-unjudged">
+          <p className="muted small">Not judged yet — score just this resume against the role.</p>
+          {onJudge && (
+            <button className="sm" disabled={judging || disabled} onClick={() => onJudge(entry.resume_id)}>
+              {judging ? "Judging…" : "Judge this resume"}
+            </button>
+          )}
+        </div>
       ) : (
         <>
           {fit.summary && <p className="small">{fit.summary}</p>}
@@ -172,11 +212,18 @@ function FitCard({ entry, recommended, roleType }: { entry: ResumeFitEntry; reco
             </details>
           )}
 
-          {fit.judged_at && (
-            <p className="muted small">
-              judged {new Date(fit.judged_at).toLocaleString()}{fit.model ? ` · ${fit.model}` : ""}
-            </p>
-          )}
+          <div className="fit-card-foot">
+            {fit.judged_at && (
+              <span className="muted small">
+                judged {new Date(fit.judged_at).toLocaleString()}{fit.model ? ` · ${fit.model}` : ""}
+              </span>
+            )}
+            {onJudge && (
+              <button className="ghost sm" disabled={judging || disabled} onClick={() => onJudge(entry.resume_id)}>
+                {judging ? "Judging…" : "Re-judge"}
+              </button>
+            )}
+          </div>
         </>
       )}
     </section>
@@ -184,13 +231,18 @@ function FitCard({ entry, recommended, roleType }: { entry: ResumeFitEntry; reco
 }
 
 export default function RoleFitPanel({
-  data, judging, onJudge, error,
+  data, judging, onJudge, error, onJudgeResume, judgingResumeId,
 }: {
   data: RoleFitResponse | null;
   judging: boolean;
   onJudge: () => void;
   error?: string | null;
+  onJudgeResume?: (resumeId: string) => void;
+  judgingResumeId?: string | null;
 }) {
+  // Any judge in flight (panel-level "judge all" or a single card) blocks the
+  // other judge buttons so reads can't race.
+  const anyJudging = judging || judgingResumeId != null;
   // Before the first fit read lands: show the error if it failed, else loading —
   // never an eternal "Loading…" that hides why the judge panel is empty.
   if (!data) {
@@ -249,6 +301,9 @@ export default function RoleFitPanel({
               entry={entry}
               recommended={entry.resume_id === data.recommended_resume_id}
               roleType={roleType}
+              onJudge={onJudgeResume}
+              judging={judgingResumeId === entry.resume_id}
+              disabled={anyJudging && judgingResumeId !== entry.resume_id}
             />
           ))
         )}

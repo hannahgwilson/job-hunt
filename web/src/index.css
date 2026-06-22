@@ -213,6 +213,11 @@ button.danger { color: var(--red); border-color: var(--red); }
 .fit-card { display: flex; flex-direction: column; gap: 0.5rem; }
 .fit-card.recommended { border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
 .fit-card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+/* Unjudged card: the prompt + a "judge just this resume" button. */
+.fit-unjudged { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.fit-unjudged p { margin: 0; }
+/* Judged card footer: timestamp on the left, a subtle re-judge on the right. */
+.fit-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-top: 0.25rem; }
 .fit-list { margin-top: 0.25rem; }
 .fit-list h4 { margin: 0 0 0.25rem; font-size: 0.82rem; }
 .fit-list ul, .tweaks ul, .reqs { margin: 0; padding-left: 1.1rem; }

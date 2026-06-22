@@ -321,5 +321,13 @@ People leadership, hiring, roadmapping, stakeholder management, DS/ML strategy.$
        "roles":["Director of Analytics · Cobalt Analytics"]}
     ]'::jsonb);
 
-    RAISE NOTICE 'Demo seed complete for % — 15 roles, 2 résumés, % bullets, 6 applications.', v_user, 10;
+    -- ── a closed/filled role (so "close out a role" is demoable) ──────────────
+    -- Verdant's Analytics Lead got filled before I applied: it drops out of the
+    -- force-ranked apply queue and shows under Pipeline → "Closed roles" with a
+    -- "Filled" badge. (No application existed, so nothing cascades — the
+    -- before-apply case. Mark a role you've applied to closed to see the
+    -- application move to the terminal 'closed' status.)
+    PERFORM close_role(p_verdant_lead, 'filled', v_user);
+
+    RAISE NOTICE 'Demo seed complete for % — 15 roles (1 closed), 2 résumés, % bullets, 6 applications.', v_user, 10;
 END $$;

@@ -4,7 +4,19 @@
 
 export type ApplicationStatus =
   | "draft" | "applied" | "screening" | "interviewing"
-  | "offer" | "accepted" | "rejected" | "withdrawn";
+  | "offer" | "accepted" | "rejected" | "withdrawn" | "closed";
+
+// Why a posting closed. 'filled' is the headline case (close_role's default).
+export type ClosedReason =
+  | "filled" | "expired" | "removed" | "no_longer_interested" | "other";
+
+export const CLOSED_REASON_LABELS: Record<ClosedReason, string> = {
+  filled: "Filled",
+  expired: "Expired / closed",
+  removed: "Posting pulled",
+  no_longer_interested: "Not pursuing",
+  other: "Closed",
+};
 
 export const STATUS_ORDER: ApplicationStatus[] = [
   "draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn",
@@ -31,6 +43,8 @@ export interface JobPosting {
   salary_min: number | null;
   salary_max: number | null;
   closing_date: string | null;
+  closed_at: string | null;
+  closed_reason: ClosedReason | null;
   organizations?: Organization;
 }
 
@@ -301,6 +315,8 @@ export interface RoleFitResponse {
     career_trajectory: CareerTrajectory | null;
     growth_stage: GrowthStage | null;
     role_type: RoleType | null;
+    closed_at: string | null;
+    closed_reason: ClosedReason | null;
     organization_id: string;
     organization_name: string;
   } | null;
@@ -360,6 +376,17 @@ export interface CompanyData {
   } | null;
   connections: CompanyConnection[];
   postings: CompanyPosting[];
+}
+
+// A closed/filled role, for the Pipeline "show closed" toggle (fetchClosedRoles).
+export interface ClosedRole {
+  id: string;                       // job_posting_id
+  title: string;
+  url: string | null;
+  closed_at: string | null;
+  closed_reason: ClosedReason | null;
+  organization_name: string;
+  application_id: string | null;    // the (now-closed) application, if I'd applied
 }
 
 // ── get_action_queue() return shape ──────────────────────────────────────────

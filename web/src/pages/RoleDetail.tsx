@@ -4,6 +4,7 @@ import { fetchRole } from "../lib/api";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
+import CloseRoleControl from "../components/CloseRoleControl";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
@@ -21,11 +22,16 @@ export default function RoleDetail() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
     if (!id) return;
     fetchRole(id)
       .then((r) => { setApp(r.application); setHistory(r.history); setInterviews(r.interviews); })
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   // Same AI-scoring panel as the standalone fit page, keyed off this
@@ -44,6 +50,14 @@ export default function RoleDetail() {
       <div className="page-head">
         <h1>{posting?.title}</h1>
         <span className={`pill pill-${app.status}`}>{app.status}</span>
+        {posting?.id && (
+          <CloseRoleControl
+            jobPostingId={posting.id}
+            closedAt={posting.closed_at}
+            closedReason={posting.closed_reason}
+            onChanged={load}
+          />
+        )}
       </div>
       <p className="muted">
         {posting?.organizations?.name}

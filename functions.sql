@@ -346,6 +346,7 @@ AS $$
                 FROM job_postings jp
                 JOIN organizations o ON o.id = jp.organization_id
                 WHERE jp.user_id = p_user_id
+                  AND jp.closed_at IS NULL          -- skip closed/filled roles
                   AND NOT EXISTS (
                       SELECT 1 FROM applications a
                       WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
@@ -458,6 +459,7 @@ AS $$
         FROM job_postings jp
         JOIN organizations o ON o.id = jp.organization_id
         WHERE jp.user_id = p_user_id
+          AND jp.closed_at IS NULL                  -- skip closed/filled roles
           AND NOT EXISTS (
               SELECT 1 FROM applications a
               WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
@@ -677,6 +679,88 @@ BEGIN
             v_posting.salary_min, v_posting.salary_max, v_posting.career_trajectory,
             v_posting.growth_stage)
     );
+END;
+$$;
+
+
+-- ============================================================================
+-- CLOSE / REOPEN A ROLE  (posting lifecycle — migration 012)
+-- "Filled" is a property of the posting, so it can be closed whether or not I
+-- ever applied. close_role stamps closed_at/closed_reason on the posting and —
+-- if I'd applied — cascades the still-live application to the terminal 'closed'
+-- status (the auto-log trigger records the transition). Terminal applications
+-- (accepted/rejected/withdrawn) are left as-is. Once closed_at is set the role
+-- drops out of the apply queue, follow-ups, and the analytics scatter.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION close_role(
+    p_job_posting_id uuid,
+    p_reason text DEFAULT 'filled',
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_posting job_postings;
+    v_apps_closed int;
+BEGIN
+    UPDATE job_postings
+    SET closed_at = COALESCE(closed_at, now()),   -- keep the original close time if re-closed
+        closed_reason = p_reason
+    WHERE id = p_job_posting_id
+      AND user_id = COALESCE(p_user_id, user_id)
+    RETURNING * INTO v_posting;
+
+    IF v_posting.id IS NULL THEN
+        RAISE EXCEPTION 'close_role: posting % not found or not owned', p_job_posting_id;
+    END IF;
+
+    -- Cascade live applications to 'closed' (leave terminal ones untouched).
+    WITH closed AS (
+        UPDATE applications
+        SET status = 'closed'
+        WHERE job_posting_id = p_job_posting_id
+          AND user_id = v_posting.user_id
+          AND status NOT IN ('accepted', 'rejected', 'withdrawn', 'closed')
+        RETURNING 1
+    )
+    SELECT count(*) INTO v_apps_closed FROM closed;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'posting', to_jsonb(v_posting),
+        'applications_closed', v_apps_closed
+    );
+END;
+$$;
+
+-- reopen_role — undo a close: clear the posting's closed flag so it re-enters the
+-- queue. Applications are left as-is (a 'closed' app stays closed; advance it by
+-- hand if the role genuinely reopened) — reopening the posting is the common case
+-- (closed it by mistake / the role came back) and shouldn't silently rewrite app
+-- history.
+CREATE OR REPLACE FUNCTION reopen_role(
+    p_job_posting_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_posting job_postings;
+BEGIN
+    UPDATE job_postings
+    SET closed_at = NULL,
+        closed_reason = NULL
+    WHERE id = p_job_posting_id
+      AND user_id = COALESCE(p_user_id, user_id)
+    RETURNING * INTO v_posting;
+
+    IF v_posting.id IS NULL THEN
+        RAISE EXCEPTION 'reopen_role: posting % not found or not owned', p_job_posting_id;
+    END IF;
+
+    RETURN jsonb_build_object('success', true, 'posting', to_jsonb(v_posting));
 END;
 $$;
 
@@ -922,7 +1006,7 @@ AS $$
                 SELECT jp.id, jp.title, jp.url, jp.location, jp.remote_policy,
                        jp.salary_min, jp.salary_max, jp.requirements, jp.nice_to_haves,
                        jp.experience_alignment, jp.career_trajectory, jp.growth_stage,
-                       jp.role_type,
+                       jp.role_type, jp.closed_at, jp.closed_reason,
                        o.id AS organization_id, o.name AS organization_name
                 FROM job_postings jp
                 JOIN organizations o ON o.id = jp.organization_id
@@ -1011,6 +1095,7 @@ AS $$
             FROM job_postings jp
             JOIN organizations o ON o.id = jp.organization_id
             WHERE jp.user_id = p_user_id
+              AND jp.closed_at IS NULL              -- closed roles drop off
         ), '[]'::jsonb)
     );
 $$;
@@ -1390,6 +1475,7 @@ AS $$
             FROM job_postings jp
             JOIN organizations o ON o.id = jp.organization_id
             WHERE jp.user_id = p_user_id
+              AND jp.closed_at IS NULL              -- closed roles drop off
         ), '[]'::jsonb)
     );
 $$;
@@ -1624,6 +1710,8 @@ GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], 
 GRANT EXECUTE ON FUNCTION submit_application(uuid, uuid, text, date, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION close_role(uuid, text, uuid)             TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION reopen_role(uuid, uuid)                  TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume(uuid)                          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION upsert_resume(text, text, uuid)           TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION list_resumes(uuid)                        TO authenticated, service_role;

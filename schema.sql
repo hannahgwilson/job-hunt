@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS job_postings (
     role_type TEXT
         CHECK (role_type IN ('ic', 'manager', 'hybrid', 'unclear') OR role_type IS NULL),
 
+    -- ── lifecycle (migration 012) ──────────────────────────────────────────
+    -- A closed posting is one whose role is gone (filled / pulled / no longer
+    -- pursued). NULL closed_at = open. A property of the posting, not of any
+    -- application — so a role can be closed whether or not I ever applied; the
+    -- apply queue filters on closed_at IS NULL. close_role() sets these.
+    closed_at TIMESTAMPTZ,
+    closed_reason TEXT
+        CHECK (closed_reason IN ('filled', 'expired', 'removed', 'no_longer_interested', 'other')
+               OR closed_reason IS NULL),
+
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -76,6 +86,8 @@ CREATE TABLE IF NOT EXISTS job_postings (
 
 CREATE INDEX IF NOT EXISTS idx_job_postings_user ON job_postings(user_id);
 CREATE INDEX IF NOT EXISTS idx_job_postings_organization ON job_postings(organization_id);
+-- Apply queue + analytics read only open postings; index those.
+CREATE INDEX IF NOT EXISTS idx_job_postings_open ON job_postings(user_id) WHERE closed_at IS NULL;
 
 -- ============================================================================
 -- applications
@@ -90,8 +102,10 @@ CREATE TABLE IF NOT EXISTS applications (
     -- Who, if anyone, referred you to this role.
     referral_contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
 
+    -- 'closed' (migration 012): the role was filled/pulled while this app was
+    -- live — distinct from 'rejected' (they passed) and 'withdrawn' (I pulled out).
     status TEXT NOT NULL DEFAULT 'applied'
-        CHECK (status IN ('draft', 'applied', 'screening', 'interviewing', 'offer', 'accepted', 'rejected', 'withdrawn')),
+        CHECK (status IN ('draft', 'applied', 'screening', 'interviewing', 'offer', 'accepted', 'rejected', 'withdrawn', 'closed')),
 
     applied_date DATE,
     response_date DATE,

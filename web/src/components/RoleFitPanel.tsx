@@ -48,9 +48,14 @@ export function useRoleFit(postingId?: string) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<JudgeKind | null>(null);
 
-  useEffect(() => {
+  function load() {
     if (!postingId) return;
     getRoleFit(postingId).then(setData).catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postingId]);
 
   async function run(kind: JudgeKind) {
@@ -73,6 +78,7 @@ export function useRoleFit(postingId?: string) {
   return {
     data,
     error,
+    reload: load,
     judging: busy === "experience",
     judge: () => run("experience"),
     judgingCareer: busy === "career",

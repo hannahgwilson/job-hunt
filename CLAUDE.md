@@ -83,6 +83,16 @@ When I paste a job-description link (or describe a role):
     advance_decision: 'advance' | 'hold' | 'withdraw' | 'rejected',
     decision_notes })`. **`advance_decision` is the explicit "do I move
     forward?" call** the requirements asked for.
+- **Close out a filled role:** `close_role({ job_posting_id, reason })` —
+  `reason` ∈ `filled` (default) | `expired` | `removed` |
+  `no_longer_interested` | `other`. "Filled" is a property of the *posting*, so
+  this works **before or after I apply**: the role drops out of the apply queue,
+  follow-ups, and the Insights scatter. If I had a live application it cascades to
+  the terminal `closed` status (distinct from `rejected`/`withdrawn` — the role
+  closed, it wasn't a verdict on me; terminal apps are left alone). Undo with
+  `reopen_role({ job_posting_id })`. In the UI: the "Close role…" control on the
+  role page (`/posting/:id` or `/role/:id`); closed roles live under Pipeline →
+  "Closed roles".
 
 ## Play 3 — Weekly review (requirement 3)
 

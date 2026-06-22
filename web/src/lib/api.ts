@@ -9,6 +9,7 @@ import type {
   CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
   PriorityComponents, PriorityWeightsResponse,
   ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
+  ApplicationStatus, ClosedReason, ClosedRole,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -18,6 +19,7 @@ export async function fetchApplications(): Promise<Application[]> {
       id, status, applied_date, response_date, notes,
       job_postings:job_posting_id (
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
+        closed_at, closed_reason,
         organizations:organization_id ( id, name )
       )
     `)
@@ -38,6 +40,7 @@ export async function fetchRole(applicationId: string): Promise<{
       id, status, applied_date, response_date, notes,
       job_postings:job_posting_id (
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
+        closed_at, closed_reason,
         organizations:organization_id ( id, name )
       )
     `)
@@ -481,4 +484,46 @@ export async function advanceApplication(
     p_notes: notes ?? null,
   });
   if (error) throw error;
+}
+
+// Close out a role (filled / pulled / not pursuing). Works whether or not I've
+// applied; a live application cascades to the terminal 'closed' status.
+export async function closeRole(jobPostingId: string, reason: ClosedReason = "filled"): Promise<void> {
+  const { error } = await supabase.rpc("close_role", {
+    p_job_posting_id: jobPostingId,
+    p_reason: reason,
+  });
+  if (error) throw error;
+}
+
+export async function reopenRole(jobPostingId: string): Promise<void> {
+  const { error } = await supabase.rpc("reopen_role", { p_job_posting_id: jobPostingId });
+  if (error) throw error;
+}
+
+// Closed/filled roles for the Pipeline "show closed" toggle — posting + org +
+// (if I'd applied) the application's now-closed status, newest-closed first.
+export async function fetchClosedRoles(): Promise<ClosedRole[]> {
+  const { data, error } = await supabase
+    .from("job_postings")
+    .select("id, title, url, closed_at, closed_reason, organizations!inner(name), applications(id, status)")
+    .not("closed_at", "is", null)
+    .order("closed_at", { ascending: false });
+  if (error) throw error;
+  type Raw = {
+    id: string; title: string; url: string | null;
+    closed_at: string | null; closed_reason: ClosedReason | null;
+    organizations: { name: string } | { name: string }[] | null;
+    applications: Array<{ id: string; status: ApplicationStatus }> | null;
+  };
+  return ((data ?? []) as unknown as Raw[]).map((p) => ({
+    id: p.id,
+    title: p.title,
+    url: p.url,
+    closed_at: p.closed_at,
+    closed_reason: p.closed_reason,
+    organization_name: Array.isArray(p.organizations)
+      ? p.organizations[0]?.name ?? "" : p.organizations?.name ?? "",
+    application_id: p.applications?.[0]?.id ?? null,
+  }));
 }

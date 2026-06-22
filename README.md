@@ -74,11 +74,12 @@ CLI**; an **Anthropic API key** (for the AI functions); and **Node 18+**.
 # 1. Database — in the Supabase SQL editor, run in order:
 #      schema.sql      (tables, triggers, RLS)
 #      functions.sql   (the shared logic layer — reads + transactional writes)
-#    Upgrading an existing DB? Apply migrations/ in numeric order (001 → 011)
+#    Upgrading an existing DB? Apply migrations/ in numeric order (001 → 012)
 #    first, then re-run functions.sql (every function is CREATE OR REPLACE).
 
-# 2. Agent (MCP) — copy index.ts AND deno.json together into your open-brain
-#    functions dir, then:
+# 2. Agent (MCP) — lives at supabase/functions/job-hunt-mcp/ (index.ts + deno.json),
+#    alongside the AI functions below. Deploy it from this repo (the Supabase
+#    project link is enough; no config.toml needed):
 supabase functions deploy job-hunt-mcp --no-verify-jwt
 #    Add it to Claude as a connector with ?key=<MCP_ACCESS_KEY>.
 
@@ -170,9 +171,9 @@ sees nothing.
 ```
 schema.sql            Tables, triggers, RLS
 functions.sql         The shared logic layer (reads + write RPCs)
-migrations/           Ordered deltas (001–011); re-run functions.sql after
-index.ts / deno.json  The job-hunt MCP (agent surface)
-supabase/functions/   AI functions: judge-fit, judge-career, judge-growth,
+migrations/           Ordered deltas (001–012); re-run functions.sql after
+supabase/functions/   job-hunt-mcp (the agent surface) + the AI functions:
+                      judge-fit, judge-career, judge-growth,
                       synthesize-feedback, assemble-resume
 semantic/             YAML metric specs → the SQL that implements them
 resume/               resume.example.md — the expected long-form shape

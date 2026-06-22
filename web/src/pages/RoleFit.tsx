@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
+import CloseRoleControl from "../components/CloseRoleControl";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 
 // Posting-scoped fit page (reached from the to-apply table, for roles with no
@@ -12,7 +13,7 @@ export default function RoleFit() {
   const { id } = useParams<{ id: string }>();
   const fit = useRoleFit(id);
   const weights = usePriorityWeights();
-  const { data, error, judging, judge } = fit;
+  const { data, error, judging, judge, reload } = fit;
 
   if (error && !data) return <p className="error">{error}</p>;
   if (!data) return <p className="muted">Loading…</p>;
@@ -23,7 +24,15 @@ export default function RoleFit() {
   return (
     <div className="page">
       <p><Link to="/pipeline">← Pipeline</Link></p>
-      <div className="page-head"><h1>{p.title}</h1></div>
+      <div className="page-head">
+        <h1>{p.title}</h1>
+        <CloseRoleControl
+          jobPostingId={p.id}
+          closedAt={p.closed_at}
+          closedReason={p.closed_reason}
+          onChanged={reload}
+        />
+      </div>
       <p className="muted">
         <Link to={`/company/${p.organization_id}`}>{p.organization_name}</Link>
         {p.location ? ` · ${p.location}` : ""}

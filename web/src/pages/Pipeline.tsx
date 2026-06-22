@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { advanceApplication, fetchApplications, fetchActionQueue, fetchFitCoverage, submitApplication } from "../lib/api";
-import { PIPELINE_COLUMNS, type Application, type ActionQueue, type FitCoveragePosting } from "../lib/types";
+import { advanceApplication, fetchApplications, fetchActionQueue, fetchClosedRoles, fetchFitCoverage, reopenRole, submitApplication } from "../lib/api";
+import { CLOSED_REASON_LABELS, PIPELINE_COLUMNS, type Application, type ActionQueue, type ClosedRole, type FitCoveragePosting } from "../lib/types";
 import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
 import RolesToApplyTable from "../components/RolesToApplyTable";
@@ -23,6 +23,8 @@ export default function Pipeline() {
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [showClosed, setShowClosed] = useState(false);
+  const [closed, setClosed] = useState<ClosedRole[]>([]);
   const navigate = useNavigate();
   const batch = useBatchJudge();
 
@@ -30,6 +32,16 @@ export default function Pipeline() {
     fetchApplications().then(setApps).catch((e) => setError(e.message));
     fetchActionQueue().then(setQueue).catch((e) => setError(e.message));
     fetchFitCoverage().then(setCoverage).catch((e) => setError(e.message));
+    fetchClosedRoles().then(setClosed).catch((e) => setError(e.message));
+  }
+
+  async function reopen(postingId: string) {
+    try {
+      await reopenRole(postingId);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   // Backfill: postings nobody has judged yet (skips the ones done by hand).
@@ -148,6 +160,35 @@ export default function Pipeline() {
           );
         })}
       </div>
+
+      {/* Closed/filled roles — hidden by default, revealed by the toggle. They're
+          kept for history (and the funnel) but stay out of the active search. */}
+      {closed.length > 0 && (
+        <section className="card span-2 closed-roles">
+          <div className="section-head">
+            <h2>Closed roles <span className="count">{closed.length}</span></h2>
+            <button className="ghost sm" onClick={() => setShowClosed((v) => !v)}>
+              {showClosed ? "Hide" : "Show closed"}
+            </button>
+          </div>
+          {showClosed && (
+            <ul className="closed-list">
+              {closed.map((r) => (
+                <li key={r.id}>
+                  <span className="pill pill-closed">{CLOSED_REASON_LABELS[r.closed_reason ?? "other"]}</span>
+                  {r.application_id ? (
+                    <Link to={`/role/${r.application_id}`}>{r.title}</Link>
+                  ) : (
+                    <Link to={`/posting/${r.id}`}>{r.title}</Link>
+                  )}
+                  <span className="muted"> · {r.organization_name}</span>
+                  <button className="ghost sm" onClick={() => reopen(r.id)}>Reopen</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
     </div>
   );
 }

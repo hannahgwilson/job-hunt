@@ -1023,7 +1023,7 @@ AS $$
                     'fit', (
                         SELECT to_jsonb(f) FROM (
                             SELECT rf.alignment, rf.summary, rf.spikes, rf.gaps,
-                                   rf.tweaks, rf.model, rf.judged_at
+                                   rf.tweaks, rf.requirement_scores, rf.model, rf.judged_at
                             FROM role_fit rf
                             WHERE rf.resume_id = r.id
                               AND rf.job_posting_id = p_job_posting_id
@@ -1127,6 +1127,7 @@ AS $$
                     'spikes', rf.spikes,
                     'gaps', rf.gaps,
                     'tweaks', rf.tweaks,
+                    'requirement_scores', rf.requirement_scores,
                     'model', rf.model,
                     'judged_at', rf.judged_at
                 ) ORDER BY rf.judged_at DESC
@@ -1203,6 +1204,7 @@ CREATE OR REPLACE FUNCTION save_role_fit(
     p_spikes jsonb DEFAULT NULL,
     p_gaps jsonb DEFAULT NULL,
     p_tweaks jsonb DEFAULT NULL,
+    p_requirement_scores jsonb DEFAULT NULL,
     p_model text DEFAULT NULL,
     p_user_id uuid DEFAULT auth.uid()
 )
@@ -1217,15 +1219,16 @@ BEGIN
     END IF;
 
     INSERT INTO role_fit (user_id, job_posting_id, resume_id, alignment,
-                          summary, spikes, gaps, tweaks, model, judged_at)
+                          summary, spikes, gaps, tweaks, requirement_scores, model, judged_at)
     VALUES (p_user_id, p_job_posting_id, p_resume_id, p_alignment,
-            p_summary, p_spikes, p_gaps, p_tweaks, p_model, now())
+            p_summary, p_spikes, p_gaps, p_tweaks, p_requirement_scores, p_model, now())
     ON CONFLICT (job_posting_id, resume_id) DO UPDATE SET
         alignment = EXCLUDED.alignment,
         summary = EXCLUDED.summary,
         spikes = EXCLUDED.spikes,
         gaps = EXCLUDED.gaps,
         tweaks = EXCLUDED.tweaks,
+        requirement_scores = EXCLUDED.requirement_scores,
         model = EXCLUDED.model,
         judged_at = now();
 
@@ -1722,7 +1725,7 @@ GRANT EXECUTE ON FUNCTION get_role_fit(uuid, uuid)                 TO authentica
 GRANT EXECUTE ON FUNCTION get_fit_coverage(uuid)                   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume_feedback(uuid, uuid)          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_resume_synthesis(uuid, jsonb, text, int, text, uuid) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_career_profile(uuid)                 TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_career_profile(text, text, text, int, numeric, int, text, text, text, int, text[], text[], text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_career_judgment(uuid, text, numeric, jsonb, text, text, uuid) TO authenticated, service_role;

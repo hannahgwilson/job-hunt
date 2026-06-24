@@ -74,7 +74,7 @@ CLI**; an **Anthropic API key** (for the AI functions); and **Node 18+**.
 # 1. Database — in the Supabase SQL editor, run in order:
 #      schema.sql      (tables, triggers, RLS)
 #      functions.sql   (the shared logic layer — reads + transactional writes)
-#    Upgrading an existing DB? Apply migrations/ in numeric order (001 → 012)
+#    Upgrading an existing DB? Apply migrations/ in numeric order (001 → 013)
 #    first, then re-run functions.sql (every function is CREATE OR REPLACE).
 
 # 2. Agent (MCP) — lives at supabase/functions/job-hunt-mcp/ (index.ts + deno.json),
@@ -135,7 +135,13 @@ them to the ranking so the dashboard and the agent always agree.
 **Résumés, two ways.** Variants (`resumes`) are whole documents — a senior-IC and a
 manager version, one default the agent reads. Bullets (`resume_bullets`) are the
 composable raw material the JD-tailored generator draws on. `judge-fit` scores
-every variant against a role and recommends one.
+every variant against a role and recommends one — and it scores by **adjacency,
+not keyword matching**: each JD requirement is tiered Identical / Adjacent / Aware
+/ Gap (a Looker résumé gets real credit against a Tableau JD; a genuine gap stays
+a gap), and `alignment` is the importance-weighted average of that per-requirement
+table. The table is persisted (`role_fit.requirement_scores`) and shown on the role
+page, so every score is defensible. The tiering rules live in
+[`resume-scoring-prompt-instructions.md`](resume-scoring-prompt-instructions.md).
 
 ---
 
@@ -171,7 +177,7 @@ sees nothing.
 ```
 schema.sql            Tables, triggers, RLS
 functions.sql         The shared logic layer (reads + write RPCs)
-migrations/           Ordered deltas (001–012); re-run functions.sql after
+migrations/           Ordered deltas (001–013); re-run functions.sql after
 supabase/functions/   job-hunt-mcp (the agent surface) + the AI functions:
                       judge-fit, judge-career, judge-growth,
                       synthesize-feedback, assemble-resume

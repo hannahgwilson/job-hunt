@@ -229,6 +229,15 @@ button.danger { color: var(--red); border-color: var(--red); }
 .tweaks li { font-size: 0.85rem; margin: 0.35rem 0; }
 .tweak-section { font-weight: 600; }
 
+/* Per-requirement adjacency table (judge-fit chain-of-thought) */
+.req-table { margin-top: 0.25rem; }
+.req-table summary { cursor: pointer; font-size: 0.85rem; color: var(--accent); }
+.req-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+.req-row { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0.4rem 0; }
+.req-body { min-width: 0; }
+.req-head { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; font-size: 0.85rem; }
+.score-badge.sm { min-width: 4.4rem; height: 1.4rem; font-size: 0.72rem; flex: none; }
+
 /* Batch judging (Pipeline backfill + per-resume scoring) */
 .section-head-actions { display: flex; align-items: center; gap: 0.75rem; }
 .scoring-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }

@@ -164,12 +164,26 @@ export interface ResumeTweak {
   rationale: string | null; // why it helps against this JD
 }
 
+// One row of the judge's adjacency table — how the resume's evidence stacks up
+// against a single JD requirement. The alignment score is the importance-weighted
+// average of these tiers, so this is the chain-of-thought behind the number.
+export type AdjacencyTier = "identical" | "adjacent" | "aware" | "gap";
+
+export interface RequirementScore {
+  requirement: string;                          // the JD requirement, in a few words
+  importance: "required" | "nice_to_have";      // core vs nice-to-have (drives weighting)
+  tier: AdjacencyTier;                           // identical 1.0 / adjacent 0.75 / aware 0.2 / gap 0.0
+  rule: string | null;                          // rule cited for an adjacent/aware call (e.g. "R1")
+  evidence: string | null;                      // the resume evidence (or its absence)
+}
+
 export interface RoleFit {
   alignment: number | null;  // 0..1
   summary: string | null;
   spikes: string[] | null;   // what clearly clears the bar
   gaps: string[] | null;     // what doesn't
   tweaks: ResumeTweak[] | null;
+  requirement_scores: RequirementScore[] | null; // per-requirement adjacency table
   model: string | null;
   judged_at: string | null;
 }
@@ -201,6 +215,7 @@ export interface ResumeFeedbackRole {
   spikes: string[] | null;
   gaps: string[] | null;
   tweaks: ResumeTweak[] | null;
+  requirement_scores: RequirementScore[] | null;
   model: string | null;
   judged_at: string | null;
 }

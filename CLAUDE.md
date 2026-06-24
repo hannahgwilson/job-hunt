@@ -136,7 +136,13 @@ Five weighted components (weights sum to 1.0):
   the **Priority breakdown** card at the top shows every input expanded (raw value
   · weight · points), with a button per judged signal:
   - **experience** → "Run AI judge" (judge-fit): scores every resume variant vs
-    the JD, lifts `experience_alignment` to the best fit.
+    the JD and lifts `experience_alignment` to the best fit. It scores by
+    **adjacency, not keyword matching** — each JD requirement is tiered Identical
+    / Adjacent / Aware / Gap (so a Looker résumé still earns credit against a
+    Tableau JD, but a real gap stays a gap), and the score is the importance-
+    weighted average of that per-requirement table. The table is persisted and
+    shown on the role page; the tiering rules are in
+    [`resume-scoring-prompt-instructions.md`](resume-scoring-prompt-instructions.md).
   - **career** → "Judge career move" (judge-career): reads the JD against the
     user's **career profile** (Resumes page → Career profile) and returns
     step_up/lateral/step_back. Without a profile set the call is un-personalized

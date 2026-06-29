@@ -5,6 +5,7 @@ import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
 import CloseRoleControl from "../components/CloseRoleControl";
+import StatusActions from "../components/StatusActions";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
@@ -50,6 +51,7 @@ export default function RoleDetail() {
       <div className="page-head">
         <h1>{posting?.title}</h1>
         <span className={`pill pill-${app.status}`}>{app.status}</span>
+        <StatusActions app={app} onChanged={load} onError={setError} />
         {posting?.id && (
           <CloseRoleControl
             jobPostingId={posting.id}

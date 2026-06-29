@@ -1,20 +1,25 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { fetchApplications, fetchActionQueue } from "../lib/api";
-import type { Application, ActionQueue } from "../lib/types";
+import { fetchApplications, fetchActionQueue, fetchFunnelMetrics } from "../lib/api";
+import type { Application, ActionQueue, FunnelMetrics } from "../lib/types";
+
+// The forward steps that have a "next" stage — the ones with a pass-through rate
+// and an in-stage dwell. 'accepted' is the terminal success, so it's omitted.
+const STAGE_STEPS = ["applied", "screening", "interviewing", "offer"] as const;
 
 export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
   const [queue, setQueue] = useState<ActionQueue | null>(null);
+  const [funnel, setFunnel] = useState<FunnelMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   function load() {
     setRefreshing(true);
     setError(null);
-    Promise.all([fetchApplications(), fetchActionQueue()])
-      .then(([a, q]) => { setApps(a); setQueue(q); })
+    Promise.all([fetchApplications(), fetchActionQueue(), fetchFunnelMetrics()])
+      .then(([a, q, f]) => { setApps(a); setQueue(q); setFunnel(f); })
       .catch((e) => setError(e.message))
       .finally(() => setRefreshing(false));
   }
@@ -55,6 +60,44 @@ export default function Dashboard() {
         <div className="card stat"><div className="stat-num">{queue?.roles_to_apply.length ?? "–"}</div><div className="muted">to apply</div></div>
         <div className="card stat"><div className="stat-num">{queue?.upcoming_interviews.length ?? "–"}</div><div className="muted">interviews soon</div></div>
       </div>
+
+      {/* Per-stage pass-through + dwell. Pass-through = advanced / decided
+          (still-waiting apps kept aside as Pending); see semantic/metrics/
+          pass_through_rate.yaml + days_in_stage.yaml. */}
+      <section className="card span-2 stage-metrics">
+        <h2>Stage funnel</h2>
+        {!funnel ? <p className="muted">Loading…</p> : (
+          <table className="stage-table">
+            <thead>
+              <tr>
+                <th>Stage</th><th className="num">Total</th>
+                <th className="num">Pass-through</th><th className="num">Pending</th>
+                <th className="num">Median days in stage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {STAGE_STEPS.map((s) => {
+                const pt = funnel.pass_through?.[s];
+                const dwell = funnel.median_days_in_stage?.[s];
+                const decided = pt ? pt.moved_on + pt.terminated_here : 0;
+                return (
+                  <tr key={s}>
+                    <td><span className={`pill pill-${s}`}>{s}</span></td>
+                    <td className="num">{pt?.total_ever ?? 0}</td>
+                    <td className="num">
+                      {pt && pt.rate != null
+                        ? <>{Math.round(pt.rate * 100)}% <span className="muted">({pt.moved_on}/{decided})</span></>
+                        : <span className="muted">—</span>}
+                    </td>
+                    <td className="num">{pt?.pending ?? 0}</td>
+                    <td className="num">{dwell != null ? dwell : <span className="muted">—</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
 
       <div className="cols">
         <section className="card">

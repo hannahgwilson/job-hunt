@@ -41,3 +41,6 @@ interpretation: >
   Rising median time-to-screening means responses are slowing — a cue to
   follow up sooner or widen the top of funnel. Compare windows (e.g. last 30
   days vs all-time) to see if the search is speeding up.
+
+related:
+  - days_in_stage   # per-stage DWELL (entered → left), vs this metric's cumulative-from-applied

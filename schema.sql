@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     -- apply queue filters on closed_at IS NULL. close_role() sets these.
     closed_at TIMESTAMPTZ,
     closed_reason TEXT
-        CHECK (closed_reason IN ('filled', 'expired', 'removed', 'no_longer_interested', 'other')
+        CHECK (closed_reason IN ('filled', 'expired', 'removed', 'no_longer_interested', 'duplicate', 'other')
                OR closed_reason IS NULL),
 
     notes TEXT,

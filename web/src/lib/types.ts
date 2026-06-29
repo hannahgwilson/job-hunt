@@ -8,13 +8,14 @@ export type ApplicationStatus =
 
 // Why a posting closed. 'filled' is the headline case (close_role's default).
 export type ClosedReason =
-  | "filled" | "expired" | "removed" | "no_longer_interested" | "other";
+  | "filled" | "expired" | "removed" | "no_longer_interested" | "duplicate" | "other";
 
 export const CLOSED_REASON_LABELS: Record<ClosedReason, string> = {
   filled: "Filled",
   expired: "Expired / closed",
   removed: "Posting pulled",
   no_longer_interested: "Not pursuing",
+  duplicate: "Duplicate",
   other: "Closed",
 };
 
@@ -22,6 +23,9 @@ export const STATUS_ORDER: ApplicationStatus[] = [
   "draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn",
 ];
 
+// The kanban columns — the forward funnel only. Terminal-negative outcomes
+// (rejected / withdrawn) drop off the board into the Pipeline's "Rejected
+// applications" area, the same way filled roles go to "Closed roles".
 export const PIPELINE_COLUMNS: ApplicationStatus[] = [
   "applied", "screening", "interviewing", "offer", "accepted",
 ];
@@ -418,6 +422,15 @@ export interface ActionQueue {
   }>;
 }
 
+// One stage's decision-conditioned funnel counts (pass_through_rate.yaml).
+export interface StagePassThrough {
+  total_ever: number;
+  moved_on: number;
+  terminated_here: number;
+  pending: number;
+  rate: number | null;   // moved_on / (moved_on + terminated_here); null until a decision
+}
+
 // ── get_funnel_metrics() return shape ────────────────────────────────────────
 export interface FunnelMetrics {
   success: boolean;
@@ -426,4 +439,24 @@ export interface FunnelMetrics {
   stage_counts: Record<string, number>;
   conversion_rates: Record<string, number | null>;
   median_days_from_applied: Record<string, number | null>;
+  // pass_through_rate.yaml + days_in_stage.yaml (per forward stage)
+  pass_through: Record<string, StagePassThrough>;
+  median_days_in_stage: Record<string, number | null>;
+}
+
+// One rejected/withdrawn application for the Pipeline "Rejected" area. Computed
+// client-side (fetchRejectedApplications) from status history — not a metric, so
+// it lives outside the semantic catalog (like the Closed-roles list).
+export interface RejectedApplication {
+  application_id: string;
+  status: ApplicationStatus;          // 'rejected' | 'withdrawn'
+  title: string;
+  organization_name: string;
+  url: string | null;
+  stage_rejected_at: string | null;   // the stage I was in when it ended
+  rejected_at: string | null;
+  days_in_stage: number | null;       // dwell in that final stage
+  days_in_pipeline: number | null;    // applied → rejected
+  fit_score: number | null;           // posting.experience_alignment (0..1)
+  interviews: number;                 // interviews logged before the no
 }

@@ -23,8 +23,17 @@ Why bother for a personal job search? Two reasons:
 | Metric | File | Implemented by |
 |---|---|---|
 | Time in stage | [`metrics/time_in_stage.yaml`](metrics/time_in_stage.yaml) | `get_funnel_metrics()` → `median_days_from_applied` |
+| Days in stage (dwell) | [`metrics/days_in_stage.yaml`](metrics/days_in_stage.yaml) | `get_funnel_metrics()` → `median_days_in_stage` |
 | Conversion rate | [`metrics/conversion_rate.yaml`](metrics/conversion_rate.yaml) | `get_funnel_metrics()` → `conversion_rates` |
+| Pass-through rate | [`metrics/pass_through_rate.yaml`](metrics/pass_through_rate.yaml) | `get_funnel_metrics()` → `pass_through` |
 | Priority score | [`metrics/priority_score.yaml`](metrics/priority_score.yaml) | `compute_priority()`, surfaced by `get_prioritized_roles()` / `get_action_queue()` |
+
+The funnel pairs are easy to confuse, so they're defined as distinct metrics:
+**conversion_rate** divides by everyone who *ever reached* a stage (pending
+included; it drifts), while **pass_through_rate** divides only by *decided*
+applications (pending kept aside). **time_in_stage** is *cumulative* days from
+`applied`; **days_in_stage** is the *dwell* within one stage. All four come from
+`get_funnel_metrics()`.
 
 ## Conventions
 

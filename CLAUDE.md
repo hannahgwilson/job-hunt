@@ -85,7 +85,7 @@ When I paste a job-description link (or describe a role):
     forward?" call** the requirements asked for.
 - **Close out a filled role:** `close_role({ job_posting_id, reason })` —
   `reason` ∈ `filled` (default) | `expired` | `removed` |
-  `no_longer_interested` | `other`. "Filled" is a property of the *posting*, so
+  `no_longer_interested` | `duplicate` | `other`. "Filled" is a property of the *posting*, so
   this works **before or after I apply**: the role drops out of the apply queue,
   follow-ups, and the Insights scatter. If I had a live application it cascades to
   the terminal `closed` status (distinct from `rejected`/`withdrawn` — the role

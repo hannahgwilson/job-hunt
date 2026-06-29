@@ -42,5 +42,11 @@ interpretation: >
 
 caveats:
   - rejected / withdrawn are terminal and not part of the forward funnel order.
+  - Denominator includes apps still PENDING at the prior stage, so the rate
+    drifts as they resolve. For the decision-conditioned view (pending excluded)
+    see the related pass_through_rate metric.
   - Small samples make rates volatile; get_funnel_metrics returns sample_size
     so the UI can warn.
+
+related:
+  - pass_through_rate   # same funnel, denominator = only DECIDED apps (pending excluded)

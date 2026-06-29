@@ -1,0 +1,63 @@
+metric: days_in_stage
+label: Days in stage (dwell)
+description: >
+  Median number of days an application spent WITHIN a single funnel stage —
+  from when it entered the stage to when it left (advanced to the next stage, or
+  died there as rejected/withdrawn). Distinct from time_in_stage, which measures
+  the cumulative days from 'applied' to first reaching a stage. This is the
+  per-step latency: "how long does screening actually take?"
+owner: hannah
+grain: one funnel stage
+unit: days
+
+source:
+  table: [application_status_history, applications]
+  columns: [application_id, to_status, changed_at, status]
+  notes: >
+    Entered-at = the first changed_at into the stage. Left-at = the first
+    changed_at into the next stage (advanced) or the transition into
+    rejected/withdrawn (died there). Applications still sitting in the stage have
+    no final dwell yet and are excluded from the median.
+
+definition: >
+  For each forward stage S and each application that reached S:
+    dwell = (left_at - entered_at) in days, where
+      left_at = reached(next stage)            if it advanced, else
+                ended_at (rejected/withdrawn)   if it died at S, else
+                NULL                            (still in S — excluded)
+  metric = median (percentile_cont 0.5) of dwell across applications that have
+  LEFT stage S. 'accepted' is terminal, so it accrues no dwell.
+
+stages: [applied, screening, interviewing, offer]
+# 'accepted' is terminal (nothing leaves it), so it has no dwell of its own.
+
+dimensions:
+  - window_days   # restrict to transitions within the last N days
+  - stage         # the stage being measured
+
+implemented_by:
+  function: get_funnel_metrics(p_window_days int, p_user_id uuid)
+  file: functions.sql
+  returns_key: median_days_in_stage   # { <stage>: days|null }
+  surfaced_in:
+    - web/src/pages/Dashboard.tsx   # per-stage dwell column
+    - MCP tool get_funnel_metrics
+
+interpretation: >
+  A long dwell in 'applied' means slow first responses (follow up sooner / widen
+  the top of funnel); a long dwell in 'interviewing' means drawn-out loops. Reads
+  next to pass_through_rate: a stage can convert well but be slow, or fast but
+  lossy.
+
+related:
+  - time_in_stage    # cumulative days from 'applied' to reaching a stage (not per-stage dwell)
+  - pass_through_rate # the decision outcome at the same stage
+
+caveats:
+  - Only counts applications that have LEFT the stage; an app still sitting there
+    is excluded, so a stage full of in-flight apps can show a fast median off a
+    few completed ones.
+  - Median, not mean — one stalled application won't distort it, but small samples
+    are still noisy.
+  - Dwell is computed from the FIRST entry into each stage; re-entering a stage
+    isn't separately timed (same first-reached convention as the other funnel metrics).

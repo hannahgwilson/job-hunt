@@ -9,7 +9,7 @@ import type {
   CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
   PriorityComponents, PriorityWeightsResponse,
   ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
-  ApplicationStatus, ClosedReason, ClosedRole,
+  ApplicationStatus, ClosedReason, ClosedRole, RejectedApplication,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -526,4 +526,83 @@ export async function fetchClosedRoles(): Promise<ClosedRole[]> {
       ? p.organizations[0]?.name ?? "" : p.organizations?.name ?? "",
     application_id: p.applications?.[0]?.id ?? null,
   }));
+}
+
+// Rejected / withdrawn applications for the Pipeline's "Rejected applications"
+// area. A record view, not a metric, so it's computed here from base tables (no
+// SQL function): we pull the terminal-negative apps with their embedded status
+// history + posting, then derive the stage they died at and the dwell from the
+// history — the last transition into rejected/withdrawn is the verdict, and the
+// gap to the transition before it is how long I'd sat in that stage.
+const TERMINAL_NEG: ApplicationStatus[] = ["rejected", "withdrawn"];
+
+export async function fetchRejectedApplications(): Promise<RejectedApplication[]> {
+  const { data, error } = await supabase
+    .from("applications")
+    .select(`
+      id, status, applied_date,
+      job_postings:job_posting_id (
+        title, url, experience_alignment,
+        organizations:organization_id ( name )
+      ),
+      application_status_history ( from_status, to_status, changed_at ),
+      interviews ( id )
+    `)
+    .in("status", TERMINAL_NEG);
+  if (error) throw error;
+
+  type Org = { name: string };
+  type Posting = {
+    title: string; url: string | null; experience_alignment: number | null;
+    organizations: Org | Org[] | null;
+  };
+  type Hist = { from_status: string | null; to_status: string; changed_at: string };
+  type Raw = {
+    id: string; status: ApplicationStatus; applied_date: string | null;
+    job_postings: Posting | Posting[] | null;
+    application_status_history: Hist[] | null;
+    interviews: Array<{ id: string }> | null;
+  };
+  const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
+  const DAY = 86_400_000;
+
+  const rows = ((data ?? []) as unknown as Raw[]).map((a): RejectedApplication => {
+    const posting = one(a.job_postings);
+    const org = one(posting?.organizations ?? null);
+    const hist = [...(a.application_status_history ?? [])].sort(
+      (x, y) => +new Date(x.changed_at) - +new Date(y.changed_at),
+    );
+    // the LAST transition into a terminal-negative status = the verdict
+    let endIdx = -1;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (TERMINAL_NEG.includes(hist[i].to_status as ApplicationStatus)) { endIdx = i; break; }
+    }
+    const end = endIdx >= 0 ? hist[endIdx] : null;
+    const prev = endIdx > 0 ? hist[endIdx - 1] : null;
+    const rejectedAt = end?.changed_at ?? null;
+
+    const daysInStage = end && prev
+      ? Math.round((+new Date(end.changed_at) - +new Date(prev.changed_at)) / DAY)
+      : null;
+    const daysInPipeline = rejectedAt && a.applied_date
+      ? Math.round((+new Date(rejectedAt) - +new Date(a.applied_date)) / DAY)
+      : null;
+
+    return {
+      application_id: a.id,
+      status: a.status,
+      title: posting?.title ?? "Untitled role",
+      organization_name: org?.name ?? "",
+      url: posting?.url ?? null,
+      stage_rejected_at: end?.from_status ?? null,
+      rejected_at: rejectedAt,
+      days_in_stage: daysInStage,
+      days_in_pipeline: daysInPipeline,
+      fit_score: posting?.experience_alignment ?? null,
+      interviews: a.interviews?.length ?? 0,
+    };
+  });
+
+  // newest verdict first
+  return rows.sort((x, y) => +new Date(y.rejected_at ?? 0) - +new Date(x.rejected_at ?? 0));
 }

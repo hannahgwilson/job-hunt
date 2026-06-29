@@ -179,15 +179,23 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2000,
+        // Generous: the themes array draws on every judged role, so a tight cap
+        // truncates the tool output mid-array (headline lands, themes is cut off
+        // → undefined → the save RPC fires without p_themes). 8000 clears it.
+        max_tokens: 8000,
+        system:
+          "You are a sharp resume coach. You are given feedback several AI judges gave on ONE resume, each scoring " +
+          "it against a different job description. Synthesize it into a short, prioritized plan: cluster overlapping " +
+          "suggestions into themes, merge ones that mean the same thing, and rank by value — recurring asks and edits " +
+          "that unblock high-fit roles come first. Be specific to what's actually in the feedback; do not invent " +
+          "generic advice.",
         tools: [SYNTH_TOOL],
         tool_choice: { type: "tool", name: "report_synthesis" },
         messages: [
           {
             role: "user",
             content:
-              `You are a sharp resume coach. Below is feedback several AI judges gave on ONE resume (variant: ${resume.label}), each scoring it against a different job description. ` +
-              `Synthesize it into a short, prioritized plan: cluster overlapping suggestions into themes, merge ones that mean the same thing, and rank by value — recurring asks and edits that unblock high-fit roles come first. Be specific to what's actually in this feedback; do not invent generic advice.\n\n` +
+              `Resume variant: ${resume.label}.\n\n` +
               `=== PER-ROLE FEEDBACK (${judged.length} roles) ===\n${ctx}\n\n` +
               `Call report_synthesis with the ranked themes.`,
           },
@@ -203,7 +211,19 @@ Deno.serve(async (req) => {
     const data = await res.json();
     const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use");
     if (!toolUse) return json({ success: false, error: "Anthropic returned no tool_use block" }, 502);
-    const out = toolUse.input as { headline: string; themes: unknown[] };
+    const out = toolUse.input as { headline?: string; themes?: unknown[] };
+
+    // Guard: a max_tokens truncation leaves themes missing/partial. Fail with a
+    // clear reason instead of calling save_resume_synthesis without p_themes
+    // (which surfaces as an opaque "could not find function" from PostgREST).
+    if (!Array.isArray(out.themes) || out.themes.length === 0) {
+      return json({
+        success: false,
+        error: data.stop_reason === "max_tokens"
+          ? "synthesis was cut off before the themes were complete (too much feedback for one pass) — try again"
+          : "Anthropic returned no themes",
+      }, 502);
+    }
 
     const { error: saveErr } = await admin.rpc("save_resume_synthesis", {
       p_resume_id: resume_id,

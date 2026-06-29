@@ -5,7 +5,7 @@ import type { PriorityComponents, RankedRole } from "../lib/types";
 // Sortable "roles to apply" table — the force-ranked top-of-funnel. Click a
 // column header to re-sort ("move them around"); default is priority high→low.
 
-type SortKey = "score" | "title" | "company" | "location" | "comp" | "closing";
+type SortKey = "score" | "fit" | "title" | "company" | "location" | "comp" | "closing";
 type Dir = "asc" | "desc";
 
 const COMPONENT_LABELS: Array<[keyof PriorityComponents, string]> = [
@@ -69,6 +69,7 @@ export default function RolesToApplyTable({
     let cmp = 0;
     switch (sort) {
       case "score": cmp = a.priority.score - b.priority.score; break;
+      case "fit": cmp = a.priority.components.experience - b.priority.components.experience; break;
       case "title": cmp = (a.title ?? "").localeCompare(b.title ?? ""); break;
       case "company": cmp = a.organization_name.localeCompare(b.organization_name); break;
       case "location": cmp = locationLabel(a).localeCompare(locationLabel(b)); break;
@@ -95,7 +96,7 @@ export default function RolesToApplyTable({
         <thead>
           <tr>
             <Th k="score" label="Priority" />
-            <th>Fit</th>
+            <Th k="fit" label="Fit" />
             <Th k="title" label="Role" />
             <Th k="company" label="Company" />
             <Th k="location" label="Location" />

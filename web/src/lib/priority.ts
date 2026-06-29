@@ -81,13 +81,16 @@ export function priorityComponents(p: PriorityInputs): PriorityComponents {
   };
 }
 
-export function priorityScore(c: PriorityComponents): number {
+// Weights default to the spec constant, but a caller can pass the user's stored
+// weights (get_priority_weights) so a one-off posting's breakdown matches the
+// server force-ranking after the Pipeline sliders have been moved.
+export function priorityScore(c: PriorityComponents, weights: PriorityComponents = WEIGHTS): number {
   const raw =
     100 *
-    (WEIGHTS.experience * c.experience +
-      WEIGHTS.location * c.location +
-      WEIGHTS.comp * c.comp +
-      WEIGHTS.career * c.career +
-      WEIGHTS.growth * c.growth);
+    (weights.experience * c.experience +
+      weights.location * c.location +
+      weights.comp * c.comp +
+      weights.career * c.career +
+      weights.growth * c.growth);
   return Math.round(raw * 10) / 10;
 }

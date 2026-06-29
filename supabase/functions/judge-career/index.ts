@@ -188,16 +188,37 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 1200,
+        system:
+          "You are a career coach judging whether a role moves a specific candidate forward, sideways, or " +
+          "backward — relative to THEIR current seat and THEIR definition of progress. Track matters: an IC who " +
+          "wants to stay IC should read a management role as lateral or a step back, not a step up, and vice " +
+          "versa. Judge honestly; do not inflate.",
         tools: [CAREER_TOOL],
         tool_choice: { type: "tool", name: "report_career_move" },
+        // The candidate profile (career_profile + resume) is identical across
+        // every posting, so it's the stable prefix: cache it via a breakpoint on
+        // its block, and leave only the JD uncached after it. Scoring a big list
+        // of roles writes the profile to cache once and reads it at ~0.1x for the
+        // rest of the batch. 1h TTL (not the 5m default): a full-tracker backfill
+        // is ~60 sequential calls over 10-30+ min, longer than 5m survives a stall
+        // or a pause; the profile is read dozens of times, so the one-time 2x
+        // write premium is amortized to nothing.
         messages: [
           {
             role: "user",
-            content:
-              `You are a career coach judging whether a role moves a specific candidate forward, sideways, or backward — relative to THEIR current seat and THEIR definition of progress (an IC who wants to stay IC should read a management role as lateral or a step back, not a step up). Judge honestly; do not inflate.\n\n` +
-              `=== CANDIDATE ===\n${profile}\n\n` +
-              `=== JOB DESCRIPTION ===\n${jd}\n\n` +
-              `Call report_career_move with your assessment.`,
+            content: [
+              {
+                type: "text",
+                text: `=== CANDIDATE ===\n${profile}`,
+                cache_control: { type: "ephemeral", ttl: "1h" },
+              },
+              {
+                type: "text",
+                text:
+                  `=== JOB DESCRIPTION ===\n${jd}\n\n` +
+                  `Call report_career_move with your assessment.`,
+              },
+            ],
           },
         ],
       }),
@@ -209,6 +230,11 @@ Deno.serve(async (req) => {
     }
 
     const data = await res.json();
+    // Observability: confirm the profile prefix is served from cache across a batch.
+    const u = data.usage ?? {};
+    console.log(
+      `judge-career cache: read=${u.cache_read_input_tokens ?? 0} write=${u.cache_creation_input_tokens ?? 0} uncached=${u.input_tokens ?? 0}`,
+    );
     const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use");
     if (!toolUse) return json({ success: false, error: "Anthropic returned no tool_use block" }, 502);
     const out = toolUse.input as {

@@ -6,7 +6,11 @@ import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
-  CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile,
+  CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
+  PriorityComponents, PriorityWeightsResponse,
+  ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
+  ApplicationStatus, ClosedReason, ClosedRole, RejectedApplication,
+  FitRating, FitEvalRow,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -16,6 +20,7 @@ export async function fetchApplications(): Promise<Application[]> {
       id, status, applied_date, response_date, notes,
       job_postings:job_posting_id (
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
+        closed_at, closed_reason,
         organizations:organization_id ( id, name )
       )
     `)
@@ -36,6 +41,7 @@ export async function fetchRole(applicationId: string): Promise<{
       id, status, applied_date, response_date, notes,
       job_postings:job_posting_id (
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
+        closed_at, closed_reason,
         organizations:organization_id ( id, name )
       )
     `)
@@ -102,6 +108,36 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
       application_status: p.applications?.[0]?.status ?? null,
     })),
   };
+}
+
+// Every posting with its judged signals, priority components, comp + location,
+// and per-signal "judged yet?" flags. Powers the Insights scatter + signal backfill.
+export async function fetchRolesAnalytics(): Promise<RoleAnalytics[]> {
+  const { data, error } = await supabase.rpc("get_roles_analytics", {});
+  if (error) throw error;
+  return (data as { roles: RoleAnalytics[] }).roles ?? [];
+}
+
+// ── priority weights (the adjustable force-ranking levers; migration 009) ─────
+
+export async function fetchPriorityWeights(): Promise<PriorityWeightsResponse> {
+  const { data, error } = await supabase.rpc("get_priority_weights", {});
+  if (error) throw error;
+  return data as PriorityWeightsResponse;
+}
+
+// Persist the five levers. The RPC normalizes them to sum 1.0, so the sliders can
+// move freely; returns the fresh (normalized) weights.
+export async function savePriorityWeights(w: PriorityComponents): Promise<PriorityWeightsResponse> {
+  const { data, error } = await supabase.rpc("save_priority_weights", {
+    p_experience: w.experience,
+    p_location: w.location,
+    p_comp: w.comp,
+    p_career: w.career,
+    p_growth: w.growth,
+  });
+  if (error) throw error;
+  return data as PriorityWeightsResponse;
 }
 
 export async function fetchActionQueue(): Promise<ActionQueue> {
@@ -235,37 +271,84 @@ export async function getRoleFit(jobPostingId: string): Promise<RoleFitResponse>
   return data as RoleFitResponse;
 }
 
+// Tuning Bench: save the user's verdict on one (posting × resume) analysis.
+// Pass only the fields you're changing; rating is tri-state (set 'good'/'bad',
+// or clear it with clearRating). Backed by save_fit_eval.
+export async function saveFitEval(input: {
+  jobPostingId: string;
+  resumeId: string;
+  rating?: FitRating;
+  clearRating?: boolean;
+  isBest?: boolean;
+  notes?: string;
+}): Promise<void> {
+  const { error } = await supabase.rpc("save_fit_eval", {
+    p_job_posting_id: input.jobPostingId,
+    p_resume_id: input.resumeId,
+    p_rating: input.rating ?? null,
+    p_is_best: input.isBest ?? null,
+    p_notes: input.notes ?? null,
+    p_clear_rating: input.clearRating ?? false,
+  });
+  if (error) throw error;
+}
+
+// Every rated analysis, joined with what it judged — the export the bench hands
+// back for prompt tuning. Backed by get_fit_evals.
+export async function fetchFitEvals(): Promise<FitEvalRow[]> {
+  const { data, error } = await supabase.rpc("get_fit_evals", {});
+  if (error) throw error;
+  return (data as { evals: FitEvalRow[] }).evals ?? [];
+}
+
+// supabase-js throws a FunctionsHttpError on ANY non-2xx from an Edge Function,
+// whose .message is just "Edge Function returned a non-2xx status code". The real
+// reason is in the response body our functions return as { success:false, error }.
+// Pull it out (and also handle functions that report failure with a 200 body) so
+// the UI shows something actionable instead of the opaque generic message.
+async function invokeFunction<T>(name: string, body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (error) {
+    let detail = error.message;
+    const res = (error as { context?: Response }).context;
+    if (res && typeof res.json === "function") {
+      try {
+        const parsed = await res.json();
+        if (parsed?.error) detail = parsed.error;
+      } catch {
+        /* body wasn't JSON — keep the generic message */
+      }
+    }
+    throw new Error(detail);
+  }
+  if ((data as { success?: boolean })?.success === false) {
+    throw new Error((data as { error?: string }).error ?? `${name} failed`);
+  }
+  return data as T;
+}
+
 // Run the AI judge for a posting. Scores every resume vs the JD, or just one
 // when resumeId is given (used to score a newly added resume against a subset of
 // roles). Writes role_fit and lifts the posting's experience_alignment.
 // Implemented by the judge-fit edge function — see supabase/functions/judge-fit.
 export async function runJudge(jobPostingId: string, resumeId?: string): Promise<RoleFitResponse> {
-  const { data, error } = await supabase.functions.invoke("judge-fit", {
-    body: { job_posting_id: jobPostingId, resume_id: resumeId ?? null },
+  return invokeFunction<RoleFitResponse>("judge-fit", {
+    job_posting_id: jobPostingId,
+    resume_id: resumeId ?? null,
   });
-  if (error) throw error;
-  return data as RoleFitResponse;
 }
 
 // Judge the career move (step_up/lateral/step_back) for a posting against the
 // user's career_profile. Writes career_judgment + lifts career_trajectory.
 // Implemented by the judge-career edge function. Returns the fresh get_role_fit.
 export async function runCareerJudge(jobPostingId: string): Promise<RoleFitResponse> {
-  const { data, error } = await supabase.functions.invoke("judge-career", {
-    body: { job_posting_id: jobPostingId },
-  });
-  if (error) throw error;
-  return data as RoleFitResponse;
+  return invokeFunction<RoleFitResponse>("judge-career", { job_posting_id: jobPostingId });
 }
 
 // Judge the company's growth stage via web search. Caches signals on the org and
 // writes growth_stage to every one of the company's postings. judge-growth.
 export async function runGrowthJudge(jobPostingId: string): Promise<RoleFitResponse> {
-  const { data, error } = await supabase.functions.invoke("judge-growth", {
-    body: { job_posting_id: jobPostingId },
-  });
-  if (error) throw error;
-  return data as RoleFitResponse;
+  return invokeFunction<RoleFitResponse>("judge-growth", { job_posting_id: jobPostingId });
 }
 
 // The career profile (baseline + ambition) judge-career reads. Edited on Profile.
@@ -317,11 +400,100 @@ export async function fetchResumeFeedback(resumeId: string): Promise<ResumeFeedb
 // themes and caches them (save_resume_synthesis). Returns the fresh feedback
 // payload (roles + synthesis). Implemented by the synthesize-feedback edge function.
 export async function synthesizeFeedback(resumeId: string): Promise<ResumeFeedbackResponse> {
-  const { data, error } = await supabase.functions.invoke("synthesize-feedback", {
-    body: { resume_id: resumeId },
+  return invokeFunction<ResumeFeedbackResponse>("synthesize-feedback", { resume_id: resumeId });
+}
+
+// Persist a hand-reorder (and any text edits) of a resume's synthesis themes
+// without re-running the judge. Flags the synthesis manual_order so the panel
+// keeps this order instead of re-sorting by the model's priority.
+export async function saveSynthesisOrder(resumeId: string, themes: FeedbackTheme[]): Promise<void> {
+  const { error } = await supabase.rpc("save_synthesis_order", {
+    p_resume_id: resumeId,
+    p_themes: themes,
   });
   if (error) throw error;
-  return data as ResumeFeedbackResponse;
+}
+
+// ── bullet library (buildable resume; migration 010) ─────────────────────────
+
+export async function listBullets(): Promise<ResumeBullet[]> {
+  const { data, error } = await supabase.rpc("list_bullets", {});
+  if (error) throw error;
+  return (data as { bullets: ResumeBullet[] }).bullets ?? [];
+}
+
+export async function upsertBullet(input: {
+  id?: string;
+  section: BulletSection;
+  text: string;
+  org_label?: string | null;
+  tags?: string[];
+  sort_order?: number;
+  is_active?: boolean;
+  source?: BulletSource;
+}): Promise<{ id: string }> {
+  const { data, error } = await supabase.rpc("upsert_bullet", {
+    p_section: input.section,
+    p_text: input.text,
+    p_org_label: input.org_label ?? null,
+    p_tags: input.tags ?? [],
+    p_sort_order: input.sort_order ?? null,
+    p_is_active: input.is_active ?? true,
+    p_source: input.source ?? "manual",
+    p_id: input.id ?? null,
+  });
+  if (error) throw error;
+  return { id: (data as { id: string }).id };
+}
+
+export async function deleteBullet(id: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_bullet", { p_id: id });
+  if (error) throw error;
+}
+
+export async function reorderBullets(ids: string[]): Promise<void> {
+  const { error } = await supabase.rpc("reorder_bullets", { p_ids: ids });
+  if (error) throw error;
+}
+
+// ── JD-targeted assembly (the one-page generator) ────────────────────────────
+
+export async function getAssembledResume(jobPostingId: string): Promise<AssembledResume | null> {
+  const { data, error } = await supabase.rpc("get_assembled_resume", {
+    p_job_posting_id: jobPostingId,
+  });
+  if (error) throw error;
+  return (data as { assembled: AssembledResume | null }).assembled ?? null;
+}
+
+// Run the assemble-resume judge: AI-selects + orders the best library bullets for
+// this JD and drafts a tailored one-pager. Implemented by the assemble-resume
+// edge function. Returns the fresh get_assembled_resume payload.
+export async function assembleResume(
+  jobPostingId: string,
+  baseResumeId?: string,
+): Promise<{ success: boolean; assembled: AssembledResume | null }> {
+  return invokeFunction("assemble-resume", {
+    job_posting_id: jobPostingId,
+    base_resume_id: baseResumeId ?? null,
+  });
+}
+
+// Save a hand-edited assembled one-pager (the user tweaks the AI draft).
+export async function saveAssembledResume(input: {
+  job_posting_id: string;
+  body_md: string;
+  base_resume_id?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.rpc("save_assembled_resume", {
+    p_job_posting_id: input.job_posting_id,
+    p_body_md: input.body_md,
+    p_selected_bullet_ids: null,
+    p_rationale: null,
+    p_base_resume_id: input.base_resume_id ?? null,
+    p_model: null,
+  });
+  if (error) throw error;
 }
 
 export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {
@@ -343,4 +515,125 @@ export async function advanceApplication(
     p_notes: notes ?? null,
   });
   if (error) throw error;
+}
+
+// Close out a role (filled / pulled / not pursuing). Works whether or not I've
+// applied; a live application cascades to the terminal 'closed' status.
+export async function closeRole(jobPostingId: string, reason: ClosedReason = "filled"): Promise<void> {
+  const { error } = await supabase.rpc("close_role", {
+    p_job_posting_id: jobPostingId,
+    p_reason: reason,
+  });
+  if (error) throw error;
+}
+
+export async function reopenRole(jobPostingId: string): Promise<void> {
+  const { error } = await supabase.rpc("reopen_role", { p_job_posting_id: jobPostingId });
+  if (error) throw error;
+}
+
+// Closed/filled roles for the Pipeline "show closed" toggle — posting + org +
+// (if I'd applied) the application's now-closed status, newest-closed first.
+export async function fetchClosedRoles(): Promise<ClosedRole[]> {
+  const { data, error } = await supabase
+    .from("job_postings")
+    .select("id, title, url, closed_at, closed_reason, organizations!inner(name), applications(id, status)")
+    .not("closed_at", "is", null)
+    .order("closed_at", { ascending: false });
+  if (error) throw error;
+  type Raw = {
+    id: string; title: string; url: string | null;
+    closed_at: string | null; closed_reason: ClosedReason | null;
+    organizations: { name: string } | { name: string }[] | null;
+    applications: Array<{ id: string; status: ApplicationStatus }> | null;
+  };
+  return ((data ?? []) as unknown as Raw[]).map((p) => ({
+    id: p.id,
+    title: p.title,
+    url: p.url,
+    closed_at: p.closed_at,
+    closed_reason: p.closed_reason,
+    organization_name: Array.isArray(p.organizations)
+      ? p.organizations[0]?.name ?? "" : p.organizations?.name ?? "",
+    application_id: p.applications?.[0]?.id ?? null,
+  }));
+}
+
+// Rejected / withdrawn applications for the Pipeline's "Rejected applications"
+// area. A record view, not a metric, so it's computed here from base tables (no
+// SQL function): we pull the terminal-negative apps with their embedded status
+// history + posting, then derive the stage they died at and the dwell from the
+// history — the last transition into rejected/withdrawn is the verdict, and the
+// gap to the transition before it is how long I'd sat in that stage.
+const TERMINAL_NEG: ApplicationStatus[] = ["rejected", "withdrawn"];
+
+export async function fetchRejectedApplications(): Promise<RejectedApplication[]> {
+  const { data, error } = await supabase
+    .from("applications")
+    .select(`
+      id, status, applied_date,
+      job_postings:job_posting_id (
+        title, url, experience_alignment,
+        organizations:organization_id ( name )
+      ),
+      application_status_history ( from_status, to_status, changed_at ),
+      interviews ( id )
+    `)
+    .in("status", TERMINAL_NEG);
+  if (error) throw error;
+
+  type Org = { name: string };
+  type Posting = {
+    title: string; url: string | null; experience_alignment: number | null;
+    organizations: Org | Org[] | null;
+  };
+  type Hist = { from_status: string | null; to_status: string; changed_at: string };
+  type Raw = {
+    id: string; status: ApplicationStatus; applied_date: string | null;
+    job_postings: Posting | Posting[] | null;
+    application_status_history: Hist[] | null;
+    interviews: Array<{ id: string }> | null;
+  };
+  const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
+  const DAY = 86_400_000;
+
+  const rows = ((data ?? []) as unknown as Raw[]).map((a): RejectedApplication => {
+    const posting = one(a.job_postings);
+    const org = one(posting?.organizations ?? null);
+    const hist = [...(a.application_status_history ?? [])].sort(
+      (x, y) => +new Date(x.changed_at) - +new Date(y.changed_at),
+    );
+    // the LAST transition into a terminal-negative status = the verdict
+    let endIdx = -1;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (TERMINAL_NEG.includes(hist[i].to_status as ApplicationStatus)) { endIdx = i; break; }
+    }
+    const end = endIdx >= 0 ? hist[endIdx] : null;
+    const prev = endIdx > 0 ? hist[endIdx - 1] : null;
+    const rejectedAt = end?.changed_at ?? null;
+
+    const daysInStage = end && prev
+      ? Math.round((+new Date(end.changed_at) - +new Date(prev.changed_at)) / DAY)
+      : null;
+    const daysInPipeline = rejectedAt && a.applied_date
+      ? Math.round((+new Date(rejectedAt) - +new Date(a.applied_date)) / DAY)
+      : null;
+
+    return {
+      application_id: a.id,
+      status: a.status,
+      title: posting?.title ?? "Untitled role",
+      organization_name: org?.name ?? "",
+      url: posting?.url ?? null,
+      stage_rejected_at: end?.from_status ?? null,
+      rejected_at: rejectedAt,
+      days_in_stage: daysInStage,
+      days_in_pipeline: daysInPipeline,
+      fit_score: posting?.experience_alignment ?? null,
+      interviews: a.interviews?.length ?? 0,
+    };
+  });
+
+  // newest verdict first
+  return rows.sort((x, y) => +new Date(y.rejected_at ?? 0) - +new Date(x.rejected_at ?? 0));
 }

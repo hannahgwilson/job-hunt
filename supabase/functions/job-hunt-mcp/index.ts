@@ -52,7 +52,10 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 const app = new Hono();
 
 const applicationStatusEnum = z.enum([
-  "draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn",
+  "draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn", "closed",
+]);
+const closedReasonEnum = z.enum([
+  "filled", "expired", "removed", "no_longer_interested", "other",
 ]);
 const interviewTypeEnum = z.enum([
   "phone_screen", "technical", "behavioral", "system_design", "hiring_manager", "team", "final",
@@ -339,6 +342,46 @@ app.post("*", async (c) => {
   );
 
   // ───────────────────────────────────────────────────────────────────────
+  // close_role — mark a role filled/closed (works before OR after applying)
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "close_role",
+    "Close out a role that's been filled (or pulled / no longer being pursued). 'Filled' is a property of the posting, so this works whether or not I've applied: a closed role drops out of the apply queue, follow-ups, and the analytics scatter. If I had a live application, it's moved to the terminal 'closed' status (distinct from 'rejected'/'withdrawn'). Reversible with reopen_role.",
+    {
+      job_posting_id: z.string(),
+      reason: closedReasonEnum.optional().describe("Why it closed — default 'filled'"),
+    },
+    async (args) => {
+      const { data, error } = await supabase.rpc("close_role", {
+        p_job_posting_id: args.job_posting_id,
+        p_reason: args.reason ?? "filled",
+        p_user_id: userId,
+      });
+      if (error) throw new Error(`close_role failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
+  // reopen_role — undo close_role; the posting re-enters the queue
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "reopen_role",
+    "Reopen a previously closed role (closed it by mistake, or it came back). Clears the posting's closed flag so it re-enters the apply queue. Any application left in 'closed' stays closed — advance it by hand if the role genuinely reopened.",
+    {
+      job_posting_id: z.string(),
+    },
+    async (args) => {
+      const { data, error } = await supabase.rpc("reopen_role", {
+        p_job_posting_id: args.job_posting_id,
+        p_user_id: userId,
+      });
+      if (error) throw new Error(`reopen_role failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  // ───────────────────────────────────────────────────────────────────────
   // get_prioritized_roles — force-ranked roles-to-apply, highest score first
   // ───────────────────────────────────────────────────────────────────────
   server.tool(
@@ -509,12 +552,13 @@ app.post("*", async (c) => {
   // ───────────────────────────────────────────────────────────────────────
   server.tool(
     "list_postings",
-    "List tracked job postings, optionally filtered by organization. Returns posting + organization name for context.",
+    "List tracked job postings, optionally filtered by organization. Returns posting + organization name for context. Closed/filled roles are excluded unless include_closed is set.",
     {
       organization_id: z.string().optional(),
+      include_closed: z.boolean().optional().describe("Include closed/filled roles too (default false)"),
       limit: z.number().optional().describe("Default 50"),
     },
-    async ({ organization_id, limit }) => {
+    async ({ organization_id, include_closed, limit }) => {
       let qb = supabase
         .from("job_postings")
         .select(`*, organizations!inner ( id, name )`)
@@ -522,6 +566,7 @@ app.post("*", async (c) => {
         .order("created_at", { ascending: false })
         .limit(limit ?? 50);
       if (organization_id) qb = qb.eq("organization_id", organization_id);
+      if (!include_closed) qb = qb.is("closed_at", null);
       const { data, error } = await qb;
       if (error) throw new Error(`list_postings failed: ${error.message}`);
       return ok({ success: true, count: data.length, postings: data });

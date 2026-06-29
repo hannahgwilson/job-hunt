@@ -3,6 +3,10 @@ import { Link, useParams } from "react-router-dom";
 import { fetchRole } from "../lib/api";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
+import TailoredResumePanel from "../components/TailoredResumePanel";
+import CloseRoleControl from "../components/CloseRoleControl";
+import StatusActions from "../components/StatusActions";
+import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
 const DECISION_PILL: Record<string, string> = {
@@ -19,16 +23,22 @@ export default function RoleDetail() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function load() {
     if (!id) return;
     fetchRole(id)
       .then((r) => { setApp(r.application); setHistory(r.history); setInterviews(r.interviews); })
       .catch((e) => setError(e.message));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   // Same AI-scoring panel as the standalone fit page, keyed off this
   // application's posting (undefined until the application loads).
   const fit = useRoleFit(app?.job_postings?.id);
+  const weights = usePriorityWeights();
 
   if (error) return <p className="error">{error}</p>;
   if (!app) return <p className="muted">Loading…</p>;
@@ -41,6 +51,15 @@ export default function RoleDetail() {
       <div className="page-head">
         <h1>{posting?.title}</h1>
         <span className={`pill pill-${app.status}`}>{app.status}</span>
+        <StatusActions app={app} onChanged={load} onError={setError} />
+        {posting?.id && (
+          <CloseRoleControl
+            jobPostingId={posting.id}
+            closedAt={posting.closed_at}
+            closedReason={posting.closed_reason}
+            onChanged={load}
+          />
+        )}
       </div>
       <p className="muted">
         {posting?.organizations?.name}
@@ -52,6 +71,7 @@ export default function RoleDetail() {
       {fit.data?.posting && (
         <PriorityBreakdown
           inputs={fit.data.posting}
+          weights={weights}
           judges={{
             career: fit.data.career,
             growth: fit.data.growth,
@@ -64,7 +84,18 @@ export default function RoleDetail() {
         />
       )}
 
-      <RoleFitPanel data={fit.data} judging={fit.judging} onJudge={fit.judge} error={fit.error} />
+      <RoleFitPanel
+        data={fit.data}
+        judging={fit.judging}
+        onJudge={fit.judge}
+        error={fit.error}
+        onJudgeResume={fit.judgeResume}
+        judgingResumeId={fit.judgingResumeId}
+      />
+
+      {posting?.id && (
+        <TailoredResumePanel jobPostingId={posting.id} baseResumeId={fit.data?.recommended_resume_id} />
+      )}
 
       <div className="cols">
         <section className="card">

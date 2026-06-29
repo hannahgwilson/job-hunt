@@ -4,6 +4,7 @@ import type { Resume, ResumeVariant, FitCoveragePosting } from "../lib/types";
 import ResumeScoringPanel from "../components/ResumeScoringPanel";
 import ResumeFeedbackPanel from "../components/ResumeFeedbackPanel";
 import CareerProfilePanel from "../components/CareerProfilePanel";
+import BulletLibraryPanel from "../components/BulletLibraryPanel";
 
 // Resume management: multiple named variants (e.g. a senior-IC resume and a
 // manager resume). The default variant is what get_resume()/the MCP read; the
@@ -244,6 +245,8 @@ export default function Profile() {
       )}
 
       {!draft && error && <p className="error">{error}</p>}
+
+      <BulletLibraryPanel />
 
       <CareerProfilePanel />
     </div>

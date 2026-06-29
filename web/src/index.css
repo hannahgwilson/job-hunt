@@ -42,6 +42,7 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
 .topbar nav a.active { color: var(--text); border-bottom: 2px solid var(--accent); }
 main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.page-head-actions { display: flex; align-items: center; gap: 0.5rem; }
 
 /* Cards & layout */
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; box-shadow: var(--shadow); }
@@ -80,10 +81,41 @@ label.checkbox input { width: auto; }
 .pill-accepted { color: var(--green); border-color: var(--green); }
 .pill-rejected { color: var(--red); }
 .pill-withdrawn { color: var(--muted); }
+.pill-closed { color: var(--muted); border-style: dashed; }
 .pill-warn { color: var(--warn); border-color: var(--warn); }
 
+/* Close-role control (posting + application pages) */
+.close-role { display: inline-flex; align-items: center; gap: 0.4rem; margin-left: auto; }
+.close-role-form { display: inline-flex; align-items: center; gap: 0.35rem; }
+.close-role-form select { font-size: 0.8rem; padding: 0.15rem 0.35rem; }
+
+/* Closed-roles list on the Pipeline */
+.closed-roles .closed-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+.closed-roles .closed-list li { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0; border-top: 1px solid var(--border); }
+.closed-roles .closed-list li button { margin-left: auto; }
+
+/* Rejected applications table on the Pipeline */
+.rejected-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.85rem; }
+.rejected-table th { text-align: left; color: var(--muted); font-weight: 600; font-size: 0.78rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); }
+.rejected-table td { padding: 0.4rem 0.5rem; border-top: 1px solid var(--border); }
+.rejected-table th.num, .rejected-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.rejected-table tbody tr { cursor: pointer; }
+.rejected-table tbody tr:hover { background: var(--panel-2); }
+.rejected-table .rt-title { font-weight: 600; }
+
+/* Stage funnel table (dashboard) — pass-through + dwell per stage */
+.stage-metrics { margin-top: 1rem; }
+.stage-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.stage-table th { text-align: left; color: var(--muted); font-weight: 600; font-size: 0.78rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); }
+.stage-table td { padding: 0.45rem 0.5rem; border-top: 1px solid var(--border); }
+.stage-table th.num, .stage-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
 /* Status bars (dashboard) */
-.bar-row { display: grid; grid-template-columns: 110px 1fr 28px; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.bar-row { display: grid; grid-template-columns: 110px 1fr 28px; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; padding: 0.15rem 0.3rem; border-radius: 6px; }
+.bar-row.clickable { cursor: pointer; }
+.bar-row.clickable:hover { background: var(--panel-2); }
+.bar-row.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+.status-apps li.prospect { border-top: 1px solid var(--border); padding: 0.35rem 0; }
 .bar { background: var(--panel-2); border-radius: 6px; height: 10px; overflow: hidden; }
 .bar-fill { background: var(--accent); height: 100%; }
 .bar-num { text-align: right; color: var(--muted); font-size: 0.85rem; }
@@ -115,16 +147,8 @@ label.checkbox input { width: auto; }
 .kanban-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.6rem; margin-bottom: 0.5rem; cursor: pointer; }
 .kanban-card:hover { border-color: var(--accent-700); }
 .kc-title { font-weight: 600; font-size: 0.9rem; }
-.kc-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 0.5rem; font-size: 0.8rem; }
+.kc-foot { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin-top: 0.5rem; font-size: 0.8rem; }
 .empty { text-align: center; padding: 1rem 0; }
-
-/* Funnel */
-.funnel { display: grid; gap: 0.6rem; }
-.funnel-row { display: grid; grid-template-columns: 100px 1fr; gap: 0.6rem; align-items: center; }
-.funnel-label { text-transform: capitalize; color: var(--muted); }
-.funnel-bar-wrap { display: grid; gap: 0.2rem; }
-.funnel-bar { background: linear-gradient(90deg, var(--accent-700), var(--accent)); color: white; border-radius: 6px; padding: 0.3rem 0.5rem; font-weight: 600; min-width: 1.5rem; }
-.funnel-meta { font-size: 0.8rem; grid-column: 2; }
 
 /* Timeline & interviews */
 .timeline { list-style: none; padding: 0; display: grid; gap: 0.6rem; }
@@ -183,6 +207,7 @@ button.danger { color: var(--red); border-color: var(--red); }
 
 /* Notice banner (e.g. un-judged role) */
 .notice { border-left: 3px solid var(--warn); background: rgba(176, 116, 0, 0.06); padding: 0.6rem 0.8rem; border-radius: 6px; margin: 0.5rem 0; }
+.notice-warn { border-left-color: var(--red); background: rgba(200, 40, 40, 0.06); }
 .fit-section .section-head { margin-bottom: 0.75rem; }
 
 /* Role fit verdict banner */
@@ -201,6 +226,11 @@ button.danger { color: var(--red); border-color: var(--red); }
 .fit-card { display: flex; flex-direction: column; gap: 0.5rem; }
 .fit-card.recommended { border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
 .fit-card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+/* Unjudged card: the prompt + a "judge just this resume" button. */
+.fit-unjudged { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+.fit-unjudged p { margin: 0; }
+/* Judged card footer: timestamp on the left, a subtle re-judge on the right. */
+.fit-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-top: 0.25rem; }
 .fit-list { margin-top: 0.25rem; }
 .fit-list h4 { margin: 0 0 0.25rem; font-size: 0.82rem; }
 .fit-list ul, .tweaks ul, .reqs { margin: 0; padding-left: 1.1rem; }
@@ -212,14 +242,63 @@ button.danger { color: var(--red); border-color: var(--red); }
 .tweaks li { font-size: 0.85rem; margin: 0.35rem 0; }
 .tweak-section { font-weight: 600; }
 
+/* Per-requirement adjacency table (judge-fit chain-of-thought) */
+.req-table { margin-top: 0.25rem; }
+.req-table summary { cursor: pointer; font-size: 0.85rem; color: var(--accent); }
+.req-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+.req-row { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0.4rem 0; }
+.req-body { min-width: 0; }
+.req-head { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; font-size: 0.85rem; }
+.score-badge.sm { min-width: 4.4rem; height: 1.4rem; font-size: 0.72rem; flex: none; }
+
+/* Tuning Bench (résumés × JDs eval) */
+.bench-pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+.bench-pick-list { list-style: none; margin: 0.5rem 0 0; padding: 0; max-height: 16rem; overflow-y: auto; }
+.bench-pick-list li { margin: 0.2rem 0; }
+.bench-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer; }
+.bench-check input { width: auto; flex: none; }
+.bench-result { margin-top: 1.5rem; }
+.bench-analysis.is-best { border-color: var(--green); }
+.bench-eval { margin-top: 0.6rem; border-top: 1px dashed var(--border); padding-top: 0.6rem; }
+.bench-eval-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.bench-notes { width: 100%; min-height: 3.2rem; font-size: 0.82rem; resize: vertical; }
+.rate-on-good { color: var(--green); border-color: var(--green); }
+.rate-on-bad { color: var(--red); border-color: var(--red); }
+.rate-on-best { color: var(--warn); border-color: var(--warn); }
+.bench-export { max-height: 24rem; overflow: auto; font-size: 0.74rem; background: var(--panel-2); padding: 0.6rem; border-radius: 6px; }
+@media (max-width: 800px) { .bench-pickers { grid-template-columns: 1fr; } }
+
 /* Batch judging (Pipeline backfill + per-resume scoring) */
 .section-head-actions { display: flex; align-items: center; gap: 0.75rem; }
 .scoring-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
 .scoring-panel summary { cursor: pointer; font-size: 0.9rem; }
-.scoring-actions { display: flex; align-items: center; gap: 0.75rem; margin: 0.6rem 0; }
-.scoring-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
-.scoring-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }
-.scoring-list label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+.scoring-actions { display: flex; align-items: center; gap: 0.75rem; margin: 0.6rem 0 0.3rem; flex-wrap: wrap; }
+.scoring-select { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; }
+.linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
+.linklike:hover { text-decoration: underline; }
+.linklike:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+.scoring-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.scoring-list li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.6rem; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+.scoring-list li:last-child { border-bottom: none; }
+.scoring-list li:nth-child(even) { background: var(--panel-2); }
+.scoring-list label { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.5rem; cursor: pointer; min-width: 0; }
+.scoring-role { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.88rem; }
+.scoring-scored { white-space: nowrap; color: var(--green); }
+
+/* Priority weights — adjustable force-ranking levers on the Pipeline page */
+.weights-panel { margin: 0.25rem 0 1rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.75rem; background: var(--panel); }
+.weights-panel > summary { cursor: pointer; display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; font-weight: 600; }
+.weights-panel[open] > summary { margin-bottom: 0.7rem; }
+.weights-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.weight-row { display: grid; grid-template-columns: 220px 1fr 48px; align-items: center; gap: 0.75rem; }
+.weight-label { font-size: 0.88rem; }
+.weight-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+.weight-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.85rem; }
+.weights-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.7rem; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  .weight-row { grid-template-columns: 1fr 44px; }
+  .weight-row input[type="range"] { grid-column: 1 / -1; }
+}
 
 /* Resume feedback digest — every judge's read of this resume, synthesized */
 .feedback-panel { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
@@ -242,12 +321,60 @@ button.danger { color: var(--red); border-color: var(--red); }
 .pill.priority-medium { color: var(--warn); border-color: var(--warn); }
 .pill.priority-low { color: var(--muted); }
 
+/* Extra-small buttons + pills (bullet library, synthesis reorder) */
+button.xs { padding: 0.05rem 0.35rem; font-size: 0.72rem; line-height: 1.3; }
+.pill.xs { font-size: 0.62rem; padding: 0.02rem 0.35rem; margin-left: 0.3rem; }
+
+/* Synthesis reorder + promote-to-library controls */
+.theme-move { display: inline-flex; flex-direction: column; gap: 1px; margin-right: 0.1rem; }
+.theme-promote { margin-top: 0.45rem; }
+.synthesis-foot { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.3rem; }
+
+/* Bullet library — the buildable-resume raw material on the Resumes page */
+.bullet-library { margin-top: 1rem; }
+.bullet-editor { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; margin: 0.6rem 0; display: flex; flex-direction: column; gap: 0.5rem; background: var(--panel); }
+.bullet-editor-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.bullet-editor-row input { flex: 1; min-width: 200px; }
+.bullet-text { width: 100%; min-height: 60px; resize: vertical; }
+.bullet-editor-actions { display: flex; gap: 0.5rem; }
+.bullet-section { margin-top: 0.9rem; }
+.bullet-section-h { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 0.4rem; }
+.bullet-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.bullet-item { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 0.6rem; padding: 0.45rem 0.5rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.bullet-item.retired { opacity: 0.5; }
+.bullet-move { display: flex; flex-direction: column; gap: 1px; }
+.bullet-line { font-size: 0.88rem; }
+.bullet-meta { margin-top: 0.2rem; }
+.bullet-actions { display: flex; gap: 0.25rem; align-items: center; }
+
+/* Tailored one-pager generator (role pages) */
+.tailored-rationale { white-space: pre-wrap; color: var(--muted); }
+.tailored-text { width: 100%; min-height: 320px; font-family: var(--mono, ui-monospace, monospace); font-size: 0.85rem; }
+.tailored-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem; flex-wrap: wrap; }
+
 /* Raw per-role drill-down (collapsed by default, below the synthesis) */
 .feedback-raw { margin-top: 0.5rem; }
 .feedback-raw > summary { cursor: pointer; font-size: 0.88rem; color: var(--accent); }
 .feedback-roles { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem; }
 .feedback-role > summary { cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
 .feedback-role[open] > summary { margin-bottom: 0.5rem; }
+
+/* Insights scatter — fit vs (career + growth) */
+.scatter-wrap { width: 100%; }
+.scatter { width: 100%; height: auto; display: block; }
+.scatter-grid { stroke: var(--border); stroke-width: 1; }
+.scatter-tick { fill: var(--muted); font-size: 11px; }
+.scatter-axis { fill: var(--text); font-size: 12px; font-weight: 600; }
+.scatter-sweet { fill: var(--green); opacity: 0.06; }
+.scatter-pt { cursor: pointer; }
+.scatter-pt circle { fill: var(--accent); fill-opacity: 0.55; stroke: var(--accent-700); stroke-width: 1; }
+.scatter-pt.hover circle { fill-opacity: 0.9; stroke-width: 2.5; }
+.scatter-pt.unjudged circle { fill: var(--muted); fill-opacity: 0.18; stroke-dasharray: 2 2; }
+.scatter-label { fill: var(--muted); font-size: 10px; pointer-events: none; }
+.scatter-tip rect { fill: var(--text); opacity: 0.96; }
+.scatter-tip-title { fill: #fff; font-size: 12px; font-weight: 600; }
+.scatter-tip-sub { fill: #cbd5e1; font-size: 10.5px; }
+.scatter-legend { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
 
 /* Company page */
 .company-links { display: flex; gap: 0.9rem; }

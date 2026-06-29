@@ -7,6 +7,15 @@
  * force-ranking stops tapping out at the neutral 0.5 default). Returns the fresh
  * get_role_fit payload so the page can re-render immediately.
  *
+ * Scoring is by ADJACENCY, not keyword matching: the model tiers each JD
+ * requirement Identical / Adjacent / Aware / Gap (so a Looker résumé earns credit
+ * against a Tableau JD, but a genuine gap stays a gap) and derives `alignment` as
+ * the importance-weighted average of that per-requirement table — which is itself
+ * persisted (role_fit.requirement_scores) so the score is defensible. The persona,
+ * tool schema, and tiering rules live in ./prompt.ts (shared with harness/run.ts
+ * so the tuning harness exercises the real prompt); the framework is specified in
+ * /resume-scoring-prompt-instructions.md.
+ *
  * Why a separate edge function (not the MCP / not SQL): it makes an outbound
  * Anthropic call with a secret key, which must stay server-side.
  *
@@ -21,6 +30,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import { buildFitMessages, buildFitSystem, FIT_TOOL, type FitResult, jdContext } from "./prompt.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -31,79 +41,12 @@ const CORS = {
 const MODEL = Deno.env.get("JUDGE_MODEL") ?? "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 
-// Structured-output tool: forces Claude to return exactly these fields.
-const FIT_TOOL = {
-  name: "report_fit",
-  description:
-    "Report how well a single resume fits a specific job description. Be concrete and specific to THIS resume and THIS JD — never generic.",
-  input_schema: {
-    type: "object",
-    properties: {
-      alignment: {
-        type: "number",
-        description:
-          "0..1 fit of this resume vs the JD. 1.0 = clearly clears the bar on the core requirements; 0.5 = a stretch; below 0.4 = weak match.",
-      },
-      summary: {
-        type: "string",
-        description: "2-4 sentence read of this resume against the JD.",
-      },
-      spikes: {
-        type: "array",
-        items: { type: "string" },
-        description: "Specific requirements this resume clearly satisfies (the strengths to lead with).",
-      },
-      gaps: {
-        type: "array",
-        items: { type: "string" },
-        description: "Specific requirements this resume does NOT evidence, or evidences weakly.",
-      },
-      tweaks: {
-        type: "array",
-        description:
-          "A few high-leverage, non-generic edits to better match this JD. Assume BOTH a human reviewer and an ATS / AI keyword screen will read the resume.",
-        items: {
-          type: "object",
-          properties: {
-            section: { type: "string", description: "Which resume section/bullet to change." },
-            suggestion: { type: "string", description: "The concrete proposed change." },
-            rationale: { type: "string", description: "Why it helps against this JD (human + ATS)." },
-          },
-          required: ["suggestion"],
-        },
-      },
-    },
-    required: ["alignment", "summary", "spikes", "gaps", "tweaks"],
-  },
-};
-
-function jdContext(p: Record<string, unknown>): string {
-  const parts: string[] = [];
-  parts.push(`Title: ${p.title ?? "(untitled)"}`);
-  if (p.location) parts.push(`Location: ${p.location}`);
-  if (p.remote_policy) parts.push(`Remote policy: ${p.remote_policy}`);
-  if (p.salary_min || p.salary_max) parts.push(`Salary: ${p.salary_min ?? "?"}–${p.salary_max ?? "?"}`);
-  const reqs = (p.requirements as string[] | null) ?? [];
-  if (reqs.length) parts.push(`Requirements:\n- ${reqs.join("\n- ")}`);
-  const nice = (p.nice_to_haves as string[] | null) ?? [];
-  if (nice.length) parts.push(`Nice to have:\n- ${nice.join("\n- ")}`);
-  if (p.notes) parts.push(`Notes / JD excerpt:\n${p.notes}`);
-  if (p.url) parts.push(`Source: ${p.url}`);
-  return parts.join("\n\n");
-}
-
 async function judgeOne(
   apiKey: string,
   jd: string,
   resumeLabel: string,
   resumeText: string,
-): Promise<{
-  alignment: number;
-  summary: string;
-  spikes: string[];
-  gaps: string[];
-  tweaks: Array<{ section?: string; suggestion: string; rationale?: string }>;
-}> {
+): Promise<FitResult> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -113,19 +56,17 @@ async function judgeOne(
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1500,
+      // Headroom for the full per-requirement adjacency table (one row per JD
+      // requirement) PLUS alignment/summary/spikes/gaps/tweaks after it. At 1500
+      // a long requirement list truncated the tool_use mid-array, so the fields
+      // after it came back undefined — see the stop_reason guard below.
+      max_tokens: 4096,
+      // Stable prefix (cached): tool + persona + this resume; only the JD in the
+      // user turn changes per posting. See prompt.ts for the cache rationale.
+      system: buildFitSystem(resumeLabel, resumeText),
       tools: [FIT_TOOL],
       tool_choice: { type: "tool", name: "report_fit" },
-      messages: [
-        {
-          role: "user",
-          content:
-            `You are screening one candidate resume against one job description, the way a sharp hiring manager who also knows how ATS keyword screens work would. Judge fit honestly — do not inflate.\n\n` +
-            `=== JOB DESCRIPTION ===\n${jd}\n\n` +
-            `=== RESUME (variant: ${resumeLabel}) ===\n${resumeText}\n\n` +
-            `Call report_fit with your assessment. Keep spikes/gaps/tweaks specific to this resume and this JD.`,
-        },
-      ],
+      messages: buildFitMessages(jd),
     }),
   });
 
@@ -135,9 +76,27 @@ async function judgeOne(
   }
 
   const data = await res.json();
+  // Observability: confirm the resume prefix is actually being served from cache
+  // across a batch. cache_read_input_tokens stays 0 if a silent invalidator crept
+  // into the prefix (or the prefix is under the model's min cacheable size).
+  const u = data.usage ?? {};
+  console.log(
+    `judge-fit cache: read=${u.cache_read_input_tokens ?? 0} write=${u.cache_creation_input_tokens ?? 0} uncached=${u.input_tokens ?? 0} (${resumeLabel})`,
+  );
+  // A max_tokens stop truncates the tool_use mid-JSON: the fields after the cut
+  // (alignment/summary/…) come back undefined, which downstream collapses into a
+  // confusing "save_role_fit not found" (the rpc drops the undefined keys). Fail
+  // loudly here instead, and bump max_tokens above if it recurs.
+  if (data.stop_reason === "max_tokens") {
+    throw new Error(`report_fit truncated at max_tokens (${resumeLabel}) — raise max_tokens`);
+  }
   const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use");
   if (!toolUse) throw new Error("Anthropic returned no tool_use block");
-  return toolUse.input;
+  const fit = toolUse.input as FitResult;
+  if (fit.alignment == null) {
+    throw new Error(`report_fit returned no alignment (${resumeLabel}) — incomplete tool output`);
+  }
+  return fit;
 }
 
 Deno.serve(async (req) => {
@@ -209,18 +168,29 @@ Deno.serve(async (req) => {
           p_spikes: fit.spikes,
           p_gaps: fit.gaps,
           p_tweaks: fit.tweaks,
+          p_requirement_scores: fit.requirement_scores,
           p_model: MODEL,
           p_user_id: userId,
         });
         if (saveErr) throw saveErr;
-        return r.label;
+        return fit.role_type;
       }),
     );
 
-    const failed = results.filter((x) => x.status === "rejected");
-    if (failed.length === usable.length) {
-      const reason = (failed[0] as PromiseRejectedResult).reason;
+    const fulfilled = results.filter((x) => x.status === "fulfilled") as PromiseFulfilledResult<string>[];
+    if (fulfilled.length === 0) {
+      const reason = (results[0] as PromiseRejectedResult).reason;
       return json({ success: false, error: `judging failed: ${reason?.message ?? reason}` }, 502);
+    }
+
+    // role_type is a property of the JD (same across resumes) — cache it on the
+    // posting so the UI can flag an IC-resume-vs-manager-role track mismatch.
+    // Prefer a definite call over "unclear" if the resumes disagreed.
+    const roleType = fulfilled.map((x) => x.value).find((t) => t && t !== "unclear")
+      ?? fulfilled[0].value;
+    if (roleType) {
+      await admin.from("job_postings").update({ role_type: roleType })
+        .eq("id", job_posting_id).eq("user_id", userId);
     }
 
     // Return the fresh fit payload so the page re-renders with scores.

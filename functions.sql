@@ -27,8 +27,17 @@
 -- READS
 -- ============================================================================
 
--- get_funnel_metrics — true conversion + median days-from-applied, computed
--- from application_status_history. Ported from the v2 TypeScript handler.
+-- get_funnel_metrics — the funnel/stage metric server. Computes FOUR semantic
+-- metrics from application_status_history (see semantic/metrics/*.yaml):
+--   * conversion_rates          → metrics/conversion_rate.yaml  (reached-based)
+--   * median_days_from_applied  → metrics/time_in_stage.yaml    (cumulative)
+--   * pass_through              → metrics/pass_through_rate.yaml (decision-based)
+--   * median_days_in_stage      → metrics/days_in_stage.yaml     (per-stage dwell)
+-- conversion_rate and pass_through differ on the denominator: conversion divides
+-- by everyone who EVER reached a stage (pending included, so it drifts);
+-- pass_through divides by those who got a VERDICT there (moved on or died),
+-- keeping the still-waiting apps aside. Likewise time_in_stage is cumulative from
+-- 'applied' while days_in_stage is the dwell within a single stage.
 CREATE OR REPLACE FUNCTION get_funnel_metrics(
     p_window_days int DEFAULT NULL,
     p_user_id uuid DEFAULT auth.uid()
@@ -51,9 +60,10 @@ BEGIN
     ),
     stages AS (
         SELECT * FROM (VALUES
-            ('applied', 1), ('screening', 2), ('interviewing', 3),
-            ('offer', 4), ('accepted', 5)
-        ) AS s(stage, ord)
+            ('applied', 1, 'screening'), ('screening', 2, 'interviewing'),
+            ('interviewing', 3, 'offer'), ('offer', 4, 'accepted'),
+            ('accepted', 5, NULL)
+        ) AS s(stage, ord, next_stage)
     ),
     counts AS (
         SELECT s.stage, s.ord, COUNT(DISTINCT h.application_id) AS cnt
@@ -80,6 +90,49 @@ BEGIN
         LEFT JOIN days d ON d.stage = s.stage
         WHERE s.stage <> 'applied'
         GROUP BY s.stage
+    ),
+    -- ── pass_through + days_in_stage: classify each (app, stage-it-reached) by
+    --    whether it moved on, died there, or is still pending a decision ───────
+    terminal AS (
+        SELECT application_id, MAX(changed_at) AS ended_at
+        FROM application_status_history
+        WHERE user_id = p_user_id AND to_status IN ('rejected', 'withdrawn')
+        GROUP BY application_id
+    ),
+    cur AS (
+        SELECT id, status FROM applications WHERE user_id = p_user_id
+    ),
+    classified AS (
+        SELECT
+            s.stage, s.ord, (s.next_stage IS NOT NULL) AS has_next,
+            (hn.reached_at IS NOT NULL) AS moved_on,
+            (hn.reached_at IS NULL AND c.status IN ('rejected', 'withdrawn')) AS terminated_here,
+            (hn.reached_at IS NULL
+             AND c.status NOT IN ('rejected', 'withdrawn', 'closed', 'accepted', 'draft')) AS pending,
+            CASE
+                WHEN hn.reached_at IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (hn.reached_at - h.reached_at)) / 86400.0
+                WHEN c.status IN ('rejected', 'withdrawn') AND t.ended_at IS NOT NULL
+                    THEN EXTRACT(EPOCH FROM (t.ended_at - h.reached_at)) / 86400.0
+                ELSE NULL   -- still in-stage: dwell not final yet, excluded from median
+            END AS dwell_days
+        FROM stages s
+        JOIN hist h        ON h.to_status = s.stage
+        LEFT JOIN hist hn  ON hn.application_id = h.application_id AND hn.to_status = s.next_stage
+        LEFT JOIN terminal t ON t.application_id = h.application_id
+        JOIN cur c         ON c.id = h.application_id
+    ),
+    stage_agg AS (
+        SELECT
+            s.stage, s.ord, (s.next_stage IS NOT NULL) AS has_next,
+            count(cl.*) AS total_ever,
+            count(*) FILTER (WHERE cl.moved_on)        AS moved_on,
+            count(*) FILTER (WHERE cl.terminated_here) AS terminated_here,
+            count(*) FILTER (WHERE cl.pending)         AS pending,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY cl.dwell_days) AS median_dwell
+        FROM stages s
+        LEFT JOIN classified cl ON cl.stage = s.stage
+        GROUP BY s.stage, s.ord, s.next_stage
     )
     SELECT jsonb_build_object(
         'success', true,
@@ -101,6 +154,26 @@ BEGIN
         'median_days_from_applied', (
             SELECT jsonb_object_agg(stage, CASE WHEN med IS NULL THEN NULL ELSE round(med::numeric, 1) END)
             FROM medians
+        ),
+        -- pass_through_rate.yaml — decision-conditioned advance rate per stage,
+        -- with the raw counts so the UI can show "50% (1/2)" + pending aside.
+        'pass_through', (
+            SELECT jsonb_object_agg(stage, jsonb_build_object(
+                'total_ever', total_ever,
+                'moved_on', moved_on,
+                'terminated_here', terminated_here,
+                'pending', pending,
+                'rate', CASE WHEN has_next AND (moved_on + terminated_here) > 0
+                             THEN round(moved_on::numeric / (moved_on + terminated_here), 3)
+                             ELSE NULL END
+            ))
+            FROM stage_agg
+        ),
+        -- days_in_stage.yaml — median dwell WITHIN each stage (entered → left).
+        'median_days_in_stage', (
+            SELECT jsonb_object_agg(stage,
+                CASE WHEN median_dwell IS NULL THEN NULL ELSE round(median_dwell::numeric, 1) END)
+            FROM stage_agg
         )
     ) INTO result;
 
@@ -213,6 +286,93 @@ END;
 $$;
 
 
+-- ============================================================================
+-- PRIORITY WEIGHTS  (user-adjustable — see migration 009)
+-- The five component weights are per-user data, edited by the Pipeline sliders.
+-- The ranking readers below resolve the caller's row and pass it to
+-- compute_priority; with no row they fall back to the neutral spec default, so
+-- nothing changes for a user who never touches the sliders. Source of truth for
+-- the defaults: semantic/metrics/priority_score.yaml.
+-- ============================================================================
+
+-- resolve — the user's stored weights as the jsonb compute_priority wants, or the
+-- neutral spec default when unset. Defined before get_action_queue (its caller).
+CREATE OR REPLACE FUNCTION resolve_priority_weights(p_user_id uuid)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (SELECT jsonb_build_object(
+            'experience', experience, 'location', location,
+            'comp', comp, 'career', career, 'growth', growth)
+         FROM priority_weights WHERE user_id = p_user_id),
+        '{"experience":0.35,"location":0.15,"comp":0.15,"career":0.20,"growth":0.15}'::jsonb
+    );
+$$;
+
+-- get_priority_weights — weights + whether they're customised (UI badge).
+CREATE OR REPLACE FUNCTION get_priority_weights(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'is_custom', EXISTS (SELECT 1 FROM priority_weights WHERE user_id = p_user_id),
+        'weights', resolve_priority_weights(p_user_id)
+    );
+$$;
+
+-- save_priority_weights — upsert, normalized so the five levers always sum to 1.0
+-- (the sliders move freely; we rescale on save). Returns the fresh get read.
+CREATE OR REPLACE FUNCTION save_priority_weights(
+    p_experience numeric,
+    p_location numeric,
+    p_comp numeric,
+    p_career numeric,
+    p_growth numeric,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_sum numeric;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_priority_weights: no user_id';
+    END IF;
+    v_sum := COALESCE(p_experience,0) + COALESCE(p_location,0) + COALESCE(p_comp,0)
+           + COALESCE(p_career,0) + COALESCE(p_growth,0);
+    IF v_sum <= 0 THEN
+        RAISE EXCEPTION 'save_priority_weights: weights must sum to a positive value';
+    END IF;
+
+    INSERT INTO priority_weights (user_id, experience, location, comp, career, growth)
+    VALUES (
+        p_user_id,
+        round(COALESCE(p_experience,0) / v_sum, 3),
+        round(COALESCE(p_location,0)   / v_sum, 3),
+        round(COALESCE(p_comp,0)       / v_sum, 3),
+        round(COALESCE(p_career,0)     / v_sum, 3),
+        round(COALESCE(p_growth,0)     / v_sum, 3)
+    )
+    ON CONFLICT (user_id) DO UPDATE SET
+        experience = EXCLUDED.experience,
+        location   = EXCLUDED.location,
+        comp       = EXCLUDED.comp,
+        career     = EXCLUDED.career,
+        growth     = EXCLUDED.growth,
+        updated_at = now();
+
+    RETURN get_priority_weights(p_user_id);
+END;
+$$;
+
+
 -- get_action_queue — the four buckets the search runs on, in one call:
 --   roles_to_apply   — tracked postings with no live application (force-ranked)
 --   role_followups   — applications awaiting a response past the threshold
@@ -247,18 +407,19 @@ AS $$
                         'priority', compute_priority(
                             jp.experience_alignment, jp.location, jp.remote_policy,
                             jp.salary_min, jp.salary_max, jp.career_trajectory,
-                            jp.growth_stage)
+                            jp.growth_stage, resolve_priority_weights(p_user_id))
                     ) AS rec,
                     row_number() OVER (
                         ORDER BY (compute_priority(
                             jp.experience_alignment, jp.location, jp.remote_policy,
                             jp.salary_min, jp.salary_max, jp.career_trajectory,
-                            jp.growth_stage)->>'score')::numeric DESC NULLS LAST,
+                            jp.growth_stage, resolve_priority_weights(p_user_id))->>'score')::numeric DESC NULLS LAST,
                             jp.closing_date NULLS LAST
                     ) AS rn
                 FROM job_postings jp
                 JOIN organizations o ON o.id = jp.organization_id
                 WHERE jp.user_id = p_user_id
+                  AND jp.closed_at IS NULL          -- skip closed/filled roles
                   AND NOT EXISTS (
                       SELECT 1 FROM applications a
                       WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
@@ -336,12 +497,13 @@ $$;
 -- get_prioritized_roles — the roles_to_apply bucket, force-ranked. Postings with
 -- no live (non-draft) application, each scored by compute_priority, highest
 -- first. The same query backs get_action_queue's roles_to_apply ordering.
+-- p_weights defaults to NULL → resolve the caller's stored weights (or the spec
+-- default if unset). An explicit p_weights still overrides, for experimentation.
 CREATE OR REPLACE FUNCTION get_prioritized_roles(
     p_user_id uuid DEFAULT auth.uid(),
     p_closing_days int DEFAULT 7,
     p_limit int DEFAULT NULL,
-    p_weights jsonb DEFAULT
-        '{"experience":0.35,"location":0.15,"comp":0.15,"career":0.20,"growth":0.15}'::jsonb,
+    p_weights jsonb DEFAULT NULL,
     p_comp_floor int DEFAULT 120000,
     p_comp_target int DEFAULT 220000
 )
@@ -349,7 +511,10 @@ RETURNS jsonb
 LANGUAGE sql
 STABLE
 AS $$
-    WITH ranked AS (
+    WITH eff AS (
+        SELECT COALESCE(p_weights, resolve_priority_weights(p_user_id)) AS w
+    ),
+    ranked AS (
         SELECT
             to_jsonb(jp) || jsonb_build_object(
                 'organization_name', o.name,
@@ -358,15 +523,16 @@ AS $$
                 'priority', compute_priority(
                     jp.experience_alignment, jp.location, jp.remote_policy,
                     jp.salary_min, jp.salary_max, jp.career_trajectory,
-                    jp.growth_stage, p_weights, p_comp_floor, p_comp_target)
+                    jp.growth_stage, (SELECT w FROM eff), p_comp_floor, p_comp_target)
             ) AS rec,
             compute_priority(
                 jp.experience_alignment, jp.location, jp.remote_policy,
                 jp.salary_min, jp.salary_max, jp.career_trajectory,
-                jp.growth_stage, p_weights, p_comp_floor, p_comp_target)->>'score' AS score
+                jp.growth_stage, (SELECT w FROM eff), p_comp_floor, p_comp_target)->>'score' AS score
         FROM job_postings jp
         JOIN organizations o ON o.id = jp.organization_id
         WHERE jp.user_id = p_user_id
+          AND jp.closed_at IS NULL                  -- skip closed/filled roles
           AND NOT EXISTS (
               SELECT 1 FROM applications a
               WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
@@ -375,7 +541,7 @@ AS $$
     SELECT jsonb_build_object(
         'success', true,
         'count', (SELECT count(*) FROM ranked),
-        'weights', p_weights,
+        'weights', (SELECT w FROM eff),
         'roles', COALESCE(
             (SELECT jsonb_agg(
                 rec || jsonb_build_object('rank', rn)
@@ -586,6 +752,88 @@ BEGIN
             v_posting.salary_min, v_posting.salary_max, v_posting.career_trajectory,
             v_posting.growth_stage)
     );
+END;
+$$;
+
+
+-- ============================================================================
+-- CLOSE / REOPEN A ROLE  (posting lifecycle — migration 012)
+-- "Filled" is a property of the posting, so it can be closed whether or not I
+-- ever applied. close_role stamps closed_at/closed_reason on the posting and —
+-- if I'd applied — cascades the still-live application to the terminal 'closed'
+-- status (the auto-log trigger records the transition). Terminal applications
+-- (accepted/rejected/withdrawn) are left as-is. Once closed_at is set the role
+-- drops out of the apply queue, follow-ups, and the analytics scatter.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION close_role(
+    p_job_posting_id uuid,
+    p_reason text DEFAULT 'filled',
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_posting job_postings;
+    v_apps_closed int;
+BEGIN
+    UPDATE job_postings
+    SET closed_at = COALESCE(closed_at, now()),   -- keep the original close time if re-closed
+        closed_reason = p_reason
+    WHERE id = p_job_posting_id
+      AND user_id = COALESCE(p_user_id, user_id)
+    RETURNING * INTO v_posting;
+
+    IF v_posting.id IS NULL THEN
+        RAISE EXCEPTION 'close_role: posting % not found or not owned', p_job_posting_id;
+    END IF;
+
+    -- Cascade live applications to 'closed' (leave terminal ones untouched).
+    WITH closed AS (
+        UPDATE applications
+        SET status = 'closed'
+        WHERE job_posting_id = p_job_posting_id
+          AND user_id = v_posting.user_id
+          AND status NOT IN ('accepted', 'rejected', 'withdrawn', 'closed')
+        RETURNING 1
+    )
+    SELECT count(*) INTO v_apps_closed FROM closed;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'posting', to_jsonb(v_posting),
+        'applications_closed', v_apps_closed
+    );
+END;
+$$;
+
+-- reopen_role — undo a close: clear the posting's closed flag so it re-enters the
+-- queue. Applications are left as-is (a 'closed' app stays closed; advance it by
+-- hand if the role genuinely reopened) — reopening the posting is the common case
+-- (closed it by mistake / the role came back) and shouldn't silently rewrite app
+-- history.
+CREATE OR REPLACE FUNCTION reopen_role(
+    p_job_posting_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_posting job_postings;
+BEGIN
+    UPDATE job_postings
+    SET closed_at = NULL,
+        closed_reason = NULL
+    WHERE id = p_job_posting_id
+      AND user_id = COALESCE(p_user_id, user_id)
+    RETURNING * INTO v_posting;
+
+    IF v_posting.id IS NULL THEN
+        RAISE EXCEPTION 'reopen_role: posting % not found or not owned', p_job_posting_id;
+    END IF;
+
+    RETURN jsonb_build_object('success', true, 'posting', to_jsonb(v_posting));
 END;
 $$;
 
@@ -831,6 +1079,7 @@ AS $$
                 SELECT jp.id, jp.title, jp.url, jp.location, jp.remote_policy,
                        jp.salary_min, jp.salary_max, jp.requirements, jp.nice_to_haves,
                        jp.experience_alignment, jp.career_trajectory, jp.growth_stage,
+                       jp.role_type, jp.closed_at, jp.closed_reason,
                        o.id AS organization_id, o.name AS organization_name
                 FROM job_postings jp
                 JOIN organizations o ON o.id = jp.organization_id
@@ -847,11 +1096,22 @@ AS $$
                     'fit', (
                         SELECT to_jsonb(f) FROM (
                             SELECT rf.alignment, rf.summary, rf.spikes, rf.gaps,
-                                   rf.tweaks, rf.model, rf.judged_at
+                                   rf.tweaks, rf.requirement_scores, rf.model, rf.judged_at
                             FROM role_fit rf
                             WHERE rf.resume_id = r.id
                               AND rf.job_posting_id = p_job_posting_id
                         ) f
+                    ),
+                    -- The user's eval label on this analysis (null until rated on
+                    -- the Tuning Bench) — lets the bench/role page show prior ratings.
+                    'eval', (
+                        SELECT to_jsonb(e) FROM (
+                            SELECT fe.rating, fe.is_best, fe.notes, fe.updated_at
+                            FROM fit_eval fe
+                            WHERE fe.resume_id = r.id
+                              AND fe.job_posting_id = p_job_posting_id
+                              AND fe.user_id = p_user_id
+                        ) e
                     )
                 ) ORDER BY r.is_default DESC, r.created_at
             ), '[]'::jsonb)
@@ -919,6 +1179,7 @@ AS $$
             FROM job_postings jp
             JOIN organizations o ON o.id = jp.organization_id
             WHERE jp.user_id = p_user_id
+              AND jp.closed_at IS NULL              -- closed roles drop off
         ), '[]'::jsonb)
     );
 $$;
@@ -950,6 +1211,7 @@ AS $$
                     'spikes', rf.spikes,
                     'gaps', rf.gaps,
                     'tweaks', rf.tweaks,
+                    'requirement_scores', rf.requirement_scores,
                     'model', rf.model,
                     'judged_at', rf.judged_at
                 ) ORDER BY rf.judged_at DESC
@@ -965,7 +1227,8 @@ AS $$
         -- source_count lets the UI flag it stale when newer judgements exist.
         'synthesis', (
             SELECT to_jsonb(s) FROM (
-                SELECT fs.themes, fs.headline, fs.source_count, fs.model, fs.synthesized_at
+                SELECT fs.themes, fs.headline, fs.source_count, fs.model,
+                       fs.synthesized_at, fs.manual_order
                 FROM resume_feedback_synthesis fs
                 WHERE fs.resume_id = p_resume_id AND fs.user_id = p_user_id
             ) s
@@ -1004,7 +1267,10 @@ BEGIN
         headline       = EXCLUDED.headline,
         source_count   = EXCLUDED.source_count,
         model          = EXCLUDED.model,
-        synthesized_at = now();
+        synthesized_at = now(),
+        -- a fresh synthesis comes value-ranked; drop any prior hand-ordering so
+        -- the panel re-sorts by the model's priority until re-ordered again.
+        manual_order   = false;
 
     RETURN jsonb_build_object('success', true);
 END;
@@ -1022,6 +1288,7 @@ CREATE OR REPLACE FUNCTION save_role_fit(
     p_spikes jsonb DEFAULT NULL,
     p_gaps jsonb DEFAULT NULL,
     p_tweaks jsonb DEFAULT NULL,
+    p_requirement_scores jsonb DEFAULT NULL,
     p_model text DEFAULT NULL,
     p_user_id uuid DEFAULT auth.uid()
 )
@@ -1036,15 +1303,16 @@ BEGIN
     END IF;
 
     INSERT INTO role_fit (user_id, job_posting_id, resume_id, alignment,
-                          summary, spikes, gaps, tweaks, model, judged_at)
+                          summary, spikes, gaps, tweaks, requirement_scores, model, judged_at)
     VALUES (p_user_id, p_job_posting_id, p_resume_id, p_alignment,
-            p_summary, p_spikes, p_gaps, p_tweaks, p_model, now())
+            p_summary, p_spikes, p_gaps, p_tweaks, p_requirement_scores, p_model, now())
     ON CONFLICT (job_posting_id, resume_id) DO UPDATE SET
         alignment = EXCLUDED.alignment,
         summary = EXCLUDED.summary,
         spikes = EXCLUDED.spikes,
         gaps = EXCLUDED.gaps,
         tweaks = EXCLUDED.tweaks,
+        requirement_scores = EXCLUDED.requirement_scores,
         model = EXCLUDED.model,
         judged_at = now();
 
@@ -1056,6 +1324,101 @@ BEGIN
 
     RETURN jsonb_build_object('success', true, 'experience_alignment', v_best);
 END;
+$$;
+
+
+-- ============================================================================
+-- FIT EVAL  (human labels on judge-fit analyses — the Tuning Bench, migration 014)
+-- The bench runs résumés × JDs and the user rates each analysis; the labels are
+-- the intel for tuning the judge-fit prompt. save_fit_eval upserts one rating;
+-- get_fit_evals returns the labeled set joined with the analysis it judged.
+-- ============================================================================
+
+-- save_fit_eval — upsert the user's verdict on one (posting × resume) analysis.
+-- Only non-null args change (pass just the field you're toggling). is_best is a
+-- tri-state via p_is_best: true/false sets it, NULL leaves it untouched.
+CREATE OR REPLACE FUNCTION save_fit_eval(
+    p_job_posting_id uuid,
+    p_resume_id uuid,
+    p_rating text DEFAULT NULL,
+    p_is_best boolean DEFAULT NULL,
+    p_notes text DEFAULT NULL,
+    p_clear_rating boolean DEFAULT false,   -- explicit un-set (NULL means "leave as is")
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row fit_eval;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_fit_eval: no user_id';
+    END IF;
+    -- ownership: the posting and resume must belong to the caller
+    IF NOT EXISTS (SELECT 1 FROM job_postings WHERE id = p_job_posting_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_fit_eval: posting % not found', p_job_posting_id;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM resumes WHERE id = p_resume_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_fit_eval: resume % not found', p_resume_id;
+    END IF;
+
+    INSERT INTO fit_eval (user_id, job_posting_id, resume_id, rating, is_best, notes)
+    VALUES (p_user_id, p_job_posting_id, p_resume_id,
+            CASE WHEN p_clear_rating THEN NULL ELSE p_rating END,
+            COALESCE(p_is_best, false), p_notes)
+    ON CONFLICT (job_posting_id, resume_id) DO UPDATE SET
+        rating  = CASE WHEN p_clear_rating THEN NULL
+                       ELSE COALESCE(p_rating, fit_eval.rating) END,
+        is_best = COALESCE(p_is_best, fit_eval.is_best),
+        notes   = COALESCE(p_notes, fit_eval.notes)
+    RETURNING * INTO v_row;
+
+    RETURN jsonb_build_object('success', true, 'eval', to_jsonb(v_row));
+END;
+$$;
+
+-- get_fit_evals — every rated analysis, joined with the role_fit it judged and
+-- the posting/resume labels. This is the export the bench hands back for prompt
+-- tuning: what the judge said (alignment + requirement_scores) next to the human
+-- verdict (rating + is_best + notes).
+CREATE OR REPLACE FUNCTION get_fit_evals(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'evals', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'job_posting_id', fe.job_posting_id,
+                    'title', jp.title,
+                    'organization_name', o.name,
+                    'resume_id', fe.resume_id,
+                    'resume_label', r.label,
+                    'resume_variant', r.variant,
+                    'rating', fe.rating,
+                    'is_best', fe.is_best,
+                    'notes', fe.notes,
+                    'updated_at', fe.updated_at,
+                    'alignment', rf.alignment,
+                    'summary', rf.summary,
+                    'requirement_scores', rf.requirement_scores,
+                    'model', rf.model
+                ) ORDER BY o.name, jp.title, r.label
+            )
+            FROM fit_eval fe
+            JOIN job_postings jp ON jp.id = fe.job_posting_id
+            JOIN organizations o ON o.id = jp.organization_id
+            JOIN resumes r ON r.id = fe.resume_id
+            LEFT JOIN role_fit rf ON rf.job_posting_id = fe.job_posting_id
+                                 AND rf.resume_id = fe.resume_id
+            WHERE fe.user_id = p_user_id
+        ), '[]'::jsonb)
+    );
 $$;
 
 
@@ -1239,17 +1602,298 @@ $$;
 
 
 -- ============================================================================
+-- ANALYTICS  (the signal map — powers the Insights scatter + signal backfill)
+-- ============================================================================
+
+-- get_roles_analytics — every posting with the three judged signals, the derived
+-- priority components (compute_priority, with neutral 0.5 fallbacks), raw comp +
+-- location for plotting, and per-signal "judged yet?" flags. One read backs both
+-- the Insights fit-vs-(career+growth) scatter and the "judge career + growth for
+-- all roles" backfill (which targets the rows whose flags are false).
+CREATE OR REPLACE FUNCTION get_roles_analytics(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'roles', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'posting_id', jp.id,
+                    'title', jp.title,
+                    'organization_id', o.id,
+                    'organization_name', o.name,
+                    'location', jp.location,
+                    'remote_policy', jp.remote_policy,
+                    'salary_min', jp.salary_min,
+                    'salary_max', jp.salary_max,
+                    'experience_alignment', jp.experience_alignment,
+                    'career_trajectory', jp.career_trajectory,
+                    'growth_stage', jp.growth_stage,
+                    'priority', compute_priority(
+                        jp.experience_alignment, jp.location, jp.remote_policy,
+                        jp.salary_min, jp.salary_max, jp.career_trajectory,
+                        jp.growth_stage),
+                    'application_status', (
+                        SELECT a.status FROM applications a
+                        WHERE a.job_posting_id = jp.id AND a.status <> 'draft'
+                        ORDER BY a.applied_date DESC NULLS LAST LIMIT 1
+                    ),
+                    'has_fit', EXISTS (
+                        SELECT 1 FROM role_fit rf
+                        WHERE rf.job_posting_id = jp.id AND rf.user_id = p_user_id
+                          AND rf.alignment IS NOT NULL
+                    ),
+                    'has_career', EXISTS (
+                        SELECT 1 FROM career_judgment cj
+                        WHERE cj.job_posting_id = jp.id AND cj.user_id = p_user_id
+                    ),
+                    'has_growth', (o.growth_judged_at IS NOT NULL)
+                ) ORDER BY o.name, jp.title
+            )
+            FROM job_postings jp
+            JOIN organizations o ON o.id = jp.organization_id
+            WHERE jp.user_id = p_user_id
+              AND jp.closed_at IS NULL              -- closed roles drop off
+        ), '[]'::jsonb)
+    );
+$$;
+
+
+-- ============================================================================
+-- BUILDABLE RESUME  (bullet library + JD-targeted assembly — migration 010)
+-- ============================================================================
+
+-- list_bullets — the whole library, section-grouped order then manual sort_order.
+CREATE OR REPLACE FUNCTION list_bullets(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'bullets', COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'id', b.id,
+                'section', b.section,
+                'org_label', b.org_label,
+                'text', b.text,
+                'tags', b.tags,
+                'sort_order', b.sort_order,
+                'is_active', b.is_active,
+                'source', b.source,
+                'updated_at', b.updated_at
+            ) ORDER BY b.section, b.sort_order, b.created_at
+        ), '[]'::jsonb)
+    )
+    FROM resume_bullets b
+    WHERE b.user_id = p_user_id;
+$$;
+
+-- upsert_bullet — create (p_id NULL) or update one library bullet. New bullets
+-- append to the end of their section (max sort_order + 1) unless one is given.
+CREATE OR REPLACE FUNCTION upsert_bullet(
+    p_section text,
+    p_text text,
+    p_org_label text DEFAULT NULL,
+    p_tags text[] DEFAULT '{}',
+    p_sort_order numeric DEFAULT NULL,
+    p_is_active boolean DEFAULT true,
+    p_source text DEFAULT 'manual',
+    p_id uuid DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row resume_bullets;
+    v_order numeric;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'upsert_bullet: no user_id';
+    END IF;
+
+    IF p_id IS NULL THEN
+        v_order := COALESCE(
+            p_sort_order,
+            (SELECT COALESCE(max(sort_order), 0) + 1 FROM resume_bullets
+             WHERE user_id = p_user_id AND section = p_section)
+        );
+        INSERT INTO resume_bullets (user_id, section, org_label, text, tags,
+                                    sort_order, is_active, source)
+        VALUES (p_user_id, p_section, p_org_label, p_text, COALESCE(p_tags, '{}'),
+                v_order, COALESCE(p_is_active, true), COALESCE(p_source, 'manual'))
+        RETURNING * INTO v_row;
+    ELSE
+        UPDATE resume_bullets SET
+            section    = p_section,
+            org_label  = p_org_label,
+            text       = p_text,
+            tags       = COALESCE(p_tags, tags),
+            sort_order = COALESCE(p_sort_order, sort_order),
+            is_active  = COALESCE(p_is_active, is_active)
+        WHERE id = p_id AND user_id = p_user_id
+        RETURNING * INTO v_row;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'upsert_bullet: bullet % not found', p_id;
+        END IF;
+    END IF;
+
+    RETURN jsonb_build_object('success', true, 'id', v_row.id);
+END;
+$$;
+
+-- delete_bullet — remove one library bullet.
+CREATE OR REPLACE FUNCTION delete_bullet(
+    p_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    DELETE FROM resume_bullets WHERE id = p_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'delete_bullet: bullet % not found', p_id;
+    END IF;
+    RETURN jsonb_build_object('success', true, 'id', p_id);
+END;
+$$;
+
+-- reorder_bullets — set sort_order from array position (drag-to-reorder). Only
+-- the caller's bullets are touched; ids not owned are ignored.
+CREATE OR REPLACE FUNCTION reorder_bullets(
+    p_ids uuid[],
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'reorder_bullets: no user_id';
+    END IF;
+    UPDATE resume_bullets b
+    SET sort_order = pos.ord
+    FROM (SELECT id, ordinality AS ord FROM unnest(p_ids) WITH ORDINALITY AS t(id, ordinality)) pos
+    WHERE b.id = pos.id AND b.user_id = p_user_id;
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- save_synthesis_order — persist a hand-reorder (and any edits) of a resume's
+-- synthesis themes WITHOUT re-running the judge. Flags manual_order so the UI
+-- renders the stored array order instead of re-sorting by the model's priority.
+CREATE OR REPLACE FUNCTION save_synthesis_order(
+    p_resume_id uuid,
+    p_themes jsonb,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_synthesis_order: no user_id';
+    END IF;
+    UPDATE resume_feedback_synthesis
+    SET themes = p_themes, manual_order = true
+    WHERE resume_id = p_resume_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'save_synthesis_order: no synthesis for resume %', p_resume_id;
+    END IF;
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- get_assembled_resume — the current AI-built one-pager for a posting (or null).
+CREATE OR REPLACE FUNCTION get_assembled_resume(
+    p_job_posting_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'assembled', (
+            SELECT to_jsonb(a) FROM (
+                SELECT ar.job_posting_id, ar.base_resume_id, ar.body_md,
+                       ar.selected_bullet_ids, ar.rationale, ar.model, ar.generated_at
+                FROM assembled_resumes ar
+                WHERE ar.job_posting_id = p_job_posting_id AND ar.user_id = p_user_id
+            ) a
+        )
+    );
+$$;
+
+-- save_assembled_resume — upsert the one-pager for a posting (one row per
+-- posting; regenerate overwrites). Called by the assemble-resume edge function
+-- (service_role, passes p_user_id) and by the UI when the user edits the draft.
+CREATE OR REPLACE FUNCTION save_assembled_resume(
+    p_job_posting_id uuid,
+    p_body_md text,
+    p_selected_bullet_ids jsonb DEFAULT NULL,
+    p_rationale text DEFAULT NULL,
+    p_base_resume_id uuid DEFAULT NULL,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_assembled_resume: no user_id';
+    END IF;
+    -- ownership: the posting must belong to the caller
+    IF NOT EXISTS (SELECT 1 FROM job_postings WHERE id = p_job_posting_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_assembled_resume: posting % not found', p_job_posting_id;
+    END IF;
+
+    -- Optional fields default to "keep existing" so a manual body edit (which
+    -- passes only p_body_md) doesn't wipe the generation's rationale/selection.
+    INSERT INTO assembled_resumes (job_posting_id, user_id, base_resume_id, body_md,
+                                   selected_bullet_ids, rationale, model, generated_at)
+    VALUES (p_job_posting_id, p_user_id, p_base_resume_id, p_body_md,
+            p_selected_bullet_ids, p_rationale, p_model, now())
+    ON CONFLICT (job_posting_id) DO UPDATE SET
+        base_resume_id      = COALESCE(EXCLUDED.base_resume_id, assembled_resumes.base_resume_id),
+        body_md             = EXCLUDED.body_md,
+        selected_bullet_ids = COALESCE(EXCLUDED.selected_bullet_ids, assembled_resumes.selected_bullet_ids),
+        rationale           = COALESCE(EXCLUDED.rationale, assembled_resumes.rationale),
+        model               = COALESCE(EXCLUDED.model, assembled_resumes.model),
+        generated_at        = now();
+
+    RETURN jsonb_build_object('success', true, 'job_posting_id', p_job_posting_id);
+END;
+$$;
+
+
+-- ============================================================================
 -- Grants — both planes. `authenticated` = the SPA's logged-in user (RLS
 -- scopes them); `service_role` = the MCP edge function.
 -- ============================================================================
 GRANT EXECUTE ON FUNCTION get_funnel_metrics(int, uuid)              TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_action_queue(uuid, int, int, int, int) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION compute_priority(numeric, text, text, int, int, text, text, jsonb, int, int) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION resolve_priority_weights(uuid)                       TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_priority_weights(uuid)                           TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_priority_weights(numeric, numeric, numeric, numeric, numeric, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_prioritized_roles(uuid, int, int, jsonb, int, int) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, numeric, text, text, text[], uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION submit_application(uuid, uuid, text, date, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION close_role(uuid, text, uuid)             TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION reopen_role(uuid, uuid)                  TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume(uuid)                          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION upsert_resume(text, text, uuid)           TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION list_resumes(uuid)                        TO authenticated, service_role;
@@ -1260,8 +1904,18 @@ GRANT EXECUTE ON FUNCTION get_role_fit(uuid, uuid)                 TO authentica
 GRANT EXECUTE ON FUNCTION get_fit_coverage(uuid)                   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume_feedback(uuid, uuid)          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_resume_synthesis(uuid, jsonb, text, int, text, uuid) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_fit_eval(uuid, uuid, text, boolean, text, boolean, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_fit_evals(uuid)                      TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_career_profile(uuid)                 TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_career_profile(text, text, text, int, numeric, int, text, text, text, int, text[], text[], text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_career_judgment(uuid, text, numeric, jsonb, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_growth_judgment(uuid, text, numeric, jsonb, jsonb, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_roles_analytics(uuid)               TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION list_bullets(uuid)                       TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION upsert_bullet(text, text, text, text[], numeric, boolean, text, uuid, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION delete_bullet(uuid, uuid)               TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION reorder_bullets(uuid[], uuid)           TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_synthesis_order(uuid, jsonb, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_assembled_resume(uuid, uuid)        TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_assembled_resume(uuid, text, jsonb, text, uuid, text, uuid) TO authenticated, service_role;

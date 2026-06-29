@@ -5,26 +5,35 @@ import { supabase } from "./lib/supabase";
 import Dashboard from "./pages/Dashboard";
 import Pipeline from "./pages/Pipeline";
 import ActionQueue from "./pages/ActionQueue";
-import Funnel from "./pages/Funnel";
 import RoleDetail from "./pages/RoleDetail";
 import RoleFit from "./pages/RoleFit";
 import Company from "./pages/Company";
 import Profile from "./pages/Profile";
+import TuningBench from "./pages/TuningBench";
 
 function Login() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Two paths: a password (for the demo account / any non-deliverable email) or,
+  // when the password is left blank, a magic link to a real inbox.
   async function signIn(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin },
-    });
-    if (error) setError(error.message);
-    else setSent(true);
+    if (password) {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) setError(error.message);
+      // success → onAuthStateChange swaps in the app
+    } else {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      if (error) setError(error.message);
+      else setSent(true);
+    }
   }
 
   return (
@@ -43,7 +52,13 @@ function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-            <button type="submit">Send magic link</button>
+            <input
+              type="password"
+              placeholder="Password (leave blank for a magic link)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            <button type="submit">{password ? "Sign in" : "Send magic link"}</button>
             {error && <p className="error">{error}</p>}
           </form>
         )}
@@ -56,8 +71,8 @@ const NAV: { to: string; label: string; end: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/pipeline", label: "Pipeline", end: false },
   { to: "/queue", label: "Action Queue", end: false },
-  { to: "/funnel", label: "Funnel", end: false },
   { to: "/resume", label: "Resumes", end: false },
+  { to: "/bench", label: "Tune", end: false },
 ];
 
 export default function App() {
@@ -96,8 +111,8 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/queue" element={<ActionQueue />} />
-          <Route path="/funnel" element={<Funnel />} />
           <Route path="/resume" element={<Profile />} />
+          <Route path="/bench" element={<TuningBench />} />
           <Route path="/role/:id" element={<RoleDetail />} />
           <Route path="/posting/:id" element={<RoleFit />} />
           <Route path="/company/:id" element={<Company />} />

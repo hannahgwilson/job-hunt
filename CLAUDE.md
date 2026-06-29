@@ -83,6 +83,16 @@ When I paste a job-description link (or describe a role):
     advance_decision: 'advance' | 'hold' | 'withdraw' | 'rejected',
     decision_notes })`. **`advance_decision` is the explicit "do I move
     forward?" call** the requirements asked for.
+- **Close out a filled role:** `close_role({ job_posting_id, reason })` —
+  `reason` ∈ `filled` (default) | `expired` | `removed` |
+  `no_longer_interested` | `duplicate` | `other`. "Filled" is a property of the *posting*, so
+  this works **before or after I apply**: the role drops out of the apply queue,
+  follow-ups, and the Insights scatter. If I had a live application it cascades to
+  the terminal `closed` status (distinct from `rejected`/`withdrawn` — the role
+  closed, it wasn't a verdict on me; terminal apps are left alone). Undo with
+  `reopen_role({ job_posting_id })`. In the UI: the "Close role…" control on the
+  role page (`/posting/:id` or `/role/:id`); closed roles live under Pipeline →
+  "Closed roles".
 
 ## Play 3 — Weekly review (requirement 3)
 
@@ -126,7 +136,13 @@ Five weighted components (weights sum to 1.0):
   the **Priority breakdown** card at the top shows every input expanded (raw value
   · weight · points), with a button per judged signal:
   - **experience** → "Run AI judge" (judge-fit): scores every resume variant vs
-    the JD, lifts `experience_alignment` to the best fit.
+    the JD and lifts `experience_alignment` to the best fit. It scores by
+    **adjacency, not keyword matching** — each JD requirement is tiered Identical
+    / Adjacent / Aware / Gap (so a Looker résumé still earns credit against a
+    Tableau JD, but a real gap stays a gap), and the score is the importance-
+    weighted average of that per-requirement table. The table is persisted and
+    shown on the role page; the tiering rules are in
+    [`resume-scoring-prompt-instructions.md`](resume-scoring-prompt-instructions.md).
   - **career** → "Judge career move" (judge-career): reads the JD against the
     user's **career profile** (Resumes page → Career profile) and returns
     step_up/lateral/step_back. Without a profile set the call is un-personalized
@@ -137,9 +153,14 @@ Five weighted components (weights sum to 1.0):
     are scored for free). Costs an external search — the per-company caching is why.
   Each judge writes the same column `compute_priority` reads, so a freshly judged
   role re-ranks immediately. See [`supabase/functions/JUDGE_SIGNALS_SPEC.md`](supabase/functions/JUDGE_SIGNALS_SPEC.md).
-- To re-weight the search (e.g. care more about comp), edit the YAML **and** the
-  matching `DEFAULT`s in `functions.sql` (`compute_priority` / `get_prioritized_roles`),
-  then re-apply `functions.sql`. The YAML is the source of truth.
+- To re-weight the search (e.g. care more about comp) **for this user**, move the
+  sliders on the **Pipeline page** — they persist to the `priority_weights` table
+  and `resolve_priority_weights()` feeds them into the force-ranking, so the queue
+  (UI *and* MCP/`get_action_queue`) re-ranks immediately. To move the **default**
+  everyone falls back to, edit the YAML **and** the matching `DEFAULT`s in
+  `functions.sql` (`compute_priority` / `get_prioritized_roles` / the literal in
+  `resolve_priority_weights`), then re-apply `functions.sql`. The YAML is the
+  source of truth for the defaults.
 
 ## Notes for the assistant
 

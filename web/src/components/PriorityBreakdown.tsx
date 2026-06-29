@@ -6,6 +6,9 @@ import {
   type PriorityInputs,
 } from "../lib/priority";
 
+// Weights are overridable so the breakdown reflects the user's saved levers
+// (get_priority_weights) — falls back to the spec default constant.
+
 // The five inputs to the priority score, expanded — what the mini fit-bars in
 // the to-apply table show, but with the raw input, weight, and points each
 // component contributes spelled out. Mirrors functions.sql via lib/priority.
@@ -158,12 +161,14 @@ function GrowthJudgeBlock({ j, busy, onRun }: { j: GrowthJudgment | null; busy: 
 export default function PriorityBreakdown({
   inputs,
   judges,
+  weights = WEIGHTS,
 }: {
   inputs: PriorityInputs;
   judges?: PriorityJudges;
+  weights?: PriorityComponents;
 }) {
   const components = priorityComponents(inputs);
-  const score = priorityScore(components);
+  const score = priorityScore(components, weights);
   const anyNeutral = ORDER.some((k) => describe(k, inputs).neutral);
 
   return (
@@ -176,7 +181,7 @@ export default function PriorityBreakdown({
       <div className="pb-rows">
         {ORDER.map((key) => {
           const fit = components[key];
-          const weight = WEIGHTS[key];
+          const weight = weights[key];
           const points = fit * weight * 100;
           const { input, neutral } = describe(key, inputs);
           return (

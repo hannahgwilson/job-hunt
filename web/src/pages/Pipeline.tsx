@@ -1,19 +1,13 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { advanceApplication, fetchApplications, fetchActionQueue, fetchFitCoverage, submitApplication } from "../lib/api";
-import { PIPELINE_COLUMNS, type Application, type ActionQueue, type FitCoveragePosting } from "../lib/types";
+import { fetchApplications, fetchActionQueue, fetchClosedRoles, fetchFitCoverage, fetchRejectedApplications, reopenRole, submitApplication } from "../lib/api";
+import { CLOSED_REASON_LABELS, PIPELINE_COLUMNS, type Application, type ActionQueue, type ClosedRole, type FitCoveragePosting, type RejectedApplication } from "../lib/types";
 import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
 import RolesToApplyTable from "../components/RolesToApplyTable";
-
-const NEXT: Record<string, string | null> = {
-  applied: "screening",
-  screening: "interviewing",
-  interviewing: "offer",
-  offer: "accepted",
-  accepted: null,
-};
+import PriorityWeightsPanel from "../components/PriorityWeightsPanel";
+import StatusActions from "../components/StatusActions";
 
 export default function Pipeline() {
   const [apps, setApps] = useState<Application[]>([]);
@@ -22,6 +16,10 @@ export default function Pipeline() {
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [showClosed, setShowClosed] = useState(false);
+  const [closed, setClosed] = useState<ClosedRole[]>([]);
+  const [showRejected, setShowRejected] = useState(false);
+  const [rejected, setRejected] = useState<RejectedApplication[]>([]);
   const navigate = useNavigate();
   const batch = useBatchJudge();
 
@@ -29,6 +27,17 @@ export default function Pipeline() {
     fetchApplications().then(setApps).catch((e) => setError(e.message));
     fetchActionQueue().then(setQueue).catch((e) => setError(e.message));
     fetchFitCoverage().then(setCoverage).catch((e) => setError(e.message));
+    fetchClosedRoles().then(setClosed).catch((e) => setError(e.message));
+    fetchRejectedApplications().then(setRejected).catch((e) => setError(e.message));
+  }
+
+  async function reopen(postingId: string) {
+    try {
+      await reopenRole(postingId);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   // Backfill: postings nobody has judged yet (skips the ones done by hand).
@@ -50,17 +59,6 @@ export default function Pipeline() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);
-
-  async function advance(app: Application) {
-    const next = NEXT[app.status];
-    if (!next) return;
-    try {
-      await advanceApplication(app.id, next);
-      load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
 
   async function apply(postingId: string) {
     setApplyingId(postingId);
@@ -104,9 +102,15 @@ export default function Pipeline() {
                 {unjudged.length === 0 ? "All roles judged" : `Judge ${unjudged.length} un-judged`}
               </button>
             )}
+            {!batch.running && batch.errors > 0 && (
+              <span className="error small" title={batch.lastError ?? undefined}>
+                {batch.errors} judge{batch.errors === 1 ? "" : "s"} failed{batch.lastError ? ` — ${batch.lastError}` : ""}
+              </span>
+            )}
             <span className="muted small">ranked by priority — click a header to re-sort</span>
           </div>
         </div>
+        <PriorityWeightsPanel onSaved={() => fetchActionQueue().then(setQueue).catch((e) => setError(e.message))} />
         {!queue ? <p className="muted">Loading…</p> : (
           <RolesToApplyTable roles={queue.roles_to_apply} onApply={apply} applyingId={applyingId} />
         )}
@@ -128,11 +132,9 @@ export default function Pipeline() {
                     {a.job_postings?.url && (
                       <a href={a.job_postings.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>posting ↗</a>
                     )}
-                    {NEXT[a.status] && (
-                      <button className="ghost sm" onClick={(e) => { e.stopPropagation(); advance(a); }}>
-                        → {NEXT[a.status]}
-                      </button>
-                    )}
+                    {/* Reject / Withdraw move the card off the board into the
+                        "Rejected applications" area below. */}
+                    <StatusActions app={a} onChanged={load} onError={setError} compact />
                   </div>
                 </div>
               ))}
@@ -141,6 +143,76 @@ export default function Pipeline() {
           );
         })}
       </div>
+
+      {/* Closed/filled roles — hidden by default, revealed by the toggle. They're
+          kept for history (and the funnel) but stay out of the active search. */}
+      {closed.length > 0 && (
+        <section className="card span-2 closed-roles">
+          <div className="section-head">
+            <h2>Closed roles <span className="count">{closed.length}</span></h2>
+            <button className="ghost sm" onClick={() => setShowClosed((v) => !v)}>
+              {showClosed ? "Hide" : "Show closed"}
+            </button>
+          </div>
+          {showClosed && (
+            <ul className="closed-list">
+              {closed.map((r) => (
+                <li key={r.id}>
+                  <span className="pill pill-closed">{CLOSED_REASON_LABELS[r.closed_reason ?? "other"]}</span>
+                  {r.application_id ? (
+                    <Link to={`/role/${r.application_id}`}>{r.title}</Link>
+                  ) : (
+                    <Link to={`/posting/${r.id}`}>{r.title}</Link>
+                  )}
+                  <span className="muted"> · {r.organization_name}</span>
+                  <button className="ghost sm" onClick={() => reopen(r.id)}>Reopen</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* Rejected / withdrawn applications — off the board, kept for the record
+          (and the funnel) with the stage they died at, how long they sat there,
+          and the fit score, so patterns are visible at a glance. */}
+      {rejected.length > 0 && (
+        <section className="card span-2 rejected-apps">
+          <div className="section-head">
+            <h2>Rejected applications <span className="count">{rejected.length}</span></h2>
+            <button className="ghost sm" onClick={() => setShowRejected((v) => !v)}>
+              {showRejected ? "Hide" : "Show rejected"}
+            </button>
+          </div>
+          {showRejected && (
+            <table className="rejected-table">
+              <thead>
+                <tr>
+                  <th>Role</th><th>Outcome</th><th>Stage</th>
+                  <th className="num">Days in stage</th><th className="num">Days in pipeline</th>
+                  <th className="num">Fit</th><th className="num">Interviews</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rejected.map((r) => (
+                  <tr key={r.application_id} onClick={() => navigate(`/role/${r.application_id}`)}>
+                    <td>
+                      <span className="rt-title">{r.title}</span>
+                      <span className="muted"> · {r.organization_name}</span>
+                    </td>
+                    <td><span className={`pill pill-${r.status}`}>{r.status}</span></td>
+                    <td>{r.stage_rejected_at ? <span className={`pill pill-${r.stage_rejected_at}`}>{r.stage_rejected_at}</span> : <span className="muted">—</span>}</td>
+                    <td className="num">{r.days_in_stage ?? "—"}</td>
+                    <td className="num">{r.days_in_pipeline ?? "—"}</td>
+                    <td className="num">{r.fit_score != null ? `${Math.round(r.fit_score * 100)}%` : "—"}</td>
+                    <td className="num">{r.interviews}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
     </div>
   );
 }

@@ -75,7 +75,11 @@ When I paste a job-description link (or describe a role):
 - **Move stages (go/no-go is per round):**
   - `update_application_status({ application_id, status })` for the application's
     overall stage (`applied → screening → interviewing → offer → accepted` or
-    `rejected`/`withdrawn`). Every transition is auto-logged.
+    `rejected`/`withdrawn`). Every transition is auto-logged. In the UI these are
+    the **Reject / Withdraw** buttons on each Pipeline kanban card and on the role
+    page; a rejected/withdrawn app drops off the board into Pipeline → **"Rejected
+    applications"**, which shows the stage it died at, days in that stage, days in
+    pipeline, fit score, and interview count (computed from the status history).
   - `schedule_interview({ application_id, interview_type, scheduled_at,
     interviewer_contact_id?, add_to_calendar: true })` — `add_to_calendar` also
     surfaces it in the family-calendar week view.
@@ -87,7 +91,7 @@ When I paste a job-description link (or describe a role):
   `reason` ∈ `filled` (default) | `expired` | `removed` |
   `no_longer_interested` | `duplicate` | `other`. "Filled" is a property of the *posting*, so
   this works **before or after I apply**: the role drops out of the apply queue,
-  follow-ups, and the Insights scatter. If I had a live application it cascades to
+  follow-ups, and the Dashboard fit map. If I had a live application it cascades to
   the terminal `closed` status (distinct from `rejected`/`withdrawn` — the role
   closed, it wasn't a verdict on me; terminal apps are left alone). Undo with
   `reopen_role({ job_posting_id })`. In the UI: the "Close role…" control on the
@@ -106,7 +110,13 @@ When I paste a job-description link (or describe a role):
 2. Triage with me; for each new networking action, `capture_thought` a task note
    (tags `['job-search','networking']`) so it persists across sessions.
 3. `get_pipeline_overview()` for the status snapshot, `get_funnel_metrics()` for
-   conversion + median time-in-stage when I ask "how's it going?".
+   the funnel metrics when I ask "how's it going?". It returns four per-stage
+   metrics (each defined in `semantic/metrics/`): `conversion_rates` and
+   `median_days_from_applied` (cumulative), plus `pass_through` — the
+   decision-conditioned advance rate (advanced ÷ decided, pending kept aside) —
+   and `median_days_in_stage` (dwell within a stage). The tracking-hub
+   **Dashboard** surfaces the latter two as the "Stage funnel" table and the
+   status distribution; click a status bar there to list the apps in that phase.
 
 ## Play 4 — Prioritize the apply queue (force-ranking)
 

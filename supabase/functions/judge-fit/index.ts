@@ -7,6 +7,15 @@
  * force-ranking stops tapping out at the neutral 0.5 default). Returns the fresh
  * get_role_fit payload so the page can re-render immediately.
  *
+ * Scoring is by ADJACENCY, not keyword matching: the model tiers each JD
+ * requirement Identical / Adjacent / Aware / Gap (so a Looker résumé earns credit
+ * against a Tableau JD, but a genuine gap stays a gap) and derives `alignment` as
+ * the importance-weighted average of that per-requirement table — which is itself
+ * persisted (role_fit.requirement_scores) so the score is defensible. The persona,
+ * tool schema, and tiering rules live in ./prompt.ts (shared with harness/run.ts
+ * so the tuning harness exercises the real prompt); the framework is specified in
+ * /resume-scoring-prompt-instructions.md.
+ *
  * Why a separate edge function (not the MCP / not SQL): it makes an outbound
  * Anthropic call with a secret key, which must stay server-side.
  *
@@ -21,6 +30,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import { buildFitMessages, buildFitSystem, FIT_TOOL, type FitResult, jdContext } from "./prompt.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -31,105 +41,12 @@ const CORS = {
 const MODEL = Deno.env.get("JUDGE_MODEL") ?? "claude-sonnet-4-6";
 const ANTHROPIC_VERSION = "2023-06-01";
 
-// Structured-output tool: forces Claude to return exactly these fields.
-const FIT_TOOL = {
-  name: "report_fit",
-  description:
-    "Report how well a single resume fits a specific job description. First decide whether the JD is an individual-contributor or a people-management role, then judge the resume against the skills THAT role type demands. Be concrete and specific to THIS resume and THIS JD — never generic.",
-  input_schema: {
-    type: "object",
-    properties: {
-      role_type: {
-        type: "string",
-        enum: ["ic", "manager", "hybrid", "unclear"],
-        description:
-          "What track is THIS JD, judged from its responsibilities (not just the title)? ic = individual contributor (own technical/functional delivery, no direct reports); manager = people leadership (direct reports, hiring, performance, org-building is the core of the job); hybrid = player-coach / lead (real IC work AND people leadership); unclear = the JD doesn't say. Decide this first — it sets which skills matter.",
-      },
-      track_alignment: {
-        type: "string",
-        enum: ["match", "stretch", "mismatch"],
-        description:
-          "How well the resume's own track matches role_type. match = the resume is clearly for this track; stretch = adjacent / could be argued (e.g. a senior IC reaching for a lead role); mismatch = wrong track (e.g. a pure people-manager resume for a hands-on IC role, or vice versa) — a real risk to the application, call it out.",
-      },
-      alignment: {
-        type: "number",
-        description:
-          "0..1 fit, weighted by what matters for THIS role type. Weight the JD's core / must-have requirements far above nice-to-haves — missing a nice-to-have should barely move the score; missing a core requirement should. 100% is not required for a strong fit. Calibrate and SPREAD across the band: 0.90-1.0 = clears every core requirement with strong evidence, an obvious yes; 0.75-0.89 = clears the core, only minor/secondary gaps; 0.55-0.74 = meets most of the core but has one real core gap or thin evidence — a stretch worth a tailored resume; 0.35-0.54 = misses multiple core requirements OR a track mismatch (e.g. IC resume vs manager role); below 0.35 = wrong role. A track mismatch caps alignment in the 0.35-0.5 band even if other skills look strong.",
-      },
-      summary: {
-        type: "string",
-        description: "2-4 sentence read of this resume against the JD. Name the role type and, if the resume is the wrong track for it, lead with that.",
-      },
-      spikes: {
-        type: "array",
-        items: { type: "string" },
-        description: "Specific requirements this resume clearly satisfies (the strengths to lead with).",
-      },
-      gaps: {
-        type: "array",
-        items: { type: "string" },
-        description: "Specific requirements this resume does NOT evidence, or evidences weakly.",
-      },
-      tweaks: {
-        type: "array",
-        description:
-          "A few high-leverage, non-generic edits to better match this JD. Assume BOTH a human reviewer and an ATS / AI keyword screen will read the resume.",
-        items: {
-          type: "object",
-          properties: {
-            section: { type: "string", description: "Which resume section/bullet to change." },
-            suggestion: { type: "string", description: "The concrete proposed change." },
-            rationale: { type: "string", description: "Why it helps against this JD (human + ATS)." },
-          },
-          required: ["suggestion"],
-        },
-      },
-    },
-    required: ["role_type", "track_alignment", "alignment", "summary", "spikes", "gaps", "tweaks"],
-  },
-};
-
-// Persona + stable rubric live in the system prompt (better adherence + lets the
-// JD/resume turn be cached). The variable JD + resume go in the user message.
-const FIT_SYSTEM =
-  "You are a sharp hiring manager who also knows how ATS / AI keyword screens work. " +
-  "You screen one resume against one job description and judge fit honestly — never inflate. " +
-  "Crucially: decide whether the JD is an individual-contributor role or a people-management role FIRST, " +
-  "because the skills that matter differ sharply. A people-manager role rewards leadership, hiring, " +
-  "headcount/org scope, cross-functional influence, and outcomes delivered THROUGH a team; an IC role " +
-  "rewards hands-on depth, individual ownership, and technical/functional craft. A resume aimed at the " +
-  "wrong track is a genuine misalignment — surface it rather than scoring around it. " +
-  "Weight the JD's core requirements above its nice-to-haves; a resume need not match everything to be a strong fit.";
-
-function jdContext(p: Record<string, unknown>): string {
-  const parts: string[] = [];
-  parts.push(`Title: ${p.title ?? "(untitled)"}`);
-  if (p.location) parts.push(`Location: ${p.location}`);
-  if (p.remote_policy) parts.push(`Remote policy: ${p.remote_policy}`);
-  if (p.salary_min || p.salary_max) parts.push(`Salary: ${p.salary_min ?? "?"}–${p.salary_max ?? "?"}`);
-  const reqs = (p.requirements as string[] | null) ?? [];
-  if (reqs.length) parts.push(`Requirements:\n- ${reqs.join("\n- ")}`);
-  const nice = (p.nice_to_haves as string[] | null) ?? [];
-  if (nice.length) parts.push(`Nice to have:\n- ${nice.join("\n- ")}`);
-  if (p.notes) parts.push(`Notes / JD excerpt:\n${p.notes}`);
-  if (p.url) parts.push(`Source: ${p.url}`);
-  return parts.join("\n\n");
-}
-
 async function judgeOne(
   apiKey: string,
   jd: string,
   resumeLabel: string,
   resumeText: string,
-): Promise<{
-  role_type: "ic" | "manager" | "hybrid" | "unclear";
-  track_alignment: "match" | "stretch" | "mismatch";
-  alignment: number;
-  summary: string;
-  spikes: string[];
-  gaps: string[];
-  tweaks: Array<{ section?: string; suggestion: string; rationale?: string }>;
-}> {
+): Promise<FitResult> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -139,20 +56,17 @@ async function judgeOne(
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1500,
-      system: FIT_SYSTEM,
+      // Headroom for the full per-requirement adjacency table (one row per JD
+      // requirement) PLUS alignment/summary/spikes/gaps/tweaks after it. At 1500
+      // a long requirement list truncated the tool_use mid-array, so the fields
+      // after it came back undefined — see the stop_reason guard below.
+      max_tokens: 4096,
+      // Stable prefix (cached): tool + persona + this resume; only the JD in the
+      // user turn changes per posting. See prompt.ts for the cache rationale.
+      system: buildFitSystem(resumeLabel, resumeText),
       tools: [FIT_TOOL],
       tool_choice: { type: "tool", name: "report_fit" },
-      messages: [
-        {
-          role: "user",
-          content:
-            `Decide the role type first, then judge fit against the skills that role type demands.\n\n` +
-            `=== JOB DESCRIPTION ===\n${jd}\n\n` +
-            `=== RESUME (variant label: ${resumeLabel}) ===\n${resumeText}\n\n` +
-            `Call report_fit. Keep spikes/gaps/tweaks specific to this resume and this JD, and frame them for the role type you determined.`,
-        },
-      ],
+      messages: buildFitMessages(jd),
     }),
   });
 
@@ -162,9 +76,27 @@ async function judgeOne(
   }
 
   const data = await res.json();
+  // Observability: confirm the resume prefix is actually being served from cache
+  // across a batch. cache_read_input_tokens stays 0 if a silent invalidator crept
+  // into the prefix (or the prefix is under the model's min cacheable size).
+  const u = data.usage ?? {};
+  console.log(
+    `judge-fit cache: read=${u.cache_read_input_tokens ?? 0} write=${u.cache_creation_input_tokens ?? 0} uncached=${u.input_tokens ?? 0} (${resumeLabel})`,
+  );
+  // A max_tokens stop truncates the tool_use mid-JSON: the fields after the cut
+  // (alignment/summary/…) come back undefined, which downstream collapses into a
+  // confusing "save_role_fit not found" (the rpc drops the undefined keys). Fail
+  // loudly here instead, and bump max_tokens above if it recurs.
+  if (data.stop_reason === "max_tokens") {
+    throw new Error(`report_fit truncated at max_tokens (${resumeLabel}) — raise max_tokens`);
+  }
   const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use");
   if (!toolUse) throw new Error("Anthropic returned no tool_use block");
-  return toolUse.input;
+  const fit = toolUse.input as FitResult;
+  if (fit.alignment == null) {
+    throw new Error(`report_fit returned no alignment (${resumeLabel}) — incomplete tool output`);
+  }
+  return fit;
 }
 
 Deno.serve(async (req) => {
@@ -236,6 +168,7 @@ Deno.serve(async (req) => {
           p_spikes: fit.spikes,
           p_gaps: fit.gaps,
           p_tweaks: fit.tweaks,
+          p_requirement_scores: fit.requirement_scores,
           p_model: MODEL,
           p_user_id: userId,
         });

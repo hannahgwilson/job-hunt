@@ -11,6 +11,7 @@ import RoleDetail from "./pages/RoleDetail";
 import RoleFit from "./pages/RoleFit";
 import Company from "./pages/Company";
 import Profile from "./pages/Profile";
+import TuningBench from "./pages/TuningBench";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -75,6 +76,7 @@ const NAV: { to: string; label: string; end: boolean }[] = [
   { to: "/funnel", label: "Funnel", end: false },
   { to: "/insights", label: "Insights", end: false },
   { to: "/resume", label: "Resumes", end: false },
+  { to: "/bench", label: "Tune", end: false },
 ];
 
 export default function App() {
@@ -116,6 +118,7 @@ export default function App() {
           <Route path="/funnel" element={<Funnel />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/resume" element={<Profile />} />
+          <Route path="/bench" element={<TuningBench />} />
           <Route path="/role/:id" element={<RoleDetail />} />
           <Route path="/posting/:id" element={<RoleFit />} />
           <Route path="/company/:id" element={<Company />} />

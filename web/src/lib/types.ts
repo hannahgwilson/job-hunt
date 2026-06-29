@@ -164,12 +164,37 @@ export interface ResumeTweak {
   rationale: string | null; // why it helps against this JD
 }
 
+// One row of the judge's adjacency table — how the resume's evidence stacks up
+// against a single JD requirement. The alignment score is the importance-weighted
+// average of these tiers, so this is the chain-of-thought behind the number.
+export type AdjacencyTier = "identical" | "adjacent" | "aware" | "gap";
+
+export interface RequirementScore {
+  requirement: string;                          // the JD requirement, in a few words
+  importance: "required" | "nice_to_have";      // core vs nice-to-have (drives weighting)
+  tier: AdjacencyTier;                           // identical 1.0 / adjacent 0.75 / aware 0.2 / gap 0.0
+  rule: string | null;                          // rule cited for an adjacent/aware call (e.g. "R1")
+  evidence: string | null;                      // the resume evidence (or its absence)
+}
+
+// The user's eval label on one judge-fit analysis (the Tuning Bench). Intel for
+// tuning the prompt — distinct from the analysis (RoleFit) it rates.
+export type FitRating = "good" | "bad";
+
+export interface FitEval {
+  rating: FitRating | null;   // is the judge's analysis accurate?
+  is_best: boolean;           // best read for this JD among the variants
+  notes: string | null;       // what the judge got wrong / should weigh
+  updated_at: string | null;
+}
+
 export interface RoleFit {
   alignment: number | null;  // 0..1
   summary: string | null;
   spikes: string[] | null;   // what clearly clears the bar
   gaps: string[] | null;     // what doesn't
   tweaks: ResumeTweak[] | null;
+  requirement_scores: RequirementScore[] | null; // per-requirement adjacency table
   model: string | null;
   judged_at: string | null;
 }
@@ -180,6 +205,26 @@ export interface ResumeFitEntry {
   variant: ResumeVariant | null;
   is_default: boolean;
   fit: RoleFit | null;       // null until the judge has run for this resume
+  eval?: FitEval | null;     // the user's rating of this analysis (Tuning Bench)
+}
+
+// One rated analysis, joined with what it judged — the get_fit_evals export the
+// bench hands back for prompt tuning.
+export interface FitEvalRow {
+  job_posting_id: string;
+  title: string;
+  organization_name: string;
+  resume_id: string;
+  resume_label: string;
+  resume_variant: ResumeVariant | null;
+  rating: FitRating | null;
+  is_best: boolean;
+  notes: string | null;
+  updated_at: string | null;
+  alignment: number | null;
+  summary: string | null;
+  requirement_scores: RequirementScore[] | null;
+  model: string | null;
 }
 
 // One row per posting for the backfill / per-resume targeting UIs.
@@ -201,6 +246,7 @@ export interface ResumeFeedbackRole {
   spikes: string[] | null;
   gaps: string[] | null;
   tweaks: ResumeTweak[] | null;
+  requirement_scores: RequirementScore[] | null;
   model: string | null;
   judged_at: string | null;
 }

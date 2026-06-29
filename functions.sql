@@ -1023,11 +1023,22 @@ AS $$
                     'fit', (
                         SELECT to_jsonb(f) FROM (
                             SELECT rf.alignment, rf.summary, rf.spikes, rf.gaps,
-                                   rf.tweaks, rf.model, rf.judged_at
+                                   rf.tweaks, rf.requirement_scores, rf.model, rf.judged_at
                             FROM role_fit rf
                             WHERE rf.resume_id = r.id
                               AND rf.job_posting_id = p_job_posting_id
                         ) f
+                    ),
+                    -- The user's eval label on this analysis (null until rated on
+                    -- the Tuning Bench) — lets the bench/role page show prior ratings.
+                    'eval', (
+                        SELECT to_jsonb(e) FROM (
+                            SELECT fe.rating, fe.is_best, fe.notes, fe.updated_at
+                            FROM fit_eval fe
+                            WHERE fe.resume_id = r.id
+                              AND fe.job_posting_id = p_job_posting_id
+                              AND fe.user_id = p_user_id
+                        ) e
                     )
                 ) ORDER BY r.is_default DESC, r.created_at
             ), '[]'::jsonb)
@@ -1127,6 +1138,7 @@ AS $$
                     'spikes', rf.spikes,
                     'gaps', rf.gaps,
                     'tweaks', rf.tweaks,
+                    'requirement_scores', rf.requirement_scores,
                     'model', rf.model,
                     'judged_at', rf.judged_at
                 ) ORDER BY rf.judged_at DESC
@@ -1203,6 +1215,7 @@ CREATE OR REPLACE FUNCTION save_role_fit(
     p_spikes jsonb DEFAULT NULL,
     p_gaps jsonb DEFAULT NULL,
     p_tweaks jsonb DEFAULT NULL,
+    p_requirement_scores jsonb DEFAULT NULL,
     p_model text DEFAULT NULL,
     p_user_id uuid DEFAULT auth.uid()
 )
@@ -1217,15 +1230,16 @@ BEGIN
     END IF;
 
     INSERT INTO role_fit (user_id, job_posting_id, resume_id, alignment,
-                          summary, spikes, gaps, tweaks, model, judged_at)
+                          summary, spikes, gaps, tweaks, requirement_scores, model, judged_at)
     VALUES (p_user_id, p_job_posting_id, p_resume_id, p_alignment,
-            p_summary, p_spikes, p_gaps, p_tweaks, p_model, now())
+            p_summary, p_spikes, p_gaps, p_tweaks, p_requirement_scores, p_model, now())
     ON CONFLICT (job_posting_id, resume_id) DO UPDATE SET
         alignment = EXCLUDED.alignment,
         summary = EXCLUDED.summary,
         spikes = EXCLUDED.spikes,
         gaps = EXCLUDED.gaps,
         tweaks = EXCLUDED.tweaks,
+        requirement_scores = EXCLUDED.requirement_scores,
         model = EXCLUDED.model,
         judged_at = now();
 
@@ -1237,6 +1251,101 @@ BEGIN
 
     RETURN jsonb_build_object('success', true, 'experience_alignment', v_best);
 END;
+$$;
+
+
+-- ============================================================================
+-- FIT EVAL  (human labels on judge-fit analyses — the Tuning Bench, migration 014)
+-- The bench runs résumés × JDs and the user rates each analysis; the labels are
+-- the intel for tuning the judge-fit prompt. save_fit_eval upserts one rating;
+-- get_fit_evals returns the labeled set joined with the analysis it judged.
+-- ============================================================================
+
+-- save_fit_eval — upsert the user's verdict on one (posting × resume) analysis.
+-- Only non-null args change (pass just the field you're toggling). is_best is a
+-- tri-state via p_is_best: true/false sets it, NULL leaves it untouched.
+CREATE OR REPLACE FUNCTION save_fit_eval(
+    p_job_posting_id uuid,
+    p_resume_id uuid,
+    p_rating text DEFAULT NULL,
+    p_is_best boolean DEFAULT NULL,
+    p_notes text DEFAULT NULL,
+    p_clear_rating boolean DEFAULT false,   -- explicit un-set (NULL means "leave as is")
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row fit_eval;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_fit_eval: no user_id';
+    END IF;
+    -- ownership: the posting and resume must belong to the caller
+    IF NOT EXISTS (SELECT 1 FROM job_postings WHERE id = p_job_posting_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_fit_eval: posting % not found', p_job_posting_id;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM resumes WHERE id = p_resume_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_fit_eval: resume % not found', p_resume_id;
+    END IF;
+
+    INSERT INTO fit_eval (user_id, job_posting_id, resume_id, rating, is_best, notes)
+    VALUES (p_user_id, p_job_posting_id, p_resume_id,
+            CASE WHEN p_clear_rating THEN NULL ELSE p_rating END,
+            COALESCE(p_is_best, false), p_notes)
+    ON CONFLICT (job_posting_id, resume_id) DO UPDATE SET
+        rating  = CASE WHEN p_clear_rating THEN NULL
+                       ELSE COALESCE(p_rating, fit_eval.rating) END,
+        is_best = COALESCE(p_is_best, fit_eval.is_best),
+        notes   = COALESCE(p_notes, fit_eval.notes)
+    RETURNING * INTO v_row;
+
+    RETURN jsonb_build_object('success', true, 'eval', to_jsonb(v_row));
+END;
+$$;
+
+-- get_fit_evals — every rated analysis, joined with the role_fit it judged and
+-- the posting/resume labels. This is the export the bench hands back for prompt
+-- tuning: what the judge said (alignment + requirement_scores) next to the human
+-- verdict (rating + is_best + notes).
+CREATE OR REPLACE FUNCTION get_fit_evals(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'evals', COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'job_posting_id', fe.job_posting_id,
+                    'title', jp.title,
+                    'organization_name', o.name,
+                    'resume_id', fe.resume_id,
+                    'resume_label', r.label,
+                    'resume_variant', r.variant,
+                    'rating', fe.rating,
+                    'is_best', fe.is_best,
+                    'notes', fe.notes,
+                    'updated_at', fe.updated_at,
+                    'alignment', rf.alignment,
+                    'summary', rf.summary,
+                    'requirement_scores', rf.requirement_scores,
+                    'model', rf.model
+                ) ORDER BY o.name, jp.title, r.label
+            )
+            FROM fit_eval fe
+            JOIN job_postings jp ON jp.id = fe.job_posting_id
+            JOIN organizations o ON o.id = jp.organization_id
+            JOIN resumes r ON r.id = fe.resume_id
+            LEFT JOIN role_fit rf ON rf.job_posting_id = fe.job_posting_id
+                                 AND rf.resume_id = fe.resume_id
+            WHERE fe.user_id = p_user_id
+        ), '[]'::jsonb)
+    );
 $$;
 
 
@@ -1722,7 +1831,9 @@ GRANT EXECUTE ON FUNCTION get_role_fit(uuid, uuid)                 TO authentica
 GRANT EXECUTE ON FUNCTION get_fit_coverage(uuid)                   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume_feedback(uuid, uuid)          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_resume_synthesis(uuid, jsonb, text, int, text, uuid) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_role_fit(uuid, uuid, numeric, text, jsonb, jsonb, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_fit_eval(uuid, uuid, text, boolean, text, boolean, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_fit_evals(uuid)                      TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_career_profile(uuid)                 TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_career_profile(text, text, text, int, numeric, int, text, text, text, int, text[], text[], text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_career_judgment(uuid, text, numeric, jsonb, text, text, uuid) TO authenticated, service_role;

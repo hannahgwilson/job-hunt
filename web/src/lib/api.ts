@@ -10,6 +10,7 @@ import type {
   PriorityComponents, PriorityWeightsResponse,
   ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
   ApplicationStatus, ClosedReason, ClosedRole,
+  FitRating, FitEvalRow,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -268,6 +269,36 @@ export async function getRoleFit(jobPostingId: string): Promise<RoleFitResponse>
   });
   if (error) throw error;
   return data as RoleFitResponse;
+}
+
+// Tuning Bench: save the user's verdict on one (posting × resume) analysis.
+// Pass only the fields you're changing; rating is tri-state (set 'good'/'bad',
+// or clear it with clearRating). Backed by save_fit_eval.
+export async function saveFitEval(input: {
+  jobPostingId: string;
+  resumeId: string;
+  rating?: FitRating;
+  clearRating?: boolean;
+  isBest?: boolean;
+  notes?: string;
+}): Promise<void> {
+  const { error } = await supabase.rpc("save_fit_eval", {
+    p_job_posting_id: input.jobPostingId,
+    p_resume_id: input.resumeId,
+    p_rating: input.rating ?? null,
+    p_is_best: input.isBest ?? null,
+    p_notes: input.notes ?? null,
+    p_clear_rating: input.clearRating ?? false,
+  });
+  if (error) throw error;
+}
+
+// Every rated analysis, joined with what it judged — the export the bench hands
+// back for prompt tuning. Backed by get_fit_evals.
+export async function fetchFitEvals(): Promise<FitEvalRow[]> {
+  const { data, error } = await supabase.rpc("get_fit_evals", {});
+  if (error) throw error;
+  return (data as { evals: FitEvalRow[] }).evals ?? [];
 }
 
 // supabase-js throws a FunctionsHttpError on ANY non-2xx from an Edge Function,

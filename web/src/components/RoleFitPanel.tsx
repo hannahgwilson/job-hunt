@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getRoleFit, runJudge, runCareerJudge, runGrowthJudge } from "../lib/api";
 import type {
-  ResumeFitEntry, RoleFitResponse, RoleType, ResumeVariant, RequirementScore, AdjacencyTier,
+  ResumeFitEntry, RoleFitResponse, RoleType, ResumeVariant, RequirementScore, AdjacencyTier, RoleFit,
 } from "../lib/types";
 
 const ROLE_TYPE_LABEL: Record<RoleType, string> = {
@@ -150,7 +150,7 @@ function Verdict({ resumes }: { resumes: ResumeFitEntry[] }) {
 
 // The four-tier adjacency labels, ordered strongest→weakest. The score-* classes
 // reuse the existing high/mid/low color ramp so the table reads at a glance.
-const TIER_META: Record<AdjacencyTier, { label: string; cls: string }> = {
+export const TIER_META: Record<AdjacencyTier, { label: string; cls: string }> = {
   identical: { label: "Identical", cls: "score-high" },
   adjacent: { label: "Adjacent", cls: "score-high" },
   aware: { label: "Aware", cls: "score-mid" },
@@ -160,7 +160,7 @@ const TIER_META: Record<AdjacencyTier, { label: string; cls: string }> = {
 // The judge's per-requirement adjacency table — the chain-of-thought behind the
 // alignment number. Collapsed by default; core (required) gaps are the rows worth
 // reading, so we surface a quick count in the summary line.
-function RequirementTable({ rows }: { rows: RequirementScore[] }) {
+export function RequirementTable({ rows }: { rows: RequirementScore[] }) {
   const coreGaps = rows.filter((r) => r.importance === "required" && r.tier === "gap").length;
   const adjacent = rows.filter((r) => r.tier === "adjacent").length;
   return (
@@ -189,6 +189,50 @@ function RequirementTable({ rows }: { rows: RequirementScore[] }) {
         })}
       </ul>
     </details>
+  );
+}
+
+// The judged body — summary, the per-requirement adjacency table, spikes/gaps,
+// and proposed tweaks. Shared by the role page (FitCard) and the Tuning Bench so
+// the two reads can't drift.
+export function FitDetails({ fit }: { fit: RoleFit }) {
+  return (
+    <>
+      {fit.summary && <p className="small">{fit.summary}</p>}
+
+      {fit.requirement_scores && fit.requirement_scores.length > 0 && (
+        <RequirementTable rows={fit.requirement_scores} />
+      )}
+
+      {fit.spikes && fit.spikes.length > 0 && (
+        <div className="fit-list">
+          <h4 className="spikes-h">▲ Spikes</h4>
+          <ul>{fit.spikes.map((s, i) => <li key={i}>{s}</li>)}</ul>
+        </div>
+      )}
+
+      {fit.gaps && fit.gaps.length > 0 && (
+        <div className="fit-list">
+          <h4 className="gaps-h">▽ Gaps</h4>
+          <ul>{fit.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
+        </div>
+      )}
+
+      {fit.tweaks && fit.tweaks.length > 0 && (
+        <details className="tweaks">
+          <summary>Proposed tweaks ({fit.tweaks.length})</summary>
+          <ul>
+            {fit.tweaks.map((t, i) => (
+              <li key={i}>
+                {t.section && <span className="tweak-section">{t.section}: </span>}
+                {t.suggestion}
+                {t.rationale && <div className="muted small">{t.rationale}</div>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </>
   );
 }
 
@@ -227,40 +271,7 @@ function FitCard({
         </div>
       ) : (
         <>
-          {fit.summary && <p className="small">{fit.summary}</p>}
-
-          {fit.requirement_scores && fit.requirement_scores.length > 0 && (
-            <RequirementTable rows={fit.requirement_scores} />
-          )}
-
-          {fit.spikes && fit.spikes.length > 0 && (
-            <div className="fit-list">
-              <h4 className="spikes-h">▲ Spikes</h4>
-              <ul>{fit.spikes.map((s, i) => <li key={i}>{s}</li>)}</ul>
-            </div>
-          )}
-
-          {fit.gaps && fit.gaps.length > 0 && (
-            <div className="fit-list">
-              <h4 className="gaps-h">▽ Gaps</h4>
-              <ul>{fit.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul>
-            </div>
-          )}
-
-          {fit.tweaks && fit.tweaks.length > 0 && (
-            <details className="tweaks">
-              <summary>Proposed tweaks ({fit.tweaks.length})</summary>
-              <ul>
-                {fit.tweaks.map((t, i) => (
-                  <li key={i}>
-                    {t.section && <span className="tweak-section">{t.section}: </span>}
-                    {t.suggestion}
-                    {t.rationale && <div className="muted small">{t.rationale}</div>}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
+          <FitDetails fit={fit} />
 
           <div className="fit-card-foot">
             {fit.judged_at && (

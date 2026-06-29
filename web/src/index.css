@@ -42,6 +42,7 @@ h2 { font-size: 1rem; margin: 0 0 0.75rem; }
 .topbar nav a.active { color: var(--text); border-bottom: 2px solid var(--accent); }
 main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.page-head-actions { display: flex; align-items: center; gap: 0.5rem; }
 
 /* Cards & layout */
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; box-shadow: var(--shadow); }
@@ -110,7 +111,11 @@ label.checkbox input { width: auto; }
 .stage-table th.num, .stage-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Status bars (dashboard) */
-.bar-row { display: grid; grid-template-columns: 110px 1fr 28px; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.bar-row { display: grid; grid-template-columns: 110px 1fr 28px; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; padding: 0.15rem 0.3rem; border-radius: 6px; }
+.bar-row.clickable { cursor: pointer; }
+.bar-row.clickable:hover { background: var(--panel-2); }
+.bar-row.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+.status-apps li.prospect { border-top: 1px solid var(--border); padding: 0.35rem 0; }
 .bar { background: var(--panel-2); border-radius: 6px; height: 10px; overflow: hidden; }
 .bar-fill { background: var(--accent); height: 100%; }
 .bar-num { text-align: right; color: var(--muted); font-size: 0.85rem; }
@@ -144,14 +149,6 @@ label.checkbox input { width: auto; }
 .kc-title { font-weight: 600; font-size: 0.9rem; }
 .kc-foot { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin-top: 0.5rem; font-size: 0.8rem; }
 .empty { text-align: center; padding: 1rem 0; }
-
-/* Funnel */
-.funnel { display: grid; gap: 0.6rem; }
-.funnel-row { display: grid; grid-template-columns: 100px 1fr; gap: 0.6rem; align-items: center; }
-.funnel-label { text-transform: capitalize; color: var(--muted); }
-.funnel-bar-wrap { display: grid; gap: 0.2rem; }
-.funnel-bar { background: linear-gradient(90deg, var(--accent-700), var(--accent)); color: white; border-radius: 6px; padding: 0.3rem 0.5rem; font-weight: 600; min-width: 1.5rem; }
-.funnel-meta { font-size: 0.8rem; grid-column: 2; }
 
 /* Timeline & interviews */
 .timeline { list-style: none; padding: 0; display: grid; gap: 0.6rem; }

@@ -34,7 +34,8 @@ implemented_by:
   file: functions.sql
   returns_key: median_days_from_applied
   surfaced_in:
-    - web/src/pages/Funnel.tsx
+    # Funnel page removed; this cumulative metric is now MCP-only. The Dashboard
+    # shows the per-stage dwell (days_in_stage) instead.
     - MCP tool get_funnel_metrics
 
 interpretation: >

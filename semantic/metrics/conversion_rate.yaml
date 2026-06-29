@@ -30,8 +30,9 @@ implemented_by:
   file: functions.sql
   returns_key: conversion_rates
   surfaced_in:
-    - web/src/pages/Funnel.tsx
-    - web/src/pages/Dashboard.tsx   # funnel moved here per dashboard feedback
+    # The standalone Funnel page was removed; the Dashboard shows pass_through
+    # (decision-conditioned) instead. conversion_rates is now MCP-only — still
+    # computed and available to the agent, just not drawn in the SPA.
     - MCP tool get_funnel_metrics
 
 interpretation: >

@@ -8,7 +8,7 @@ import { CLOSED_REASON_LABELS, type ClosedReason } from "../lib/types";
 // server-side by close_role). Used on both the posting page (/posting/:id) and the
 // application page (/role/:id).
 
-const REASONS: ClosedReason[] = ["filled", "expired", "removed", "no_longer_interested", "other"];
+const REASONS: ClosedReason[] = ["filled", "expired", "removed", "no_longer_interested", "duplicate", "other"];
 
 export default function CloseRoleControl({
   jobPostingId,

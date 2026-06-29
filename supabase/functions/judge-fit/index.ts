@@ -56,7 +56,11 @@ async function judgeOne(
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1500,
+      // Headroom for the full per-requirement adjacency table (one row per JD
+      // requirement) PLUS alignment/summary/spikes/gaps/tweaks after it. At 1500
+      // a long requirement list truncated the tool_use mid-array, so the fields
+      // after it came back undefined — see the stop_reason guard below.
+      max_tokens: 4096,
       // Stable prefix (cached): tool + persona + this resume; only the JD in the
       // user turn changes per posting. See prompt.ts for the cache rationale.
       system: buildFitSystem(resumeLabel, resumeText),
@@ -79,9 +83,20 @@ async function judgeOne(
   console.log(
     `judge-fit cache: read=${u.cache_read_input_tokens ?? 0} write=${u.cache_creation_input_tokens ?? 0} uncached=${u.input_tokens ?? 0} (${resumeLabel})`,
   );
+  // A max_tokens stop truncates the tool_use mid-JSON: the fields after the cut
+  // (alignment/summary/…) come back undefined, which downstream collapses into a
+  // confusing "save_role_fit not found" (the rpc drops the undefined keys). Fail
+  // loudly here instead, and bump max_tokens above if it recurs.
+  if (data.stop_reason === "max_tokens") {
+    throw new Error(`report_fit truncated at max_tokens (${resumeLabel}) — raise max_tokens`);
+  }
   const toolUse = (data.content ?? []).find((b: { type: string }) => b.type === "tool_use");
   if (!toolUse) throw new Error("Anthropic returned no tool_use block");
-  return toolUse.input as FitResult;
+  const fit = toolUse.input as FitResult;
+  if (fit.alignment == null) {
+    throw new Error(`report_fit returned no alignment (${resumeLabel}) — incomplete tool output`);
+  }
+  return fit;
 }
 
 Deno.serve(async (req) => {

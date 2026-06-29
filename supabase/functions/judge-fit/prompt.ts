@@ -33,7 +33,7 @@ export const FIT_TOOL = {
       requirement_scores: {
         type: "array",
         description:
-          "The per-requirement adjacency table — fill this in BEFORE the alignment number (it is the chain-of-thought that keeps the score honest). One entry per material requirement you extract from the JD (the listed requirements/nice-to-haves plus any must-have implied by the responsibilities). Cover every core requirement; skip trivially-met boilerplate. Tier each against the resume using the four-tier framework and the adjacency rules in the system prompt — never literal keyword matching, never a Gap upgraded by wording alone.",
+          "The per-requirement adjacency table — fill this in BEFORE the alignment number (it is the chain-of-thought that keeps the score honest). The ROW SET is a property of the ROLE, not the resume: use the JD's listed Requirements and Nice to have entries (given in the JD context) as your rows — ONE row per listed item, preserving their wording and order, so the same role yields the SAME table for every resume and only the tier/evidence change. Set importance from which list the item came (Requirements → required, Nice to have → nice_to_have). ONLY if the JD lists no requirements at all should you extract the material ones from the JD text yourself. Tier each against the resume using the four-tier framework and the adjacency rules in the system prompt — never literal keyword matching, never a Gap upgraded by wording alone.",
         items: {
           type: "object",
           properties: {
@@ -151,6 +151,9 @@ export const FIT_SYSTEM =
   "Aware. Do not upgrade it to Adjacent.\n\n" +
 
   "GUARDRAILS:\n" +
+  "  • The requirement table's ROWS are set by the JD, not the resume: use the JD's stated Requirements / " +
+  "Nice to have as the row set so the same role is scored against the same checklist for every resume — only " +
+  "the tier and evidence change per resume. Do not add, drop, or re-word rows to suit a particular resume.\n" +
   "  • Evidence must appear in the resume BODY. Do NOT infer a skill from a job title alone.\n" +
   "  • A gap is a gap. Better wording on a resume must NEVER turn a Gap into Adjacent — only added, concrete " +
   "evidence can. Score the same requirement the same tier no matter how polished the prose.\n" +
@@ -195,10 +198,11 @@ export function buildFitMessages(jd: string) {
     {
       role: "user",
       content:
-        `Decide the role type first. Then build the per-requirement adjacency table (requirement_scores) ` +
-        `against the resume above — tier each requirement Identical/Adjacent/Aware/Gap by the rules, citing ` +
-        `the rule for every Adjacent or Aware call — and only THEN set alignment as the importance-weighted ` +
-        `average of that table.\n\n` +
+        `Decide the role type first. Then build the per-requirement adjacency table (requirement_scores): take ` +
+        `the JD's listed Requirements and Nice to have items below as your rows (one each, same wording and order — ` +
+        `the row set is the same for this role regardless of resume), and tier each against the resume above ` +
+        `Identical/Adjacent/Aware/Gap by the rules, citing the rule for every Adjacent or Aware call — and only ` +
+        `THEN set alignment as the importance-weighted average of that table.\n\n` +
         `=== JOB DESCRIPTION ===\n${jd}\n\n` +
         `Call report_fit. Keep requirement_scores/spikes/gaps/tweaks specific to this resume and this JD, and frame them for the role type you determined.`,
     },

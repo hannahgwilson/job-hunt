@@ -157,6 +157,15 @@ export async function fetchJobChecklist(includeDone = false): Promise<Task[]> {
   return (data as JobChecklist).tasks ?? [];
 }
 
+// Collapse duplicate open apply/follow-up tasks pointing at the same role,
+// keeping the oldest. Run at checklist load so the list self-heals; returns the
+// number of duplicates dismissed.
+export async function dedupeJobTasks(): Promise<number> {
+  const { data, error } = await supabase.rpc("dedupe_job_tasks", {});
+  if (error) throw error;
+  return (data as { removed?: number }).removed ?? 0;
+}
+
 export async function createTask(input: {
   title: string; priority?: TaskPriority; due_date?: string; detail?: string;
 }): Promise<Task> {

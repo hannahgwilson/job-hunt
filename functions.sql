@@ -2094,17 +2094,66 @@ BEGIN
         RETURNING * INTO v_row;
 
     ELSIF v_prefix = 'posting' THEN
-        v_title := COALESCE(p_title,
-            'Apply — ' || COALESCE((SELECT title FROM job_postings WHERE id = v_uuid), 'role'));
-        INSERT INTO tasks (user_id, domain, kind, title, priority, source, job_posting_id)
-        VALUES (p_user_id, 'job-hunt', 'apply', v_title, p_priority, 'manual', v_uuid)
-        RETURNING * INTO v_row;
+        -- Idempotent: the ★ Add control fires from several surfaces (Pipeline
+        -- table, role page) and can be clicked when a task already exists. If an
+        -- open/snoozed apply task for this posting is already on the checklist,
+        -- return it instead of inserting a duplicate.
+        SELECT * INTO v_row FROM tasks
+         WHERE user_id = p_user_id AND domain = 'job-hunt' AND kind = 'apply'
+           AND job_posting_id = v_uuid AND status IN ('open', 'snoozed')
+         ORDER BY created_at LIMIT 1;
+        IF NOT FOUND THEN
+            v_title := COALESCE(p_title,
+                'Apply — ' || COALESCE((SELECT title FROM job_postings WHERE id = v_uuid), 'role'));
+            INSERT INTO tasks (user_id, domain, kind, title, priority, source, job_posting_id)
+            VALUES (p_user_id, 'job-hunt', 'apply', v_title, p_priority, 'manual', v_uuid)
+            RETURNING * INTO v_row;
+        END IF;
 
     ELSE
         RAISE EXCEPTION 'promote_suggestion: unknown key prefix %', v_prefix;
     END IF;
 
     RETURN jsonb_build_object('success', true, 'task', to_jsonb(v_row));
+END;
+$$;
+
+-- dedupe_job_tasks — collapse duplicate open job-hunt tasks that point at the
+-- same row. Belt-and-suspenders alongside promote_suggestion's idempotent guard:
+-- cleans up any duplicates created before that guard shipped. Keeps the oldest
+-- task per (kind, job_posting_id) and marks the rest 'dismissed' (never touches
+-- done/dismissed rows, or free-form tasks with no job_posting_id). Called at
+-- checklist load so the list self-heals. Runs SECURITY INVOKER — RLS scopes the
+-- UPDATE to the caller's own tasks.
+CREATE OR REPLACE FUNCTION dedupe_job_tasks(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+    v_removed int;
+BEGIN
+    IF p_user_id IS NULL THEN RAISE EXCEPTION 'dedupe_job_tasks: no user_id'; END IF;
+    WITH ranked AS (
+        SELECT id, row_number() OVER (
+                   PARTITION BY kind, job_posting_id
+                   ORDER BY created_at, id
+               ) AS rn
+        FROM tasks
+        WHERE user_id = p_user_id
+          AND domain = 'job-hunt'
+          AND job_posting_id IS NOT NULL
+          AND status IN ('open', 'snoozed')
+    ),
+    dismissed AS (
+        UPDATE tasks SET status = 'dismissed'
+        WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+        RETURNING 1
+    )
+    SELECT count(*) INTO v_removed FROM dismissed;
+    RETURN jsonb_build_object('success', true, 'removed', v_removed);
 END;
 $$;
 
@@ -2187,4 +2236,5 @@ GRANT EXECUTE ON FUNCTION get_job_checklist(uuid, boolean)              TO authe
 GRANT EXECUTE ON FUNCTION get_suggestions(uuid, int, int, int)          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION dismiss_suggestion(text, uuid)                TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION promote_suggestion(text, text, text, uuid)    TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION dedupe_job_tasks(uuid)                        TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_interview_prep(uuid, uuid)                TO authenticated, service_role;

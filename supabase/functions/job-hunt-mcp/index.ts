@@ -38,9 +38,16 @@
  *     functions.sql). Metric specs live in semantic/*.yaml.
  *
  * What changed in v2.3 (resume input for the matching algo):
- *   - `get_resume` / `set_resume` read & write the stored long-form resume
- *     (job_search_profile table). Read it before judging experience_alignment.
- *     The tracking hub uploads it from the Resume page.
+ *   - `get_resume` / `set_resume` read & write the default resume variant (the
+ *     `resumes` dim; superseded the legacy single-row job_search_profile). Read
+ *     it before judging experience_alignment. The tracking hub uploads it from
+ *     the Resume page.
+ *
+ * What changed in v2.4 (prioritizable action checklist):
+ *   - Task tools over the canonical `tasks` dim (domain='job-hunt'): `add_task`,
+ *     `list_tasks`, `complete_task`, `prioritize_task`, plus the live inbox
+ *     (`get_suggestions` / `promote_suggestion` / `dismiss_suggestion`) that
+ *     pulls job-search thoughts + CRM follow-ups + top roles.
  */
 
 import { Hono } from "hono";
@@ -65,6 +72,8 @@ const sourceEnum = z.enum(["linkedin", "company-site", "referral", "recruiter", 
 // Prioritization signals (see semantic/metrics/priority_score.yaml).
 const careerTrajectoryEnum = z.enum(["step_up", "lateral", "step_back"]);
 const growthStageEnum = z.enum(["seed", "early", "growth", "late", "public", "unknown"]);
+// Action-checklist priority tiers (canonical tasks dim; see OB1 schemas/tasks).
+const taskPriorityEnum = z.enum(["asap", "high", "normal", "low"]);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Handlers — pulled out for the multi-step writes (schedule_interview,
@@ -700,6 +709,141 @@ app.post("*", async (c) => {
     },
   );
 
+  // ───────────────────────────────────────────────────────────────────────
+  // Action checklist — the prioritizable to-do layer over the canonical `tasks`
+  // dim (domain='job-hunt'). Generic CRUD lives in OB1 schemas/tasks; these are
+  // thin wrappers over the job-hunt-smart RPCs in functions.sql.
+  // ───────────────────────────────────────────────────────────────────────
+  server.tool(
+    "add_task",
+    "Add a to-do to the job-hunt checklist, at a priority tier (asap | high | normal | low). Pass job_posting_id to create an 'apply' task linked to that role (e.g. tag a role to apply to ASAP); otherwise it's a free-form task.",
+    {
+      title: z.string().optional().describe("Task title. Optional only when job_posting_id is given (a default 'Apply — <role>' is used)."),
+      priority: taskPriorityEnum.optional().describe("Priority tier (default normal)"),
+      due_date: z.string().optional().describe("Optional due date, YYYY-MM-DD"),
+      detail: z.string().optional(),
+      job_posting_id: z.string().uuid().optional().describe("Link the task to a role (creates an 'apply' task)"),
+    },
+    async (a) => {
+      if (a.job_posting_id) {
+        const { data, error } = await supabase.rpc("promote_suggestion", {
+          p_suggestion_key: `posting:${a.job_posting_id}`,
+          p_priority: a.priority ?? "normal",
+          p_title: a.title ?? null,
+          p_user_id: userId,
+        });
+        if (error) throw new Error(`add_task failed: ${error.message}`);
+        return ok(data as Record<string, unknown>);
+      }
+      if (!a.title) throw new Error("add_task: title is required unless job_posting_id is given");
+      const { data, error } = await supabase.rpc("task_create", {
+        p_title: a.title,
+        p_domain: "job-hunt",
+        p_detail: a.detail ?? null,
+        p_priority: a.priority ?? "normal",
+        p_due_date: a.due_date ?? null,
+        p_kind: "custom",
+        p_source: "manual",
+        p_user_id: userId,
+      });
+      if (error) throw new Error(`add_task failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  server.tool(
+    "list_tasks",
+    "The job-hunt checklist: open tasks grouped by priority tier then manual order, enriched with the linked role / interview / contact. Set include_done to also show completed/dismissed.",
+    {
+      include_done: z.boolean().optional(),
+    },
+    async (a) => {
+      const { data, error } = await supabase.rpc("get_job_checklist", {
+        p_user_id: userId,
+        p_include_done: a.include_done ?? false,
+      });
+      if (error) throw new Error(`list_tasks failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  server.tool(
+    "complete_task",
+    "Mark a checklist task done.",
+    { task_id: z.string().uuid() },
+    async (a) => {
+      const { data, error } = await supabase.rpc("task_update", {
+        p_id: a.task_id, p_status: "done", p_user_id: userId,
+      });
+      if (error) throw new Error(`complete_task failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  server.tool(
+    "prioritize_task",
+    "Change a checklist task's priority tier (asap | high | normal | low).",
+    { task_id: z.string().uuid(), priority: taskPriorityEnum },
+    async (a) => {
+      const { data, error } = await supabase.rpc("task_update", {
+        p_id: a.task_id, p_priority: a.priority, p_user_id: userId,
+      });
+      if (error) throw new Error(`prioritize_task failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  server.tool(
+    "get_suggestions",
+    "The live SUGGESTED inbox for the checklist: job-search thoughts from Open Brain, CRM follow-ups coming due, and top unapplied roles — excluding anything already added or dismissed. Add one with promote_suggestion, hide one with dismiss_suggestion.",
+    {
+      followup_days: z.number().optional().describe("CRM follow-up look-ahead (default 14)"),
+      role_limit: z.number().optional().describe("How many top roles to suggest (default 5)"),
+    },
+    async (a) => {
+      const { data, error } = await supabase.rpc("get_suggestions", {
+        p_user_id: userId,
+        p_followup_days: a.followup_days ?? 14,
+        p_role_limit: a.role_limit ?? 5,
+      });
+      if (error) throw new Error(`get_suggestions failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  server.tool(
+    "promote_suggestion",
+    "Turn an inbox suggestion into a checklist task by its key ('thought:<id>' | 'crm:<id>' | 'posting:<id>'). For a thought it also marks the Open Brain note 'promoted' so it stops re-surfacing.",
+    {
+      suggestion_key: z.string().describe("e.g. 'thought:<uuid>', 'crm:<contact_id>', 'posting:<job_posting_id>'"),
+      priority: taskPriorityEnum.optional(),
+      title: z.string().optional().describe("Override the default task title"),
+    },
+    async (a) => {
+      const { data, error } = await supabase.rpc("promote_suggestion", {
+        p_suggestion_key: a.suggestion_key,
+        p_priority: a.priority ?? "normal",
+        p_title: a.title ?? null,
+        p_user_id: userId,
+      });
+      if (error) throw new Error(`promote_suggestion failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
+  server.tool(
+    "dismiss_suggestion",
+    "Hide an inbox suggestion for good, by its key (so it won't be suggested again).",
+    { suggestion_key: z.string() },
+    async (a) => {
+      const { data, error } = await supabase.rpc("dismiss_suggestion", {
+        p_suggestion_key: a.suggestion_key, p_user_id: userId,
+      });
+      if (error) throw new Error(`dismiss_suggestion failed: ${error.message}`);
+      return ok(data as Record<string, unknown>);
+    },
+  );
+
   const transport = new StreamableHTTPTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -708,6 +852,6 @@ app.post("*", async (c) => {
   return transport.handleRequest(c);
 });
 
-app.get("*", (c) => c.json({ status: "ok", service: "Job Hunt Pipeline", version: "2.3.0" }));
+app.get("*", (c) => c.json({ status: "ok", service: "Job Hunt Pipeline", version: "2.4.0" }));
 
 Deno.serve(app.fetch);

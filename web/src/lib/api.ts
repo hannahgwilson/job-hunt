@@ -11,6 +11,7 @@ import type {
   ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
   ApplicationStatus, ClosedReason, ClosedRole, RejectedApplication,
   FitRating, FitEvalRow,
+  Task, JobChecklist, Suggestions, InterviewPrep, TaskPriority, TaskStatus,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -144,6 +145,91 @@ export async function fetchActionQueue(): Promise<ActionQueue> {
   const { data, error } = await supabase.rpc("get_action_queue", {});
   if (error) throw error;
   return data as ActionQueue;
+}
+
+// ── action checklist (migration 016) — tasks dim + live suggestion inbox ──────
+// The SPA passes no p_user_id; every RPC defaults it to auth.uid() (the logged-in
+// user), which resolves correctly even inside the SECURITY DEFINER readers.
+
+export async function fetchJobChecklist(includeDone = false): Promise<Task[]> {
+  const { data, error } = await supabase.rpc("get_job_checklist", { p_include_done: includeDone });
+  if (error) throw error;
+  return (data as JobChecklist).tasks ?? [];
+}
+
+// Collapse duplicate open apply/follow-up tasks pointing at the same role,
+// keeping the oldest. Run at checklist load so the list self-heals; returns the
+// number of duplicates dismissed.
+export async function dedupeJobTasks(): Promise<number> {
+  const { data, error } = await supabase.rpc("dedupe_job_tasks", {});
+  if (error) throw error;
+  return (data as { removed?: number }).removed ?? 0;
+}
+
+export async function createTask(input: {
+  title: string; priority?: TaskPriority; due_date?: string; detail?: string;
+}): Promise<Task> {
+  const { data, error } = await supabase.rpc("task_create", {
+    p_title: input.title,
+    p_domain: "job-hunt",
+    p_detail: input.detail ?? null,
+    p_priority: input.priority ?? "normal",
+    p_due_date: input.due_date ?? null,
+    p_kind: "custom",
+  });
+  if (error) throw error;
+  return (data as { task: Task }).task;
+}
+
+export async function updateTask(id: string, patch: {
+  status?: TaskStatus; priority?: TaskPriority; sort_order?: number; title?: string;
+}): Promise<Task> {
+  const { data, error } = await supabase.rpc("task_update", {
+    p_id: id,
+    p_status: patch.status ?? null,
+    p_priority: patch.priority ?? null,
+    p_sort_order: patch.sort_order ?? null,
+    p_title: patch.title ?? null,
+  });
+  if (error) throw error;
+  return (data as { task: Task }).task;
+}
+
+export async function reorderTasks(orderedIds: string[]): Promise<void> {
+  const { error } = await supabase.rpc("task_reorder", { p_ordered_ids: orderedIds });
+  if (error) throw error;
+}
+
+export async function fetchSuggestions(): Promise<Suggestions> {
+  const { data, error } = await supabase.rpc("get_suggestions", {});
+  if (error) throw error;
+  return data as Suggestions;
+}
+
+// Promote a live suggestion (key 'thought:<id>' | 'crm:<id>' | 'posting:<id>')
+// into a real task. For a thought this also flips its Open Brain status.
+export async function promoteSuggestion(key: string, priority: TaskPriority = "normal", title?: string): Promise<Task> {
+  const { data, error } = await supabase.rpc("promote_suggestion", {
+    p_suggestion_key: key, p_priority: priority, p_title: title ?? null,
+  });
+  if (error) throw error;
+  return (data as { task: Task }).task;
+}
+
+export async function dismissSuggestion(key: string): Promise<void> {
+  const { error } = await supabase.rpc("dismiss_suggestion", { p_suggestion_key: key });
+  if (error) throw error;
+}
+
+// Tag a role for the checklist (feature 1: "apply to Komodo ASAP").
+export async function addRoleTask(jobPostingId: string, priority: TaskPriority = "normal"): Promise<Task> {
+  return promoteSuggestion(`posting:${jobPostingId}`, priority);
+}
+
+export async function fetchInterviewPrep(interviewId: string): Promise<InterviewPrep> {
+  const { data, error } = await supabase.rpc("get_interview_prep", { p_interview_id: interviewId });
+  if (error) throw error;
+  return data as InterviewPrep;
 }
 
 export async function fetchFunnelMetrics(windowDays?: number): Promise<FunnelMetrics> {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import AddToChecklist from "./AddToChecklist";
 import type { PriorityComponents, RankedRole } from "../lib/types";
 
 // Sortable "roles to apply" table — the force-ranked top-of-funnel. Click a
@@ -51,11 +52,14 @@ function FitBars({ c }: { c: PriorityComponents }) {
 }
 
 export default function RolesToApplyTable({
-  roles, onApply, applyingId,
+  roles, onApply, applyingId, checklistPostingIds, onChecklistChanged,
 }: {
   roles: RankedRole[];
   onApply?: (postingId: string) => void;
   applyingId?: string | null;
+  // Posting IDs already on the apply checklist, so the ★ shows "on checklist".
+  checklistPostingIds?: Set<string>;
+  onChecklistChanged?: () => void;
 }) {
   const [sort, setSort] = useState<SortKey>("score");
   const [dir, setDir] = useState<Dir>("desc");
@@ -117,6 +121,11 @@ export default function RolesToApplyTable({
                 {r.url && (
                   <a className="ext" href={r.url} target="_blank" rel="noreferrer" title="Open posting">↗</a>
                 )}
+                <AddToChecklist
+                  jobPostingId={r.id}
+                  alreadyAdded={checklistPostingIds?.has(r.id)}
+                  onAdded={onChecklistChanged}
+                />
               </td>
               <td>{r.organization_name}</td>
               <td>{locationLabel(r)}</td>

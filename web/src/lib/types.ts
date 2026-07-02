@@ -490,6 +490,83 @@ export interface FunnelMetrics {
   median_days_in_stage: Record<string, number | null>;
 }
 
+// ── action checklist (canonical tasks dim; domain='job-hunt', migration 016) ──
+export type TaskPriority = "asap" | "high" | "normal" | "low";
+export type TaskStatus = "open" | "done" | "dismissed" | "snoozed";
+
+export const TASK_TIERS: { key: TaskPriority; label: string; dot: string }[] = [
+  { key: "asap", label: "ASAP", dot: "🔴" },
+  { key: "high", label: "High", dot: "🟠" },
+  { key: "normal", label: "Normal", dot: "⚪" },
+  { key: "low", label: "Low", dot: "🔵" },
+];
+
+export interface Task {
+  id: string;
+  title: string;
+  detail: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  sort_order: number;
+  due_date: string | null;
+  kind: string | null;
+  source: string;
+  thought_id: string | null;
+  job_posting_id: string | null;
+  application_id: string | null;
+  interview_id: string | null;
+  contact_id: string | null;
+  completed_at: string | null;
+  created_at: string;
+  // enrichment joined by get_job_checklist (null when the link is absent):
+  organization_name?: string | null;
+  role_title?: string | null;
+  role_url?: string | null;
+  interview_type?: string | null;
+  interview_at?: string | null;
+  contact_name?: string | null;
+}
+
+export interface JobChecklist { success: boolean; tasks: Task[]; }
+
+// ── live suggestion inbox (get_suggestions) ──────────────────────────────────
+export interface ThoughtSuggestion {
+  key: string; kind: "thought"; thought_type: string | null;
+  content: string; created_at: string;
+}
+export interface FollowupSuggestion {
+  key: string; kind: "followup"; contact_id: string; name: string;
+  title: string | null; organization_name: string | null;
+  follow_up_date: string | null; overdue: boolean;
+}
+export interface RoleSuggestion {
+  key: string; kind: "apply"; job_posting_id: string; title: string;
+  organization_name: string | null; score: string | null; rank: string;
+}
+export interface Suggestions {
+  success: boolean;
+  open_brain: ThoughtSuggestion[];
+  followups: FollowupSuggestion[];
+  roles: RoleSuggestion[];
+}
+
+// ── interview prep (static assembly; get_interview_prep) ──────────────────────
+export interface InterviewPrep {
+  success: boolean;
+  error?: string;
+  interview: { id: string; interview_type: string | null; scheduled_at: string | null; status: string };
+  role: { job_posting_id: string; title: string; organization_id: string; organization_name: string };
+  company_intel: {
+    growth_stage: string | null;
+    growth_signals: GrowthSignals | null;
+    growth_rationale: string | null;
+    notes: Array<{ content: string; created_at: string }>;
+  };
+  fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null; resume_label: string | null } | null;
+  interviewer: { contact_id: string; name: string; title: string | null; last_contacted: string | null } | null;
+  prep_tasks: Task[];
+}
+
 // One rejected/withdrawn application for the Pipeline "Rejected" area. Computed
 // client-side (fetchRejectedApplications) from status history — not a metric, so
 // it lives outside the semantic catalog (like the Closed-roles list).

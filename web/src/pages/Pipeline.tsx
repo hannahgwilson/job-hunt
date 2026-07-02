@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { fetchApplications, fetchActionQueue, fetchClosedRoles, fetchFitCoverage, fetchRejectedApplications, reopenRole, submitApplication } from "../lib/api";
+import { fetchApplications, fetchActionQueue, fetchClosedRoles, fetchFitCoverage, fetchJobChecklist, fetchRejectedApplications, reopenRole, submitApplication } from "../lib/api";
 import { CLOSED_REASON_LABELS, PIPELINE_COLUMNS, type Application, type ActionQueue, type ClosedRole, type FitCoveragePosting, type RejectedApplication } from "../lib/types";
 import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
@@ -13,6 +13,7 @@ export default function Pipeline() {
   const [apps, setApps] = useState<Application[]>([]);
   const [queue, setQueue] = useState<ActionQueue | null>(null);
   const [coverage, setCoverage] = useState<FitCoveragePosting[]>([]);
+  const [checklistPostingIds, setChecklistPostingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
@@ -29,6 +30,9 @@ export default function Pipeline() {
     fetchFitCoverage().then(setCoverage).catch((e) => setError(e.message));
     fetchClosedRoles().then(setClosed).catch((e) => setError(e.message));
     fetchRejectedApplications().then(setRejected).catch((e) => setError(e.message));
+    fetchJobChecklist()
+      .then((tasks) => setChecklistPostingIds(new Set(tasks.map((t) => t.job_posting_id).filter((id): id is string => !!id))))
+      .catch((e) => setError(e.message));
   }
 
   async function reopen(postingId: string) {
@@ -112,7 +116,13 @@ export default function Pipeline() {
         </div>
         <PriorityWeightsPanel onSaved={() => fetchActionQueue().then(setQueue).catch((e) => setError(e.message))} />
         {!queue ? <p className="muted">Loading…</p> : (
-          <RolesToApplyTable roles={queue.roles_to_apply} onApply={apply} applyingId={applyingId} />
+          <RolesToApplyTable
+            roles={queue.roles_to_apply}
+            onApply={apply}
+            applyingId={applyingId}
+            checklistPostingIds={checklistPostingIds}
+            onChecklistChanged={load}
+          />
         )}
       </section>
 

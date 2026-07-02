@@ -1,43 +1,60 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { fetchActionQueue } from "../lib/api";
-import type { ActionQueue as Q } from "../lib/types";
+import { fetchJobChecklist, createTask, fetchActionQueue, dedupeJobTasks } from "../lib/api";
+import Checklist from "../components/Checklist";
+import SuggestionInbox from "../components/SuggestionInbox";
+import type { Task, ActionQueue as Q } from "../lib/types";
 
 export default function ActionQueue() {
+  const [tasks, setTasks] = useState<Task[] | null>(null);
   const [q, setQ] = useState<Q | null>(null);
+  const [newTitle, setNewTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  function loadTasks() { fetchJobChecklist().then(setTasks).catch((e) => setError(e.message)); }
   useEffect(() => {
+    // Self-heal any duplicate role tasks (e.g. from before promote_suggestion
+    // became idempotent) before showing the list. Cleanup failure is non-fatal —
+    // don't blank the page over it.
+    dedupeJobTasks().catch(() => {}).finally(loadTasks);
     fetchActionQueue().then(setQ).catch((e) => setError(e.message));
   }, []);
 
+  async function addFreeform(e: FormEvent) {
+    e.preventDefault();
+    const title = newTitle.trim();
+    if (!title) return;
+    setNewTitle("");
+    try { await createTask({ title, priority: "normal" }); loadTasks(); }
+    catch (e2) { setError((e2 as Error).message); }
+  }
+
   if (error) return <p className="error">{error}</p>;
-  if (!q) return <p className="muted">Loading…</p>;
 
   return (
     <div className="page">
       <h1>Action Queue</h1>
 
-      {/* Roles to apply are force-ranked on the Pipeline page; link, don't duplicate. */}
-      <p className="muted">
-        <strong>{q.roles_to_apply.length}</strong> role{q.roles_to_apply.length === 1 ? "" : "s"} waiting to apply to,
-        ranked by priority on the <Link to="/pipeline">Pipeline →</Link>
-      </p>
+      <section className="card">
+        <div className="section-head">
+          <h2>My checklist</h2>
+          <form className="add-task" onSubmit={addFreeform}>
+            <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Add a task…" />
+            <button className="ghost sm" type="submit">Add</button>
+          </form>
+        </div>
+        {tasks === null ? <p className="muted">Loading…</p> : <Checklist tasks={tasks} onChanged={loadTasks} />}
+      </section>
 
-      <div className="queue-grid">
-        <section className="card">
-          <h2>Follow-ups <span className="count">{q.role_followups.length}</span></h2>
-          <ul className="clean">
-            {q.role_followups.map((f) => (
-              <li key={f.application_id}>
-                <strong>{f.title}</strong> @ {f.organization_name}
-                <span className="muted"> — {f.status}, {f.days_waiting ?? "?"}d waiting</span>
-              </li>
-            ))}
-            {q.role_followups.length === 0 && <li className="muted">All caught up.</li>}
-          </ul>
-        </section>
+      <section className="card">
+        <h2>Suggested</h2>
+        <p className="muted small">
+          From your pipeline, Open Brain notes, and CRM follow-ups. Add what you'll act on; dismiss the rest.
+        </p>
+        <SuggestionInbox onPromoted={loadTasks} />
+      </section>
 
+      {q && q.upcoming_interviews.length > 0 && (
         <section className="card">
           <h2>Upcoming interviews <span className="count">{q.upcoming_interviews.length}</span></h2>
           <ul className="clean">
@@ -47,24 +64,43 @@ export default function ActionQueue() {
                 <span className="muted"> — {i.interview_type} · {new Date(i.scheduled_at).toLocaleString()}</span>
               </li>
             ))}
-            {q.upcoming_interviews.length === 0 && <li className="muted">None scheduled.</li>}
           </ul>
         </section>
+      )}
 
+      {/* Applications waiting on a response past the follow-up threshold. */}
+      {q && q.role_followups.length > 0 && (
         <section className="card">
-          <h2>Networking <span className="count">{q.networking.length}</span></h2>
+          <h2>Follow up on applications <span className="count">{q.role_followups.length}</span></h2>
+          <ul className="clean">
+            {q.role_followups.map((r) => (
+              <li key={r.application_id}>
+                <Link to={`/role/${r.application_id}`}>{r.title}</Link>
+                <span className="muted"> @ {r.organization_name} — {r.status}</span>
+                {r.days_waiting != null && <span className="muted"> · {r.days_waiting}d waiting</span>}
+                {r.url && <> · <a href={r.url} target="_blank" rel="noreferrer">posting ↗</a></>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Job-hunt contacts gone stale / never contacted — networking nudges. */}
+      {q && q.networking.length > 0 && (
+        <section className="card">
+          <h2>Reach out <span className="count">{q.networking.length}</span></h2>
           <ul className="clean">
             {q.networking.map((c) => (
               <li key={c.contact_id}>
-                <strong>{c.name}</strong>{c.title ? `, ${c.title}` : ""}
+                <strong>{c.name}</strong>
+                {c.title && <span className="muted"> · {c.title}</span>}
                 {c.organization_name && <span className="muted"> @ {c.organization_name}</span>}
-                <span className="muted"> — {c.last_contacted ? `last ${c.last_contacted}` : "never contacted"}</span>
+                <span className="muted"> — {c.last_contacted ? `last contacted ${new Date(c.last_contacted).toLocaleDateString()}` : "never contacted"}</span>
               </li>
             ))}
-            {q.networking.length === 0 && <li className="muted">No stale contacts.</li>}
           </ul>
         </section>
-      </div>
+      )}
     </div>
   );
 }

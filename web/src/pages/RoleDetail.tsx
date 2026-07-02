@@ -6,6 +6,8 @@ import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
 import CloseRoleControl from "../components/CloseRoleControl";
 import StatusActions from "../components/StatusActions";
+import AddToChecklist from "../components/AddToChecklist";
+import InterviewPrep from "../components/InterviewPrep";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
@@ -60,6 +62,7 @@ export default function RoleDetail() {
             onChanged={load}
           />
         )}
+        {posting?.id && <AddToChecklist jobPostingId={posting.id} />}
       </div>
       <p className="muted">
         {posting?.organizations?.name}
@@ -130,6 +133,7 @@ export default function RoleDetail() {
               </div>
               {iv.feedback && <p className="small">{iv.feedback}</p>}
               {iv.decision_notes && <p className="muted small">Decision: {iv.decision_notes}</p>}
+              <InterviewPrep interviewId={iv.id} />
             </div>
           ))}
         </section>

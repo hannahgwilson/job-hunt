@@ -1,16 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { fetchApplications, fetchActionQueue, fetchClosedRoles, fetchFitCoverage, fetchJobChecklist, fetchRejectedApplications, reopenRole, submitApplication } from "../lib/api";
-import { CLOSED_REASON_LABELS, PIPELINE_COLUMNS, type Application, type ActionQueue, type ClosedRole, type FitCoveragePosting, type RejectedApplication } from "../lib/types";
+import { fetchActionQueue, fetchClosedRoles, fetchFitCoverage, fetchJobChecklist, fetchRejectedApplications, reopenRole, submitApplication } from "../lib/api";
+import { CLOSED_REASON_LABELS, type ActionQueue, type ClosedRole, type FitCoveragePosting, type RejectedApplication } from "../lib/types";
 import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
 import RolesToApplyTable from "../components/RolesToApplyTable";
 import PriorityWeightsPanel from "../components/PriorityWeightsPanel";
-import StatusActions from "../components/StatusActions";
 
 export default function Pipeline() {
-  const [apps, setApps] = useState<Application[]>([]);
   const [queue, setQueue] = useState<ActionQueue | null>(null);
   const [coverage, setCoverage] = useState<FitCoveragePosting[]>([]);
   const [checklistPostingIds, setChecklistPostingIds] = useState<Set<string>>(new Set());
@@ -25,7 +23,6 @@ export default function Pipeline() {
   const batch = useBatchJudge();
 
   function load() {
-    fetchApplications().then(setApps).catch((e) => setError(e.message));
     fetchActionQueue().then(setQueue).catch((e) => setError(e.message));
     fetchFitCoverage().then(setCoverage).catch((e) => setError(e.message));
     fetchClosedRoles().then(setClosed).catch((e) => setError(e.message));
@@ -55,7 +52,7 @@ export default function Pipeline() {
   useEffect(() => {
     load();
     // Realtime: refresh when applications OR postings change (new prospects
-    // appear in the to-apply table; applying moves a role into the kanban).
+    // appear in the to-apply table; applying moves a role off the queue).
     const channel = supabase
       .channel("pipeline-changes")
       .on("postgres_changes", { event: "*", schema: "public", table: "applications" }, load)
@@ -125,34 +122,6 @@ export default function Pipeline() {
           />
         )}
       </section>
-
-      {/* In-flight applications, by stage. */}
-      <h2 className="board-title">By stage</h2>
-      <div className="kanban">
-        {PIPELINE_COLUMNS.map((col) => {
-          const inCol = apps.filter((a) => a.status === col);
-          return (
-            <div key={col} className="kanban-col">
-              <div className="kanban-head"><span className={`pill pill-${col}`}>{col}</span><span className="muted">{inCol.length}</span></div>
-              {inCol.map((a) => (
-                <div key={a.id} className="kanban-card" onClick={() => navigate(`/role/${a.id}`)}>
-                  <div className="kc-title">{a.job_postings?.title ?? "Untitled role"}</div>
-                  <div className="muted">{a.job_postings?.organizations?.name}</div>
-                  <div className="kc-foot">
-                    {a.job_postings?.url && (
-                      <a href={a.job_postings.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>posting ↗</a>
-                    )}
-                    {/* Reject / Withdraw move the card off the board into the
-                        "Rejected applications" area below. */}
-                    <StatusActions app={a} onChanged={load} onError={setError} compact />
-                  </div>
-                </div>
-              ))}
-              {inCol.length === 0 && <div className="muted empty">—</div>}
-            </div>
-          );
-        })}
-      </div>
 
       {/* Closed/filled roles — hidden by default, revealed by the toggle. They're
           kept for history (and the funnel) but stay out of the active search. */}

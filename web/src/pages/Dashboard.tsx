@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import {
   fetchApplications, fetchActionQueue, fetchFunnelMetrics,
   fetchRolesAnalytics, runCareerJudge, runGrowthJudge,
 } from "../lib/api";
-import type { Application, ActionQueue, FunnelMetrics, RoleAnalytics, ApplicationStatus } from "../lib/types";
+import { PIPELINE_COLUMNS, type Application, type ActionQueue, type FunnelMetrics, type RoleAnalytics, type ApplicationStatus } from "../lib/types";
 import { useBatchRunner } from "../lib/useBatchRunner";
 import FitScatter from "../components/FitScatter";
+import StatusActions from "../components/StatusActions";
 
 // The forward steps that have a "next" stage — the ones with a pass-through rate
 // and an in-stage dwell. 'accepted' is the terminal success, so it's omitted.
@@ -29,6 +30,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<ApplicationStatus | null>(null);
   const batch = useBatchRunner();
+  const navigate = useNavigate();
 
   function load() {
     setRefreshing(true);
@@ -118,6 +120,34 @@ export default function Dashboard() {
         <div className="card stat"><div className="stat-num">{active}</div><div className="muted">active</div></div>
         <div className="card stat"><div className="stat-num">{queue?.roles_to_apply.length ?? "–"}</div><div className="muted">to apply</div></div>
         <div className="card stat"><div className="stat-num">{queue?.upcoming_interviews.length ?? "–"}</div><div className="muted">interviews soon</div></div>
+      </div>
+
+      {/* In-flight applications, by stage. */}
+      <h2 className="board-title">By stage</h2>
+      <div className="kanban">
+        {PIPELINE_COLUMNS.map((col) => {
+          const inCol = apps.filter((a) => a.status === col);
+          return (
+            <div key={col} className="kanban-col">
+              <div className="kanban-head"><span className={`pill pill-${col}`}>{col}</span><span className="muted">{inCol.length}</span></div>
+              {inCol.map((a) => (
+                <div key={a.id} className="kanban-card" onClick={() => navigate(`/role/${a.id}`)}>
+                  <div className="kc-title">{a.job_postings?.title ?? "Untitled role"}</div>
+                  <div className="muted">{a.job_postings?.organizations?.name}</div>
+                  <div className="kc-foot">
+                    {a.job_postings?.url && (
+                      <a href={a.job_postings.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>posting ↗</a>
+                    )}
+                    {/* Reject / Withdraw move the card off the board into the
+                        "Rejected applications" area on the Pipeline page. */}
+                    <StatusActions app={a} onChanged={load} onError={setError} compact />
+                  </div>
+                </div>
+              ))}
+              {inCol.length === 0 && <div className="muted empty">—</div>}
+            </div>
+          );
+        })}
       </div>
 
       {/* The insights "2x2": fit (x) vs career-move + company-growth (y), the

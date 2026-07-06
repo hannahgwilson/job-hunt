@@ -1,9 +1,11 @@
-import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
 import CloseRoleControl from "../components/CloseRoleControl";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
+import { submitApplication } from "../lib/api";
 
 // Posting-scoped fit page (reached from the to-apply table, for roles with no
 // application yet). The scoring UI itself lives in RoleFitPanel, which the
@@ -14,18 +16,39 @@ export default function RoleFit() {
   const fit = useRoleFit(id);
   const weights = usePriorityWeights();
   const { data, error, judging, judge, reload } = fit;
+  const navigate = useNavigate();
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   if (error && !data) return <p className="error">{error}</p>;
   if (!data) return <p className="muted">Loading…</p>;
 
   const p = data.posting;
   if (!p) return <p className="error">Posting not found.</p>;
+  const postingId = p.id;
+
+  async function apply() {
+    setApplying(true);
+    setApplyError(null);
+    try {
+      const applicationId = await submitApplication(postingId);
+      navigate(`/role/${applicationId}`);
+    } catch (e) {
+      setApplyError((e as Error).message);
+      setApplying(false);
+    }
+  }
 
   return (
     <div className="page">
       <p><Link to="/pipeline">← Pipeline</Link></p>
       <div className="page-head">
         <h1>{p.title}</h1>
+        {!p.closed_at && (
+          <button disabled={applying} onClick={apply}>
+            {applying ? "…" : "Mark applied"}
+          </button>
+        )}
         <CloseRoleControl
           jobPostingId={p.id}
           closedAt={p.closed_at}
@@ -33,6 +56,7 @@ export default function RoleFit() {
           onChanged={reload}
         />
       </div>
+      {applyError && <p className="error">{applyError}</p>}
       <p className="muted">
         <Link to={`/company/${p.organization_id}`}>{p.organization_name}</Link>
         {p.location ? ` · ${p.location}` : ""}

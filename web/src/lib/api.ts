@@ -582,12 +582,13 @@ export async function saveAssembledResume(input: {
   if (error) throw error;
 }
 
-export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<void> {
-  const { error } = await supabase.rpc("submit_application", {
+export async function submitApplication(jobPostingId: string, appliedDate?: string): Promise<string> {
+  const { data, error } = await supabase.rpc("submit_application", {
     p_job_posting_id: jobPostingId,
     p_applied_date: appliedDate ?? new Date().toISOString().slice(0, 10),
   });
   if (error) throw error;
+  return data.application.id;
 }
 
 export async function advanceApplication(

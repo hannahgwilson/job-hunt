@@ -651,6 +651,19 @@ BEGIN
     )
     RETURNING * INTO v_app;
 
+    -- Auto-close the matching "Apply" checklist task(s) for this posting — once
+    -- the application exists, the reminder to apply has done its job. Only on
+    -- an actual applied submission, not e.g. a directly-logged later stage.
+    IF v_app.status = 'applied' THEN
+        UPDATE tasks
+           SET status = 'done', completed_at = now()
+         WHERE user_id = p_user_id
+           AND domain = 'job-hunt'
+           AND kind = 'apply'
+           AND job_posting_id = p_job_posting_id
+           AND status IN ('open', 'snoozed');
+    END IF;
+
     RETURN jsonb_build_object('success', true, 'application', to_jsonb(v_app));
 END;
 $$;

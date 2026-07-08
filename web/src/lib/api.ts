@@ -12,6 +12,7 @@ import type {
   ApplicationStatus, ClosedReason, ClosedRole, RejectedApplication,
   FitRating, FitEvalRow,
   Task, JobChecklist, Suggestions, InterviewPrep, TaskPriority, TaskStatus,
+  InterviewPrepSession, InterviewPrepDraftFeedback,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -89,7 +90,13 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
 
   const { data: postings, error: pErr } = await supabase
     .from("job_postings")
-    .select("id, title, url, location, remote_policy, experience_alignment, applications:applications(id, status)")
+    .select(`
+      id, title, url, location, remote_policy, experience_alignment,
+      applications:applications(
+        id, status,
+        interviews(id, interview_type, scheduled_at, status)
+      )
+    `)
     .eq("organization_id", orgId);
   if (pErr) throw pErr;
 
@@ -97,17 +104,29 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
     id: string; title: string; url: string | null; location: string | null;
     remote_policy: CompanyData["postings"][number]["remote_policy"];
     experience_alignment: number | null;
-    applications: Array<{ id: string; status: CompanyData["postings"][number]["application_status"] }> | null;
+    applications: Array<{
+      id: string; status: CompanyData["postings"][number]["application_status"];
+      interviews: Array<{ id: string; interview_type: string | null; scheduled_at: string | null; status: string }> | null;
+    }> | null;
   };
+
+  const now = new Date().toISOString();
 
   return {
     organization: organization as unknown as CompanyData["organization"],
     connections: (connections ?? []) as CompanyData["connections"],
-    postings: ((postings ?? []) as unknown as RawPosting[]).map((p) => ({
-      id: p.id, title: p.title, url: p.url, location: p.location,
-      remote_policy: p.remote_policy, experience_alignment: p.experience_alignment,
-      application_status: p.applications?.[0]?.status ?? null,
-    })),
+    postings: ((postings ?? []) as unknown as RawPosting[]).map((p) => {
+      const upcoming = (p.applications ?? [])
+        .flatMap((a) => a.interviews ?? [])
+        .filter((iv) => iv.status === "scheduled" && iv.scheduled_at && iv.scheduled_at >= now)
+        .sort((a, b) => (a.scheduled_at! < b.scheduled_at! ? -1 : 1))[0];
+      return {
+        id: p.id, title: p.title, url: p.url, location: p.location,
+        remote_policy: p.remote_policy, experience_alignment: p.experience_alignment,
+        application_status: p.applications?.[0]?.status ?? null,
+        upcoming_interview: upcoming ? { id: upcoming.id, interview_type: upcoming.interview_type, scheduled_at: upcoming.scheduled_at! } : null,
+      };
+    }),
   };
 }
 
@@ -230,6 +249,29 @@ export async function fetchInterviewPrep(interviewId: string): Promise<Interview
   const { data, error } = await supabase.rpc("get_interview_prep", { p_interview_id: interviewId });
   if (error) throw error;
   return data as InterviewPrep;
+}
+
+// ── interview prep session (round two — the full page) ─────────────────────
+export async function fetchInterviewPrepSession(interviewId: string): Promise<InterviewPrepSession> {
+  const { data, error } = await supabase.rpc("get_interview_prep_session", { p_interview_id: interviewId });
+  if (error) throw error;
+  return data as InterviewPrepSession;
+}
+
+// Intake — no AI, instant. Creates the session on first call, updates notes
+// on later calls (NULL args leave a field untouched).
+export async function startInterviewPrep(
+  interviewId: string,
+  intakeNotes?: string,
+  sourceThoughtId?: string,
+): Promise<InterviewPrepSession> {
+  const { data, error } = await supabase.rpc("start_interview_prep", {
+    p_interview_id: interviewId,
+    p_intake_notes: intakeNotes ?? null,
+    p_source_thought_id: sourceThoughtId ?? null,
+  });
+  if (error) throw error;
+  return data as InterviewPrepSession;
 }
 
 export async function fetchFunnelMetrics(windowDays?: number): Promise<FunnelMetrics> {
@@ -435,6 +477,44 @@ export async function runCareerJudge(jobPostingId: string): Promise<RoleFitRespo
 // writes growth_stage to every one of the company's postings. judge-growth.
 export async function runGrowthJudge(jobPostingId: string): Promise<RoleFitResponse> {
   return invokeFunction<RoleFitResponse>("judge-growth", { job_posting_id: jobPostingId });
+}
+
+// ── interview prep — AI stages (research / mock-interview chat / synthesis) ──
+// All four hit the same interview-prep edge function, dispatched by `stage`.
+export async function runInterviewPrepResearch(interviewId: string): Promise<InterviewPrepSession> {
+  return invokeFunction<InterviewPrepSession>("interview-prep", { interview_id: interviewId, stage: "research" });
+}
+
+export async function sendInterviewPrepMessage(interviewId: string, message?: string): Promise<InterviewPrepSession> {
+  return invokeFunction<InterviewPrepSession>("interview-prep", {
+    interview_id: interviewId,
+    stage: "chat",
+    action: "reply",
+    message: message ?? null,
+  });
+}
+
+export async function requestInterviewPrepFeedback(interviewId: string): Promise<InterviewPrepSession> {
+  return invokeFunction<InterviewPrepSession>("interview-prep", {
+    interview_id: interviewId,
+    stage: "chat",
+    action: "feedback",
+  });
+}
+
+// Workshop mode: critique a draft before it's sent, against the most recent
+// question. Ephemeral — nothing is persisted, so you can iterate freely.
+export async function requestInterviewPrepDraftFeedback(interviewId: string, draftAnswer: string): Promise<InterviewPrepDraftFeedback> {
+  return invokeFunction<InterviewPrepDraftFeedback>("interview-prep", {
+    interview_id: interviewId,
+    stage: "chat",
+    action: "feedback",
+    draft_answer: draftAnswer,
+  });
+}
+
+export async function synthesizeInterviewPrep(interviewId: string): Promise<InterviewPrepSession> {
+  return invokeFunction<InterviewPrepSession>("interview-prep", { interview_id: interviewId, stage: "synthesize" });
 }
 
 // The career profile (baseline + ambition) judge-career reads. Edited on Profile.

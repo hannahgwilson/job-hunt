@@ -10,6 +10,7 @@ import RoleFit from "./pages/RoleFit";
 import Company from "./pages/Company";
 import Profile from "./pages/Profile";
 import TuningBench from "./pages/TuningBench";
+import InterviewPrepPage from "./pages/InterviewPrepPage";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -116,6 +117,7 @@ export default function App() {
           <Route path="/role/:id" element={<RoleDetail />} />
           <Route path="/posting/:id" element={<RoleFit />} />
           <Route path="/company/:id" element={<Company />} />
+          <Route path="/interview-prep/:interviewId" element={<InterviewPrepPage />} />
         </Routes>
       </main>
     </div>

@@ -435,3 +435,30 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
 .prep-label { flex: 0 0 5.5rem; color: var(--muted); font-weight: 600; }
 .prep-val { flex: 1; min-width: 0; }
 .prep-stub { margin: 0.4rem 0 0; font-style: italic; }
+
+/* interview prep page: research people + intake suggestions + mock-interview chat */
+.prep-person { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.7rem; margin-bottom: 0.6rem; }
+.prep-person-head { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.prep-ob-suggestions { margin: 0.5rem 0; }
+.prep-intake-saved { margin-top: 0.6rem; padding: 0.5rem 0.65rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.prep-focus { margin-top: 0.9rem; padding: 0.6rem 0.75rem; border-radius: 8px; background: var(--panel-2); border-left: 3px solid var(--accent); }
+.prep-focus h3 { margin: 0 0 0.3rem; }
+
+.prep-chat { display: flex; flex-direction: column; gap: 0.6rem; }
+.prep-chat-log { display: flex; flex-direction: column; gap: 0.5rem; max-height: 28rem; overflow-y: auto; }
+.prep-msg { border-radius: 8px; padding: 0.5rem 0.7rem; border: 1px solid var(--border); }
+.prep-msg p { margin: 0.2rem 0 0; }
+.prep-msg-head { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.prep-msg-interviewer { background: var(--panel-2); }
+.prep-msg-user { background: var(--panel); margin-left: 1.5rem; }
+.prep-chat-input { display: flex; flex-direction: column; gap: 0.4rem; }
+.prep-chat-actions { display: flex; gap: 0.5rem; align-items: center; }
+
+/* coach feedback — an expandable section below the chat, not inline in the transcript */
+.prep-feedback-section { border-top: 1px solid var(--border); padding-top: 0.6rem; }
+.prep-feedback-list { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem; }
+.prep-feedback-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.6rem; }
+.prep-feedback-card p { margin: 0.2rem 0 0; }
+.prep-feedback-card.latest { border-color: var(--accent); }
+.prep-feedback-card.draft { border-style: dashed; border-color: var(--accent); background: var(--panel-2); }
+.prep-feedback-quote { font-style: italic; color: var(--muted); }

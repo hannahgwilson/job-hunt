@@ -66,6 +66,12 @@ export default function Company() {
                   ? <span className={`pill pill-${p.application_status}`}>{p.application_status}</span>
                   : <span className="pill">to apply</span>}
               </div>
+              {p.upcoming_interview && (
+                <div className="muted small">
+                  Interview: {p.upcoming_interview.interview_type ?? "interview"} · {new Date(p.upcoming_interview.scheduled_at).toLocaleString()}
+                  {" · "}<Link to={`/interview-prep/${p.upcoming_interview.id}`}>Full prep →</Link>
+                </div>
+              )}
             </div>
           ))}
         </section>

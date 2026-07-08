@@ -62,6 +62,7 @@ export default function ActionQueue() {
               <li key={i.interview_id}>
                 <strong>{i.title}</strong> @ {i.organization_name}
                 <span className="muted"> — {i.interview_type} · {new Date(i.scheduled_at).toLocaleString()}</span>
+                {" · "}<Link to={`/interview-prep/${i.interview_id}`}>Prep →</Link>
               </li>
             ))}
           </ul>

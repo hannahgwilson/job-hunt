@@ -2238,3 +2238,200 @@ GRANT EXECUTE ON FUNCTION dismiss_suggestion(text, uuid)                TO authe
 GRANT EXECUTE ON FUNCTION promote_suggestion(text, text, text, uuid)    TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION dedupe_job_tasks(uuid)                        TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_interview_prep(uuid, uuid)                TO authenticated, service_role;
+
+-- ============================================================================
+-- INTERVIEW PREP SESSIONS (migration 018)
+-- Round two of get_interview_prep: a persisted session per interview carrying
+-- intake notes, AI-researched people/role background, a mock-interview chat
+-- transcript (incl. out-of-character coach feedback), and a final synthesized
+-- summary (stories / competencies / questions to ask). The four AI-heavy
+-- calls (research / chat reply / chat feedback / synthesize) live in the
+-- interview-prep edge function; these RPCs are its persistence + the plain
+-- reads/writes the web page and MCP do directly.
+-- ============================================================================
+
+-- get_interview_prep_session — everything the prep page needs in one call:
+-- the same role/company/fit/interviewer context as get_interview_prep, plus
+-- recent job-search OB notes for this org (as intake suggestions) and the
+-- interview_prep_sessions row itself (null until start_interview_prep runs).
+CREATE OR REPLACE FUNCTION get_interview_prep_session(
+    p_interview_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    WITH iv AS (
+        SELECT i.id, i.interview_type, i.scheduled_at, i.status,
+               i.interviewer_contact_id,
+               a.id AS application_id, a.job_posting_id, jp.title AS role_title,
+               jp.organization_id, jp.growth_stage, o.name AS organization_name,
+               o.growth_signals, o.growth_rationale
+        FROM interviews i
+        JOIN applications a  ON a.id = i.application_id
+        JOIN job_postings jp ON jp.id = a.job_posting_id
+        JOIN organizations o ON o.id = jp.organization_id
+        WHERE i.id = p_interview_id AND i.user_id = p_user_id
+    )
+    SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM iv)
+        THEN jsonb_build_object('success', false, 'error', 'interview not found')
+        ELSE (
+            SELECT jsonb_build_object(
+                'success', true,
+                'interview', jsonb_build_object(
+                    'id', iv.id, 'interview_type', iv.interview_type,
+                    'scheduled_at', iv.scheduled_at, 'status', iv.status),
+                'role', jsonb_build_object(
+                    'application_id', iv.application_id,
+                    'job_posting_id', iv.job_posting_id, 'title', iv.role_title,
+                    'organization_id', iv.organization_id,
+                    'organization_name', iv.organization_name),
+                'company_intel', jsonb_build_object(
+                    'growth_stage', iv.growth_stage,
+                    'growth_signals', iv.growth_signals,
+                    'growth_rationale', iv.growth_rationale),
+                'fit', (
+                    SELECT jsonb_build_object(
+                        'alignment', rf.alignment, 'summary', rf.summary,
+                        'spikes', rf.spikes, 'gaps', rf.gaps, 'resume_label', r.label)
+                    FROM role_fit rf
+                    JOIN resumes r ON r.id = rf.resume_id
+                    WHERE rf.job_posting_id = iv.job_posting_id
+                    ORDER BY rf.alignment DESC NULLS LAST
+                    LIMIT 1),
+                'interviewer', (
+                    SELECT jsonb_build_object(
+                        'contact_id', c.id, 'name', c.name, 'title', c.title,
+                        'last_contacted', c.last_contacted)
+                    FROM contacts c WHERE c.id = iv.interviewer_contact_id),
+                'ob_suggestions', (
+                    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                        'thought_id', n.id, 'content', n.content, 'created_at', n.created_at)
+                        ORDER BY n.created_at DESC), '[]'::jsonb)
+                    FROM (
+                        SELECT id, content, created_at FROM thoughts
+                        WHERE metadata @> jsonb_build_object(
+                                'topics', jsonb_build_array(iv.organization_name))
+                        ORDER BY created_at DESC LIMIT 8
+                    ) n),
+                'session', (
+                    SELECT to_jsonb(s) FROM interview_prep_sessions s
+                    WHERE s.interview_id = p_interview_id AND s.user_id = p_user_id)
+            )
+            FROM iv)
+    END;
+$$;
+
+-- start_interview_prep — intake. Creates the session on first call; on later
+-- calls, updates whichever fields are passed (NULL leaves them untouched) so
+-- this doubles as "edit the intake notes." No AI involved — instant.
+CREATE OR REPLACE FUNCTION start_interview_prep(
+    p_interview_id uuid,
+    p_intake_notes text DEFAULT NULL,
+    p_source_thought_id text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'start_interview_prep: no user_id';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM interviews WHERE id = p_interview_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'start_interview_prep: interview % not found', p_interview_id;
+    END IF;
+
+    INSERT INTO interview_prep_sessions (user_id, interview_id, intake_notes, source_thought_id)
+    VALUES (p_user_id, p_interview_id, p_intake_notes, p_source_thought_id)
+    ON CONFLICT (interview_id) DO UPDATE SET
+        intake_notes = COALESCE(EXCLUDED.intake_notes, interview_prep_sessions.intake_notes),
+        source_thought_id = COALESCE(EXCLUDED.source_thought_id, interview_prep_sessions.source_thought_id);
+
+    RETURN get_interview_prep_session(p_interview_id, p_user_id);
+END;
+$$;
+
+-- save_interview_prep_research — persists the research-stage AI output.
+-- Called only by the interview-prep edge function, after start_interview_prep
+-- has already created the session row.
+CREATE OR REPLACE FUNCTION save_interview_prep_research(
+    p_interview_id uuid,
+    p_research jsonb,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_interview_prep_research: no user_id';
+    END IF;
+    UPDATE interview_prep_sessions
+    SET research = p_research, research_model = p_model, research_generated_at = now()
+    WHERE interview_id = p_interview_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'save_interview_prep_research: session for interview % not found — call start_interview_prep first', p_interview_id;
+    END IF;
+    RETURN get_interview_prep_session(p_interview_id, p_user_id);
+END;
+$$;
+
+-- save_interview_prep_transcript — whole-array replace (the edge function
+-- fetches the current transcript, appends the new turn(s), sends the full
+-- array back), mirroring how save_role_fit replaces spikes/gaps wholesale.
+CREATE OR REPLACE FUNCTION save_interview_prep_transcript(
+    p_interview_id uuid,
+    p_transcript jsonb,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_interview_prep_transcript: no user_id';
+    END IF;
+    UPDATE interview_prep_sessions
+    SET transcript = p_transcript
+    WHERE interview_id = p_interview_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'save_interview_prep_transcript: session for interview % not found — call start_interview_prep first', p_interview_id;
+    END IF;
+    RETURN get_interview_prep_session(p_interview_id, p_user_id);
+END;
+$$;
+
+-- save_interview_prep_synthesis — persists the closing bulleted summary.
+CREATE OR REPLACE FUNCTION save_interview_prep_synthesis(
+    p_interview_id uuid,
+    p_synthesis jsonb,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_interview_prep_synthesis: no user_id';
+    END IF;
+    UPDATE interview_prep_sessions
+    SET synthesis = p_synthesis, synthesis_model = p_model, synthesized_at = now()
+    WHERE interview_id = p_interview_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'save_interview_prep_synthesis: session for interview % not found — call start_interview_prep first', p_interview_id;
+    END IF;
+    RETURN get_interview_prep_session(p_interview_id, p_user_id);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_interview_prep_session(uuid, uuid)              TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION start_interview_prep(uuid, text, text, uuid)        TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_interview_prep_research(uuid, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_interview_prep_transcript(uuid, jsonb, uuid)   TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_interview_prep_synthesis(uuid, jsonb, text, uuid) TO authenticated, service_role;

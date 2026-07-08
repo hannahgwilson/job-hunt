@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { fetchInterviewPrep } from "../lib/api";
 import type { InterviewPrep as Prep } from "../lib/types";
 
 // Feature 3 (v1 static assembly): an expandable prep card per interview, built
 // from data the app already has — company growth intel, best role_fit, the
-// interviewer contact, and OB company notes. The AI-written brief is a follow-up
-// (see docs/checklist-feature-discovery.md → deferred).
+// interviewer contact, and OB company notes. The full AI-written flow (round
+// two: research, a mock-interview rehearsal, a closing prep sheet) lives on
+// its own page — see InterviewPrepPage / the "Full prep →" link below.
 export default function InterviewPrep({ interviewId }: { interviewId: string }) {
   const [open, setOpen] = useState(false);
   const [prep, setPrep] = useState<Prep | null>(null);
@@ -32,6 +34,9 @@ export default function InterviewPrep({ interviewId }: { interviewId: string }) 
           {err && <p className="error small">{err}</p>}
           {prep && prep.success && (
             <>
+              <p className="prep-stub">
+                <Link to={`/interview-prep/${interviewId}`}>Full prep →</Link>
+              </p>
               <PrepRow label="Company">
                 {prep.company_intel.growth_stage
                   ? <span>{prep.company_intel.growth_stage}-stage</span>
@@ -60,9 +65,6 @@ export default function InterviewPrep({ interviewId }: { interviewId: string }) 
                   </span>
                 ) : <span className="muted">not linked</span>}
               </PrepRow>
-              <p className="muted small prep-stub">
-                An AI-written prep brief (likely questions, STAR prompts) is coming — for now this gathers what the app already knows.
-              </p>
             </>
           )}
           {prep && !prep.success && <p className="muted small">{prep.error ?? "No prep available."}</p>}

@@ -412,6 +412,7 @@ export interface CompanyPosting {
   remote_policy: RemotePolicy | null;
   experience_alignment: number | null;
   application_status: ApplicationStatus | null; // null = still in the to-apply queue
+  upcoming_interview: { id: string; interview_type: string | null; scheduled_at: string } | null;
 }
 
 export interface CompanyData {
@@ -565,6 +566,93 @@ export interface InterviewPrep {
   fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null; resume_label: string | null } | null;
   interviewer: { contact_id: string; name: string; title: string | null; last_contacted: string | null } | null;
   prep_tasks: Task[];
+}
+
+// ── interview prep session (round two — get_interview_prep_session) ──────────
+// The full AI-written prep flow: intake -> research -> mock-interview chat ->
+// closing synthesis. Distinct from the static `InterviewPrep` card above.
+export interface InterviewPrepPerson {
+  name: string;
+  title?: string;
+  likely_relationship?: string;
+  background?: string;
+  what_they_probably_care_about?: string[];
+  sources?: string[];
+}
+
+export interface InterviewPrepResearch {
+  role_summary?: string;
+  role_functions?: string[];
+  people?: InterviewPrepPerson[];
+  prep_focus?: string[];
+}
+
+export type InterviewPrepMessageKind = "interviewer" | "user" | "coach_feedback";
+
+export interface InterviewPrepMessage {
+  id: string;
+  kind: InterviewPrepMessageKind;
+  content: string;          // for kind='coach_feedback', a JSON-encoded InterviewPrepFeedback
+  in_reply_to?: string;
+  created_at: string;
+}
+
+export interface InterviewPrepFeedback {
+  rating: "strong" | "solid" | "needs_work" | "weak";
+  what_worked: string[];
+  what_to_improve: string[];
+  suggested_rewrite?: string;
+}
+
+// Workshop mode — critiquing a draft before it's sent. Ephemeral: nothing is
+// persisted, so this is a plain result object, not a fresh InterviewPrepSession.
+export interface InterviewPrepDraftFeedback {
+  success: boolean;
+  error?: string;
+  feedback?: InterviewPrepFeedback;
+  question?: string | null;
+}
+
+export interface InterviewPrepStory {
+  title: string;
+  story: string;
+  best_for?: string;
+}
+
+export interface InterviewPrepCompetency {
+  name: string;
+  why_it_matters?: string;
+  evidence?: string;
+}
+
+export interface InterviewPrepSynthesis {
+  stories: InterviewPrepStory[];
+  competencies: InterviewPrepCompetency[];
+  questions_to_ask: string[];
+}
+
+export interface InterviewPrepSessionRow {
+  intake_notes: string | null;
+  source_thought_id: string | null;
+  research: InterviewPrepResearch | null;
+  research_model: string | null;
+  research_generated_at: string | null;
+  transcript: InterviewPrepMessage[];
+  synthesis: InterviewPrepSynthesis | null;
+  synthesis_model: string | null;
+  synthesized_at: string | null;
+}
+
+export interface InterviewPrepSession {
+  success: boolean;
+  error?: string;
+  interview: { id: string; interview_type: string | null; scheduled_at: string | null; status: string };
+  role: { application_id: string; job_posting_id: string; title: string; organization_id: string; organization_name: string };
+  company_intel: { growth_stage: string | null };
+  fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null } | null;
+  interviewer: { contact_id: string; name: string; title: string | null } | null;
+  ob_suggestions: Array<{ thought_id: string; content: string; created_at: string }>;
+  session: InterviewPrepSessionRow | null;
 }
 
 // One rejected/withdrawn application for the Pipeline "Rejected" area. Computed

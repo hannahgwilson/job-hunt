@@ -54,6 +54,13 @@
  *     once at cold start instead of being rebuilt on every request — matches
  *     the pattern in open-brain-mcp. Auth + the Accept-header patch (the only
  *     genuinely per-request work) moved to supabase/functions/_shared/mcp-request.ts.
+ *
+ * What changed in v2.6 (interview prep flow):
+ *   - `start_interview_prep` / `get_interview_prep` — intake + read for a
+ *     persisted per-interview prep session (research on the role/people, a
+ *     mock-interview chat transcript, a closing prep sheet). The AI-heavy
+ *     stages live in the new `interview-prep` edge function, driven from the
+ *     tracking hub's Interview Prep page, not from these tools.
  */
 
 import { Hono } from "hono";
@@ -647,6 +654,50 @@ server.tool(
 
     if (error) throw new Error(`get_upcoming_interviews failed: ${error.message}`);
     return ok({ success: true, count: data.length, interviews: data });
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────────
+// start_interview_prep / get_interview_prep — the interview-prep flow's
+// intake + read. The AI-heavy stages (research / mock-interview chat /
+// synthesis) live in the interview-prep edge function and stay UI-button
+// driven (like the other AI judges); these two are plain conversational
+// reads/writes, per CLAUDE.md's "writes are easiest to do here, in
+// conversation" — mirrors how Hannah originally ran this prep in a chat.
+// ───────────────────────────────────────────────────────────────────────
+server.tool(
+  "start_interview_prep",
+  "Start (or update) an interview prep session: what this specific interview will cover. Creates the session on first call; later calls with new intake_notes update it. Follow up on the tracking-hub Interview Prep page for AI research, a mock-interview rehearsal, and a closing prep sheet.",
+  {
+    interview_id: z.string().describe("The interviews.id to prep for"),
+    intake_notes: z.string().optional().describe("What this interview covers — topics, format, who's involved"),
+    source_thought_id: z.string().optional().describe("An Open Brain thought id this intake was drawn from, if any"),
+  },
+  async ({ interview_id, intake_notes, source_thought_id }) => {
+    const { data, error } = await supabase.rpc("start_interview_prep", {
+      p_interview_id: interview_id,
+      p_intake_notes: intake_notes ?? null,
+      p_source_thought_id: source_thought_id ?? null,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`start_interview_prep failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "get_interview_prep",
+  "Read an interview's prep session: intake notes, AI-researched background on the role/people, the mock-interview transcript, and the closing prep sheet (stories to tell, competencies to focus on, questions to ask) once generated.",
+  {
+    interview_id: z.string().describe("The interviews.id to check"),
+  },
+  async ({ interview_id }) => {
+    const { data, error } = await supabase.rpc("get_interview_prep_session", {
+      p_interview_id: interview_id,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`get_interview_prep failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
   },
 );
 

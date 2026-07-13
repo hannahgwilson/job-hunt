@@ -2435,3 +2435,81 @@ GRANT EXECUTE ON FUNCTION start_interview_prep(uuid, text, text, uuid)        TO
 GRANT EXECUTE ON FUNCTION save_interview_prep_research(uuid, jsonb, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_interview_prep_transcript(uuid, jsonb, uuid)   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_interview_prep_synthesis(uuid, jsonb, text, uuid) TO authenticated, service_role;
+
+-- ============================================================================
+-- LinkedIn prospect contacts (migration 019)
+-- A prospect is a contacts row tagged 'prospect' (+ 'job-hunt') — someone found
+-- via a LinkedIn hiring-manager search but not yet a confirmed professional
+-- contact. save_prospect_contact() creates it; promote_prospect_contact() drops
+-- the 'prospect' tag and adds 'professional' once you've actually connected.
+-- Mirrors the shape of crm_add_contact (the external professional-crm MCP) but
+-- lives here because the browser can only reach this repo's RPCs directly — it
+-- has no path to that MCP server.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION save_prospect_contact(
+    p_organization_id uuid,
+    p_name text,
+    p_title text DEFAULT NULL,
+    p_linkedin_url text DEFAULT NULL,
+    p_notes text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_contact contacts;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_prospect_contact: no user_id';
+    END IF;
+    IF p_name IS NULL OR btrim(p_name) = '' THEN
+        RAISE EXCEPTION 'save_prospect_contact: name is required';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM organizations WHERE id = p_organization_id AND user_id = p_user_id) THEN
+        RAISE EXCEPTION 'save_prospect_contact: organization % not found or not owned', p_organization_id;
+    END IF;
+
+    INSERT INTO contacts (user_id, organization_id, name, title, linkedin_url, notes, tags)
+    VALUES (p_user_id, p_organization_id, p_name, p_title, p_linkedin_url, p_notes, ARRAY['job-hunt', 'prospect'])
+    RETURNING * INTO v_contact;
+
+    RETURN jsonb_build_object('success', true, 'contact', to_jsonb(v_contact));
+END;
+$$;
+
+-- promote_prospect_contact — "I actually connected with this person": drops the
+-- 'prospect' tag and ensures 'professional' is set, matching the tag
+-- convention confirmed CRM contacts carry (CLAUDE.md). Idempotent.
+CREATE OR REPLACE FUNCTION promote_prospect_contact(
+    p_contact_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_contact contacts;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'promote_prospect_contact: no user_id';
+    END IF;
+
+    UPDATE contacts
+    SET tags = (
+        SELECT array_agg(DISTINCT t ORDER BY t)
+        FROM unnest(array_remove(COALESCE(tags, '{}'), 'prospect') || ARRAY['professional']) AS t
+    )
+    WHERE id = p_contact_id AND user_id = p_user_id
+    RETURNING * INTO v_contact;
+
+    IF v_contact.id IS NULL THEN
+        RAISE EXCEPTION 'promote_prospect_contact: contact % not found or not owned', p_contact_id;
+    END IF;
+
+    RETURN jsonb_build_object('success', true, 'contact', to_jsonb(v_contact));
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION save_prospect_contact(uuid, text, text, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION promote_prospect_contact(uuid, uuid)                     TO authenticated, service_role;

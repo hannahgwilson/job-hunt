@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchCompany } from "../lib/api";
+import ProspectsPanel from "../components/ProspectsPanel";
 import type { CompanyData } from "../lib/types";
 
 // Company page: the employer, my connections there, and every role I have queued
@@ -49,7 +50,11 @@ export default function Company() {
             <div key={c.id} className="connection">
               <strong>{c.name}</strong>
               {c.title && <span className="muted"> · {c.title}</span>}
+              {c.linkedin_url && (
+                <a href={c.linkedin_url} target="_blank" rel="noreferrer" className="small"> profile ↗</a>
+              )}
               {c.tags?.includes("job-hunt") && <span className="pill">job-hunt</span>}
+              {c.tags?.includes("prospect") && <span className="pill">prospect</span>}
             </div>
           ))}
         </section>
@@ -76,6 +81,8 @@ export default function Company() {
           ))}
         </section>
       </div>
+
+      <ProspectsPanel organizationId={org.id} organizationName={org.name} />
     </div>
   );
 }

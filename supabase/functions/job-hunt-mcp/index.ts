@@ -343,15 +343,14 @@ server.tool(
 );
 
 // ───────────────────────────────────────────────────────────────────────
-// save_prospect_contact / promote_prospect_contact — LinkedIn hiring-manager
-// search results. A prospect is a contacts row tagged 'prospect'+'job-hunt' —
-// someone found via search but not yet a confirmed CRM contact. Prefer
-// professional-crm `crm_add_contact` for people you already know; these are
-// for names surfaced by the "Find hiring manager" search launcher.
+// save_prospect_contact / promote_prospect_contact — a prospect is a contacts
+// row tagged 'prospect'+'job-hunt': someone found (e.g. via LinkedIn) for a
+// target company but not yet a confirmed CRM contact. Prefer professional-crm
+// `crm_add_contact` for people you already know.
 // ───────────────────────────────────────────────────────────────────────
 server.tool(
   "save_prospect_contact",
-  "Save a person found via a LinkedIn hiring-manager search as an unconfirmed prospect, tagged ['job-hunt','prospect']. Distinct from professional-crm crm_add_contact, which is for people already confirmed as real contacts.",
+  "Save a person found for a target company (e.g. via LinkedIn) as an unconfirmed prospect, tagged ['job-hunt','prospect']. Distinct from professional-crm crm_add_contact, which is for people already confirmed as real contacts.",
   {
     organization_id: z.string(),
     name: z.string(),

@@ -49,8 +49,6 @@ export interface JobPosting {
   closing_date: string | null;
   closed_at: string | null;
   closed_reason: ClosedReason | null;
-  requirements: string[] | null;
-  nice_to_haves: string[] | null;
   organizations?: Organization;
 }
 

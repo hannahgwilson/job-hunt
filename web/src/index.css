@@ -463,18 +463,7 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
 .prep-feedback-card.draft { border-style: dashed; border-color: var(--accent); background: var(--panel-2); }
 .prep-feedback-quote { font-style: italic; color: var(--muted); }
 
-/* Find hiring manager — LinkedIn search launcher + prospect capture */
-.fhm-search-row { display: flex; gap: 0.5rem; margin: 0.6rem 0; }
-.fhm-search-row input { flex: 1; }
-.fhm-search-btn {
-  display: inline-flex; align-items: center; white-space: nowrap; text-decoration: none;
-  border-radius: 8px; padding: 0.2rem 0.5rem; font-size: 0.8rem;
-  background: transparent; border: 1px solid var(--border); color: var(--text);
-}
-.fhm-search-btn:hover { background: var(--panel-2); }
-.fhm-paste-row { margin: 0.4rem 0 0.6rem; }
-.fhm-suggestions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.6rem; }
-.fhm-chip-jd { border-color: var(--accent); color: var(--accent); }
+/* Prospects — capture form for someone found at a company, not yet a confirmed contact */
 .fhm-form { margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .fhm-form-actions { display: flex; gap: 0.5rem; }
 .fhm-prospect-list { list-style: none; margin: 0.8rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }

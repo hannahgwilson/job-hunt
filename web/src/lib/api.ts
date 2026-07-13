@@ -43,7 +43,7 @@ export async function fetchRole(applicationId: string): Promise<{
       id, status, applied_date, response_date, notes,
       job_postings:job_posting_id (
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
-        closed_at, closed_reason, requirements, nice_to_haves,
+        closed_at, closed_reason,
         organizations:organization_id ( id, name )
       )
     `)

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchCompany } from "../lib/api";
-import FindHiringManager from "../components/FindHiringManager";
+import ProspectsPanel from "../components/ProspectsPanel";
 import type { CompanyData } from "../lib/types";
 
 // Company page: the employer, my connections there, and every role I have queued
@@ -82,7 +82,7 @@ export default function Company() {
         </section>
       </div>
 
-      <FindHiringManager organizationId={org.id} organizationName={org.name} />
+      <ProspectsPanel organizationId={org.id} organizationName={org.name} />
     </div>
   );
 }

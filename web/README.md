@@ -31,9 +31,9 @@ query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
 | `/funnel` | Conversion + median time-in-stage from `application_status_history` |
 | `/insights` | One-click **career + growth backfill** across all un-judged roles, plus a fit-vs-(career+growth) scatter — bubble size = comp, label = location |
 | `/resume` | Resume **variants** (senior-IC / manager / …), the **career profile** the career judge reads, AI fit scoring per role, and the **judge-feedback digest** — every role's tweaks synthesized into ranked, bucketed themes |
-| `/role/:id` | Stage-history timeline + interviews with go/no-go decisions, the priority breakdown + AI judges for the role, and the **Find hiring manager** search launcher (title pre-filled from the JD) |
-| `/posting/:id` | Standalone role fit page (roles not yet applied to) — run the AI judges, compare resume variants, **Find hiring manager** search launcher |
-| `/company/:id` | Company view — org details, connections there, roles queued, **Find hiring manager** LinkedIn search launcher |
+| `/role/:id` | Stage-history timeline + interviews with go/no-go decisions, plus the priority breakdown + AI judges for the role |
+| `/posting/:id` | Standalone role fit page — run the AI judges, compare resume variants |
+| `/company/:id` | Company view — org details, connections there (with LinkedIn profile links), roles queued, **prospect capture** for people you've found but haven't confirmed as a contact yet |
 
 ## Run
 

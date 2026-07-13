@@ -343,6 +343,53 @@ server.tool(
 );
 
 // ───────────────────────────────────────────────────────────────────────
+// save_prospect_contact / promote_prospect_contact — LinkedIn hiring-manager
+// search results. A prospect is a contacts row tagged 'prospect'+'job-hunt' —
+// someone found via search but not yet a confirmed CRM contact. Prefer
+// professional-crm `crm_add_contact` for people you already know; these are
+// for names surfaced by the "Find hiring manager" search launcher.
+// ───────────────────────────────────────────────────────────────────────
+server.tool(
+  "save_prospect_contact",
+  "Save a person found via a LinkedIn hiring-manager search as an unconfirmed prospect, tagged ['job-hunt','prospect']. Distinct from professional-crm crm_add_contact, which is for people already confirmed as real contacts.",
+  {
+    organization_id: z.string(),
+    name: z.string(),
+    title: z.string().optional(),
+    linkedin_url: z.string().optional(),
+    notes: z.string().optional(),
+  },
+  async (args) => {
+    const { data, error } = await supabase.rpc("save_prospect_contact", {
+      p_organization_id: args.organization_id,
+      p_name: args.name,
+      p_title: args.title ?? null,
+      p_linkedin_url: args.linkedin_url ?? null,
+      p_notes: args.notes ?? null,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`save_prospect_contact failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "promote_prospect_contact",
+  "Mark a prospect as an actual confirmed contact — drops the 'prospect' tag and adds 'professional'. Use once I've actually connected with them.",
+  {
+    contact_id: z.string(),
+  },
+  async (args) => {
+    const { data, error } = await supabase.rpc("promote_prospect_contact", {
+      p_contact_id: args.contact_id,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`promote_prospect_contact failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────────
 // close_role — mark a role filled/closed (works before OR after applying)
 // ───────────────────────────────────────────────────────────────────────
 server.tool(

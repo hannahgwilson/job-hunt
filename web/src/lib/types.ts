@@ -402,6 +402,7 @@ export interface CompanyConnection {
   name: string;
   title: string | null;
   tags: string[] | null;
+  linkedin_url: string | null;
 }
 
 export interface CompanyPosting {

@@ -9,8 +9,9 @@ talks to Supabase **directly** via `supabase-js` — no MCP in the data path:
   `get_roles_analytics`).
 - **Writes** are the transactional RPCs (`intake_role`, `submit_application`,
   `advance_application`, `set_priority_signals`, `upsert_resume_variant`,
-  `save_career_profile`) — the same functions the MCP wraps, so the app and the
-  agent share one implementation.
+  `save_career_profile`, `save_prospect_contact`, `promote_prospect_contact`) —
+  the same functions the MCP wraps, so the app and the agent share one
+  implementation.
 - **AI judges** are server-side Edge Functions (Anthropic key stays off the
   client): `judge-fit` scores resume variants vs a role, `judge-career` /
   `judge-growth` fill the other two priority signals, and `synthesize-feedback`
@@ -30,9 +31,9 @@ query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
 | `/funnel` | Conversion + median time-in-stage from `application_status_history` |
 | `/insights` | One-click **career + growth backfill** across all un-judged roles, plus a fit-vs-(career+growth) scatter — bubble size = comp, label = location |
 | `/resume` | Resume **variants** (senior-IC / manager / …), the **career profile** the career judge reads, AI fit scoring per role, and the **judge-feedback digest** — every role's tweaks synthesized into ranked, bucketed themes |
-| `/role/:id` | Stage-history timeline + interviews with go/no-go decisions, plus the priority breakdown + AI judges for the role |
+| `/role/:id` | Stage-history timeline + interviews with go/no-go decisions, the priority breakdown + AI judges for the role, and the **Find hiring manager** search launcher (title pre-filled from the JD) |
 | `/posting/:id` | Standalone role fit page — run the AI judges, compare resume variants |
-| `/company/:id` | Company view — org details, connections there, roles queued |
+| `/company/:id` | Company view — org details, connections there, roles queued, **Find hiring manager** LinkedIn search launcher |
 
 ## Run
 

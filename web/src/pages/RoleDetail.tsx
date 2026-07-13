@@ -8,6 +8,7 @@ import CloseRoleControl from "../components/CloseRoleControl";
 import StatusActions from "../components/StatusActions";
 import AddToChecklist from "../components/AddToChecklist";
 import InterviewPrep from "../components/InterviewPrep";
+import FindHiringManager from "../components/FindHiringManager";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
@@ -98,6 +99,14 @@ export default function RoleDetail() {
 
       {posting?.id && (
         <TailoredResumePanel jobPostingId={posting.id} baseResumeId={fit.data?.recommended_resume_id} />
+      )}
+
+      {posting?.organizations && (
+        <FindHiringManager
+          organizationId={posting.organizations.id}
+          organizationName={posting.organizations.name}
+          roleTitle={posting.title}
+        />
       )}
 
       <div className="cols">

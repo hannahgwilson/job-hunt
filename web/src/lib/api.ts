@@ -6,7 +6,7 @@ import { supabase } from "./supabase";
 import type {
   Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
-  CompanyData, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
+  CompanyData, CompanyConnection, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
   PriorityComponents, PriorityWeightsResponse,
   ResumeBullet, BulletSection, BulletSource, AssembledResume, FeedbackTheme,
   ApplicationStatus, ClosedReason, ClosedRole, RejectedApplication,
@@ -84,7 +84,7 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
 
   const { data: connections, error: cErr } = await supabase
     .from("contacts")
-    .select("id, name, title, tags")
+    .select("id, name, title, tags, linkedin_url")
     .eq("organization_id", orgId);
   if (cErr) throw cErr;
 
@@ -128,6 +128,45 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
       };
     }),
   };
+}
+
+// Prospects found via the "Find hiring manager" LinkedIn search launcher —
+// contacts tagged 'prospect', scoped to one org. Confirmed contacts (no
+// 'prospect' tag) are fetched separately by fetchCompany's connections query.
+export async function fetchProspects(organizationId: string): Promise<CompanyConnection[]> {
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id, name, title, tags, linkedin_url")
+    .eq("organization_id", organizationId)
+    .contains("tags", ["prospect"]);
+  if (error) throw error;
+  return (data ?? []) as CompanyConnection[];
+}
+
+export async function saveProspectContact(params: {
+  organizationId: string;
+  name: string;
+  title?: string;
+  linkedinUrl?: string;
+  notes?: string;
+}): Promise<CompanyConnection> {
+  const { data, error } = await supabase.rpc("save_prospect_contact", {
+    p_organization_id: params.organizationId,
+    p_name: params.name,
+    p_title: params.title ?? null,
+    p_linkedin_url: params.linkedinUrl ?? null,
+    p_notes: params.notes ?? null,
+  });
+  if (error) throw error;
+  return (data as { contact: CompanyConnection }).contact;
+}
+
+export async function promoteProspectContact(contactId: string): Promise<CompanyConnection> {
+  const { data, error } = await supabase.rpc("promote_prospect_contact", {
+    p_contact_id: contactId,
+  });
+  if (error) throw error;
+  return (data as { contact: CompanyConnection }).contact;
 }
 
 // Every posting with its judged signals, priority components, comp + location,

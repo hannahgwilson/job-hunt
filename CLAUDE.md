@@ -20,6 +20,7 @@ but **writes are easiest to do here, in conversation.**
 | `organizations` | `employer-target` | a company I'm pursuing |
 | | `past-employer`, `agency`, `client` | other relationships |
 | `contacts` | `professional`, `job-hunt` | someone in the search (recruiter, referrer, interviewer) |
+| | `job-hunt`, `prospect` | found via the tracking hub's "Find hiring manager" LinkedIn search launcher, not yet confirmed — `save_prospect_contact` / `promote_prospect_contact` |
 | `thoughts` (Open Brain) | `job-search`, plus the company name | notes about a company or role |
 
 ## Play 1 — Intake a role (requirements 1 & 2)

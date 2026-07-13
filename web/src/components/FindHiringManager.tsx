@@ -1,27 +1,39 @@
 import { useEffect, useState } from "react";
 import { fetchProspects, promoteProspectContact, saveProspectContact } from "../lib/api";
-import { buildLinkedInSearchUrl, inferManagerTitles } from "../lib/hiringManagerSearch";
+import { buildLinkedInSearchUrl, extractStatedManagerTitle, inferManagerTitles } from "../lib/hiringManagerSearch";
 import type { CompanyConnection } from "../lib/types";
 
 // "Find hiring manager" — the LinkedIn search launcher (Play: see CLAUDE.md
 // company-page features). There's no accessible LinkedIn API, so this builds
-// the right search (JD title, or an inferred next-level-up title) and opens it
-// for the user to run themselves, signed in as themselves — so it reflects
-// their real network. Whoever they find gets saved as a 'prospect' contact
-// (save_prospect_contact), separate from a confirmed CRM contact until
-// promoted (promote_prospect_contact). Used on both the role page (title
-// pre-filled from the posting) and the company page (title left blank).
+// the right search and opens it for the user to run themselves, signed in as
+// themselves — so it reflects their real network. Two ways to land on a
+// title: (1) the JD states who the role reports to ("reports to the SVP of
+// X") — extractStatedManagerTitle pulls that out of jdContext (whatever JD
+// text is stored) or a line the user pastes directly, since this app doesn't
+// store full JD bodies; (2) no stated title, so inferManagerTitles guesses a
+// next-level-up title from the role's own function. Whoever they find gets
+// saved as a 'prospect' contact (save_prospect_contact), separate from a
+// confirmed CRM contact until promoted (promote_prospect_contact). Used on
+// the role pages (title pre-filled from the posting) and the company page
+// (title left blank, no JD to draw from).
 export default function FindHiringManager({
   organizationId,
   organizationName,
   roleTitle,
+  jdContext,
 }: {
   organizationId: string;
   organizationName: string;
   roleTitle?: string;
+  jdContext?: string;
 }) {
-  const suggestions = roleTitle ? inferManagerTitles(roleTitle) : [];
-  const [targetTitle, setTargetTitle] = useState(suggestions[0] ?? "");
+  const statedTitle = jdContext ? extractStatedManagerTitle(jdContext) : null;
+  const ladderSuggestions = roleTitle ? inferManagerTitles(roleTitle) : [];
+  const suggestions = statedTitle
+    ? [statedTitle, ...ladderSuggestions.filter((s) => s !== statedTitle)]
+    : ladderSuggestions;
+  const [targetTitle, setTargetTitle] = useState(statedTitle ?? ladderSuggestions[0] ?? "");
+  const [pastedLine, setPastedLine] = useState("");
 
   const [prospects, setProspects] = useState<CompanyConnection[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -101,9 +113,32 @@ export default function FindHiringManager({
         </a>
       </div>
 
+      <div className="fhm-paste-row">
+        <input
+          value={pastedLine}
+          onChange={(e) => {
+            const value = e.target.value;
+            setPastedLine(value);
+            const extracted = extractStatedManagerTitle(value);
+            if (extracted) setTargetTitle(extracted);
+          }}
+          placeholder='Or paste a line from the JD, e.g. "reports to the VP of Engineering"'
+        />
+      </div>
+
       {suggestions.length > 0 && (
         <div className="fhm-suggestions">
-          {suggestions.map((s) => (
+          {statedTitle && (
+            <button
+              key={statedTitle}
+              className="ghost sm fhm-chip-jd"
+              title="Stated in the JD"
+              onClick={() => setTargetTitle(statedTitle)}
+            >
+              from JD: {statedTitle}
+            </button>
+          )}
+          {suggestions.filter((s) => s !== statedTitle).map((s) => (
             <button key={s} className="ghost sm" onClick={() => setTargetTitle(s)}>
               {s}
             </button>

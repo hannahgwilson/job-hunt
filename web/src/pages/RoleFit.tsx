@@ -4,6 +4,7 @@ import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
 import CloseRoleControl from "../components/CloseRoleControl";
+import FindHiringManager from "../components/FindHiringManager";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import { submitApplication } from "../lib/api";
 
@@ -88,6 +89,13 @@ export default function RoleFit() {
       />
 
       <TailoredResumePanel jobPostingId={p.id} baseResumeId={data.recommended_resume_id} />
+
+      <FindHiringManager
+        organizationId={p.organization_id}
+        organizationName={p.organization_name}
+        roleTitle={p.title}
+        jdContext={[...(p.requirements ?? []), ...(p.nice_to_haves ?? [])].join(" ")}
+      />
 
       {(p.requirements?.length ?? 0) > 0 && (
         <section className="card">

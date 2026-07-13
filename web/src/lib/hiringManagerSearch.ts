@@ -31,7 +31,21 @@ const FUNCTION_LADDERS: Array<{ keywords: string[]; ladder: string[] }> = [
   { keywords: ["security"], ladder: ["Security Manager", "Director of Security", "VP Security"] },
 ];
 
-const DEFAULT_LADDER = ["Hiring Manager", "Director", "VP"];
+const DEFAULT_LADDER = ["Director", "VP"];
+
+// Matches an explicit reporting line in JD text — "reports to the SVP of
+// Health Care Analytics", "reporting directly to the VP of Engineering" — and
+// captures the title. This is a fact stated by the JD, not a guess, so it
+// takes priority over the inferred ladder whenever it's found.
+const REPORTS_TO_RE = /[Rr]eport(?:s|ing)?\s+(?:directly\s+)?to\s+(?:[Tt]he\s+)?([A-Z][A-Za-z0-9&/'.\- ]{2,80}?)(?=[,.;\n]|$)/;
+
+export function extractStatedManagerTitle(jdText: string): string | null {
+  if (!jdText) return null;
+  const match = REPORTS_TO_RE.exec(jdText);
+  if (!match) return null;
+  const title = match[1].trim().replace(/\s+/g, " ");
+  return title.length > 0 ? title : null;
+}
 
 // "Senior AI Engineer" -> "ai engineer". Only strips one seniority prefix —
 // "Senior Staff Engineer" -> "staff engineer", not bare "engineer".

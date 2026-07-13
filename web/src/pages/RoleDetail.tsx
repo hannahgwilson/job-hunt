@@ -106,6 +106,7 @@ export default function RoleDetail() {
           organizationId={posting.organizations.id}
           organizationName={posting.organizations.name}
           roleTitle={posting.title}
+          jdContext={[...(posting.requirements ?? []), ...(posting.nice_to_haves ?? [])].join(" ")}
         />
       )}
 

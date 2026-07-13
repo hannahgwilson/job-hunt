@@ -117,6 +117,58 @@ describe("FindHiringManager", () => {
     expect(screen.getByPlaceholderText("Name")).toHaveValue("Jamie Rivera");
   });
 
+  it("prefers a title stated in the JD over the inferred ladder, and labels it distinctly", async () => {
+    fetchProspects.mockResolvedValue([]);
+    render(
+      <FindHiringManager
+        organizationId="org-1"
+        organizationName="CVS Health"
+        roleTitle="Senior Data Analyst"
+        jdContext="This role is reporting to the SVP of Health Care Analytics."
+      />,
+    );
+
+    expect(await screen.findByPlaceholderText(/Title to search for/i)).toHaveValue("SVP of Health Care Analytics");
+    expect(screen.getByRole("button", { name: "from JD: SVP of Health Care Analytics" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Search LinkedIn/i })).toHaveAttribute(
+      "href",
+      "https://www.linkedin.com/search/results/people/?keywords=SVP%20of%20Health%20Care%20Analytics%20CVS%20Health",
+    );
+  });
+
+  it("falls back to the ladder (not a bare 'Hiring Manager' guess) when the JD states no reporting line", async () => {
+    fetchProspects.mockResolvedValue([]);
+    render(
+      <FindHiringManager organizationId="org-1" organizationName="Acme Corp" roleTitle="Chief of Staff" />,
+    );
+
+    const input = await screen.findByPlaceholderText(/Title to search for/i);
+    expect(input).toHaveValue("Director");
+    expect(screen.queryByRole("button", { name: /Hiring Manager/i })).not.toBeInTheDocument();
+  });
+
+  it("extracts a title live from a pasted JD line", async () => {
+    fetchProspects.mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<FindHiringManager organizationId="org-1" organizationName="Acme Corp" />);
+
+    const pasteBox = await screen.findByPlaceholderText(/paste a line from the JD/i);
+    await user.type(pasteBox, "You will report to the VP of Engineering.");
+
+    expect(screen.getByPlaceholderText(/Title to search for/i)).toHaveValue("VP of Engineering");
+  });
+
+  it("doesn't clobber the title field when a pasted line has no reporting line in it", async () => {
+    fetchProspects.mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<FindHiringManager organizationId="org-1" organizationName="Acme Corp" roleTitle="Senior Software Engineer" />);
+
+    const pasteBox = await screen.findByPlaceholderText(/paste a line from the JD/i);
+    await user.type(pasteBox, "5+ years of experience required.");
+
+    expect(screen.getByPlaceholderText(/Title to search for/i)).toHaveValue("Engineering Manager");
+  });
+
   it("promotes a prospect to a confirmed contact", async () => {
     fetchProspects.mockResolvedValueOnce([PROSPECT]).mockResolvedValueOnce([]);
     promoteProspectContact.mockResolvedValue({ ...PROSPECT, tags: ["job-hunt", "professional"] });

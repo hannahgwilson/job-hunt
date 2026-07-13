@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildLinkedInSearchUrl, inferManagerTitles, stripSeniority } from "./hiringManagerSearch";
+import {
+  buildLinkedInSearchUrl, extractStatedManagerTitle, inferManagerTitles, stripSeniority,
+} from "./hiringManagerSearch";
 
 describe("stripSeniority", () => {
   it("strips a single leading seniority word", () => {
@@ -47,13 +49,43 @@ describe("inferManagerTitles", () => {
   });
 
   it("falls back to the generic ladder for an unrecognized function", () => {
-    expect(inferManagerTitles("Chief of Staff")).toEqual(["Hiring Manager", "Director", "VP"]);
+    expect(inferManagerTitles("Chief of Staff")).toEqual(["Director", "VP"]);
   });
 
   it("matches regardless of seniority prefix", () => {
     expect(inferManagerTitles("VP Marketing")).toEqual([
       "Marketing Manager", "Director of Marketing", "VP Marketing",
     ]);
+  });
+});
+
+describe("extractStatedManagerTitle", () => {
+  it("extracts the title from 'reporting to the X' (the CVS example)", () => {
+    expect(extractStatedManagerTitle("This role is reporting to the SVP of Health Care Analytics."))
+      .toBe("SVP of Health Care Analytics");
+  });
+
+  it("extracts from 'reports to the X'", () => {
+    expect(extractStatedManagerTitle("You will report to the VP of Engineering, who leads the platform org."))
+      .toBe("VP of Engineering");
+  });
+
+  it("extracts from 'reporting directly to X' with no 'the'", () => {
+    expect(extractStatedManagerTitle("Reporting directly to Director of Product, you will own the roadmap."))
+      .toBe("Director of Product");
+  });
+
+  it("stops at the end of the string when there's no trailing punctuation", () => {
+    expect(extractStatedManagerTitle("This role reports to the Head of Data Platform"))
+      .toBe("Head of Data Platform");
+  });
+
+  it("returns null when the JD says nothing about a reporting line", () => {
+    expect(extractStatedManagerTitle("5+ years of experience with SQL and Python required.")).toBeNull();
+  });
+
+  it("returns null for empty or missing text", () => {
+    expect(extractStatedManagerTitle("")).toBeNull();
   });
 });
 

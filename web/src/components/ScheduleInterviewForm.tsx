@@ -8,11 +8,19 @@ import { scheduleInterview } from "../lib/api";
 export default function ScheduleInterviewForm({
   applicationId,
   onScheduled,
+  startOpen = false,
+  onCancel,
 }: {
   applicationId: string;
   onScheduled: () => void;
+  // Skip the "+ Schedule interview…" toggle and render the form expanded —
+  // for callers (e.g. a quick-add flow) where the open intent is already given.
+  startOpen?: boolean;
+  // Called when Cancel is clicked while startOpen — lets the caller collapse
+  // its own wrapping panel instead of just re-showing the toggle button.
+  onCancel?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen);
   const [date, setDate] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,7 +70,13 @@ export default function ScheduleInterviewForm({
       </label>
       <div className="schedule-interview-actions">
         <button className="sm" disabled={busy} onClick={save}>{busy ? "…" : "Save"}</button>
-        <button className="ghost sm" disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</button>
+        <button
+          className="ghost sm"
+          disabled={busy}
+          onClick={() => { setOpen(false); setError(null); onCancel?.(); }}
+        >
+          Cancel
+        </button>
       </div>
       {error && <p className="error small">{error}</p>}
     </div>

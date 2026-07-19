@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { fetchJobChecklist, createTask, fetchActionQueue, dedupeJobTasks } from "../lib/api";
 import Checklist from "../components/Checklist";
 import SuggestionInbox from "../components/SuggestionInbox";
+import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
 import type { Task, ActionQueue as Q } from "../lib/types";
 
 export default function ActionQueue() {
@@ -12,12 +13,13 @@ export default function ActionQueue() {
   const [error, setError] = useState<string | null>(null);
 
   function loadTasks() { fetchJobChecklist().then(setTasks).catch((e) => setError(e.message)); }
+  function loadQueue() { fetchActionQueue().then(setQ).catch((e) => setError(e.message)); }
   useEffect(() => {
     // Self-heal any duplicate role tasks (e.g. from before promote_suggestion
     // became idempotent) before showing the list. Cleanup failure is non-fatal —
     // don't blank the page over it.
     dedupeJobTasks().catch(() => {}).finally(loadTasks);
-    fetchActionQueue().then(setQ).catch((e) => setError(e.message));
+    loadQueue();
   }, []);
 
   async function addFreeform(e: FormEvent) {
@@ -80,6 +82,7 @@ export default function ActionQueue() {
                 <span className="muted"> @ {r.organization_name} — {r.status}</span>
                 {r.days_waiting != null && <span className="muted"> · {r.days_waiting}d waiting</span>}
                 {r.url && <> · <a href={r.url} target="_blank" rel="noreferrer">posting ↗</a></>}
+                <ScheduleInterviewForm applicationId={r.application_id} onScheduled={loadQueue} />
               </li>
             ))}
           </ul>

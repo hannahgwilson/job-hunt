@@ -74,6 +74,7 @@ export interface Interview {
   interview_type: string | null;
   scheduled_at: string | null;
   status: string;
+  notes: string | null;
   rating: number | null;
   feedback: string | null;
   advance_decision: "advance" | "hold" | "withdraw" | "rejected" | null;

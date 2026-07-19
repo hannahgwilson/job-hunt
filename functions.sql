@@ -688,6 +688,43 @@ END;
 $$;
 
 
+-- schedule_interview — add an interview round to an application. The tracking
+-- hub's role page uses this for the plain date + notes case; the MCP tool of
+-- the same name additionally supports interviewer_contact_id and the
+-- add_to_calendar bridge (it inserts into events itself, then passes the
+-- resulting event_id through — no SQL-side calendar logic needed here).
+CREATE OR REPLACE FUNCTION schedule_interview(
+    p_application_id uuid,
+    p_scheduled_at timestamptz DEFAULT NULL,
+    p_interview_type text DEFAULT NULL,
+    p_notes text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_interview interviews;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'schedule_interview: no user_id';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM applications WHERE id = p_application_id AND user_id = p_user_id
+    ) THEN
+        RAISE EXCEPTION 'schedule_interview: application % not found or not owned', p_application_id;
+    END IF;
+
+    INSERT INTO interviews (user_id, application_id, interview_type, scheduled_at, notes)
+    VALUES (p_user_id, p_application_id, p_interview_type, p_scheduled_at, p_notes)
+    RETURNING * INTO v_interview;
+
+    RETURN jsonb_build_object('success', true, 'interview', to_jsonb(v_interview));
+END;
+$$;
+
+
 -- set_priority_signals — update the agent-judged scoring inputs on a posting
 -- after intake (e.g. after re-reading the JD against the resume). Only non-null
 -- args are applied, so you can nudge one signal without clobbering the others.

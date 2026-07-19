@@ -60,7 +60,7 @@ export async function fetchRole(applicationId: string): Promise<{
 
   const { data: interviews, error: intErr } = await supabase
     .from("interviews")
-    .select("id, interview_type, scheduled_at, status, rating, feedback, advance_decision, decision_notes")
+    .select("id, interview_type, scheduled_at, status, notes, rating, feedback, advance_decision, decision_notes")
     .eq("application_id", applicationId)
     .order("scheduled_at", { ascending: true, nullsFirst: false });
   if (intErr) throw intErr;
@@ -721,6 +721,23 @@ export async function advanceApplication(
     p_notes: notes ?? null,
   });
   if (error) throw error;
+}
+
+// Add an interview round to an application (the role page's "Schedule
+// interview" form — just a date + free-text notes). Backed by schedule_interview.
+export async function scheduleInterview(input: {
+  applicationId: string;
+  scheduledAt?: string;
+  notes?: string;
+}): Promise<Interview> {
+  const { data, error } = await supabase.rpc("schedule_interview", {
+    p_application_id: input.applicationId,
+    p_scheduled_at: input.scheduledAt ?? null,
+    p_interview_type: null,
+    p_notes: input.notes ?? null,
+  });
+  if (error) throw error;
+  return (data as { interview: Interview }).interview;
 }
 
 // Close out a role (filled / pulled / not pursuing). Works whether or not I've

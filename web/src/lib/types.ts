@@ -598,8 +598,17 @@ export interface InterviewPrepMessage {
   created_at: string;
 }
 
+export interface InterviewPrepStarBreakdown {
+  situation: string;
+  task: string;
+  action: string;
+  result: string;
+}
+
 export interface InterviewPrepFeedback {
   rating: "strong" | "solid" | "needs_work" | "weak";
+  star: InterviewPrepStarBreakdown;
+  missing_part: "situation" | "task" | "action" | "result" | "none";
   what_worked: string[];
   what_to_improve: string[];
   suggested_rewrite?: string;
@@ -626,7 +635,16 @@ export interface InterviewPrepCompetency {
   evidence?: string;
 }
 
+export interface InterviewPrepOverallFeedback {
+  rating: "strong" | "solid" | "needs_work" | "weak";
+  summary: string;
+  strengths: string[];
+  areas_to_improve: string[];
+  readiness: string;
+}
+
 export interface InterviewPrepSynthesis {
+  overall_feedback: InterviewPrepOverallFeedback;
   stories: InterviewPrepStory[];
   competencies: InterviewPrepCompetency[];
   questions_to_ask: string[];

@@ -12,13 +12,34 @@ function parseFeedback(content: string): InterviewPrepFeedback | null {
   catch { return null; }
 }
 
-function ratingPillClass(rating: string) {
+export function ratingPillClass(rating: string) {
   return rating === "strong" || rating === "solid" ? "pill-accepted" : "pill-warn";
+}
+
+const STAR_LABEL: Record<keyof InterviewPrepFeedback["star"], string> = {
+  situation: "S",
+  task: "T",
+  action: "A",
+  result: "R",
+};
+
+function StarRow({ fb }: { fb: InterviewPrepFeedback }) {
+  if (!fb.star) return null;
+  return (
+    <p className="small prep-star">
+      {(Object.keys(STAR_LABEL) as Array<keyof InterviewPrepFeedback["star"]>).map((part) => (
+        <span key={part} className={fb.missing_part === part ? "prep-star-missing" : undefined}>
+          <strong>{STAR_LABEL[part]}:</strong> {fb.star[part] || "—"}
+        </span>
+      ))}
+    </p>
+  );
 }
 
 function FeedbackBody({ fb }: { fb: InterviewPrepFeedback }) {
   return (
     <>
+      <StarRow fb={fb} />
       {fb.what_worked.length > 0 && <p className="small"><strong>Worked:</strong> {fb.what_worked.join(" · ")}</p>}
       {fb.what_to_improve.length > 0 && <p className="small"><strong>Improve:</strong> {fb.what_to_improve.join(" · ")}</p>}
       {fb.suggested_rewrite && <p className="muted small"><em>Try:</em> {fb.suggested_rewrite}</p>}

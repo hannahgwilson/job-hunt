@@ -462,6 +462,9 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
 .prep-feedback-card.latest { border-color: var(--accent); }
 .prep-feedback-card.draft { border-style: dashed; border-color: var(--accent); background: var(--panel-2); }
 .prep-feedback-quote { font-style: italic; color: var(--muted); }
+.prep-star { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.prep-star-missing { color: var(--warn); }
+.prep-feedback-card.overall { margin-bottom: 0.8rem; }
 
 /* Prospects — capture form for someone found at a company, not yet a confirmed contact */
 .fhm-form { margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.5rem; }

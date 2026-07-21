@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   fetchInterviewPrepSession, startInterviewPrep, runInterviewPrepResearch, synthesizeInterviewPrep,
 } from "../lib/api";
-import InterviewPrepChat from "../components/InterviewPrepChat";
+import InterviewPrepChat, { ratingPillClass } from "../components/InterviewPrepChat";
 import type { InterviewPrepSession } from "../lib/types";
 
 export default function InterviewPrepPage() {
@@ -56,7 +56,16 @@ export default function InterviewPrepPage() {
   function copyMarkdown() {
     const s = prep?.session?.synthesis;
     if (!s) return;
+    const of = s.overall_feedback;
     const md = [
+      ...(of ? [
+        `## Overall (${of.rating})`,
+        of.summary,
+        ...(of.strengths.length ? [`**Strengths:** ${of.strengths.join("; ")}`] : []),
+        ...(of.areas_to_improve.length ? [`**Improve:** ${of.areas_to_improve.join("; ")}`] : []),
+        `**Readiness:** ${of.readiness}`,
+        "",
+      ] : []),
       "## Stories to tell",
       ...s.stories.map((x) => `- **${x.title}** — ${x.story}${x.best_for ? ` _(for: ${x.best_for})_` : ""}`),
       "",
@@ -226,6 +235,24 @@ export default function InterviewPrepPage() {
               <div className="section-head-actions">
                 <button className="ghost sm" onClick={copyMarkdown}>Copy as markdown</button>
               </div>
+              {session.synthesis.overall_feedback && (
+                <div className="prep-feedback-card overall">
+                  <div className="prep-msg-head">
+                    <span className="pill">overall</span>
+                    <span className={`pill ${ratingPillClass(session.synthesis.overall_feedback.rating)}`}>
+                      {session.synthesis.overall_feedback.rating}
+                    </span>
+                  </div>
+                  <p className="small">{session.synthesis.overall_feedback.summary}</p>
+                  {session.synthesis.overall_feedback.strengths.length > 0 && (
+                    <p className="small"><strong>Strengths:</strong> {session.synthesis.overall_feedback.strengths.join(" · ")}</p>
+                  )}
+                  {session.synthesis.overall_feedback.areas_to_improve.length > 0 && (
+                    <p className="small"><strong>Improve:</strong> {session.synthesis.overall_feedback.areas_to_improve.join(" · ")}</p>
+                  )}
+                  <p className="small"><strong>Readiness:</strong> {session.synthesis.overall_feedback.readiness}</p>
+                </div>
+              )}
               <h3>Stories to tell</h3>
               <ul className="clean">
                 {session.synthesis.stories.map((s, i) => (

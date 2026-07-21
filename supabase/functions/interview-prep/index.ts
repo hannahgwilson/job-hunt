@@ -98,16 +98,54 @@ const RESEARCH_TOOL = {
 
 const FEEDBACK_TOOL = {
   name: "report_feedback",
-  description: "Critique the candidate's last answer against the question it responded to, out of character.",
+  description:
+    "Critique the candidate's answer against the question it responded to, out of character, by mapping the " +
+    "story onto the STAR framework (Situation, Task, Action, Result). Keep it short — this is a fast read between " +
+    "rehearsal turns, not a written review.",
   input_schema: {
     type: "object",
     properties: {
-      rating: { type: "string", enum: ["strong", "solid", "needs_work", "weak"] },
-      what_worked: { type: "array", items: { type: "string" } },
-      what_to_improve: { type: "array", items: { type: "string" } },
-      suggested_rewrite: { type: "string", description: "Optional: a tightened version of the answer." },
+      rating: {
+        type: "string",
+        enum: ["strong", "solid", "needs_work", "weak"],
+        description:
+          "Calibrate honestly across the full range — do not default to 'needs_work'. A complete answer (all four " +
+          "STAR parts, a specific result) is 'strong' or 'solid' even if it could still be tightened. Reserve " +
+          "'needs_work'/'weak' for answers actually missing a STAR part or lacking any concrete result.",
+      },
+      star: {
+        type: "object",
+        description:
+          "The story as told, mapped to STAR. Use \"\" for any part the candidate didn't actually cover — never " +
+          "invent content that wasn't in the answer.",
+        properties: {
+          situation: { type: "string", description: "The context/setup, in the candidate's own terms — one short phrase, or \"\" if absent." },
+          task: { type: "string", description: "What they were specifically responsible for — one short phrase, or \"\" if absent." },
+          action: { type: "string", description: "What they actually did — one short phrase, or \"\" if absent." },
+          result: { type: "string", description: "The outcome/impact, ideally with a number — one short phrase, or \"\" if absent." },
+        },
+        required: ["situation", "task", "action", "result"],
+      },
+      missing_part: {
+        type: "string",
+        enum: ["situation", "task", "action", "result", "none"],
+        description: "The single biggest structural gap in the story. 'none' only if all four STAR parts are clearly present.",
+      },
+      what_worked: { type: "array", items: { type: "string" }, description: "At most 2 short bullets." },
+      what_to_improve: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "At most 2 short bullets, each under ~15 words. If missing_part isn't 'none', the first bullet must " +
+          "address that structural gap or sharpen the result/impact — skip wording and delivery nitpicks until " +
+          "the structure is solid.",
+      },
+      suggested_rewrite: {
+        type: "string",
+        description: "Optional: a tightened 3-5 sentence STAR version of the answer — only include if it would materially help.",
+      },
     },
-    required: ["rating", "what_worked", "what_to_improve"],
+    required: ["rating", "star", "missing_part", "what_worked", "what_to_improve"],
   },
 };
 
@@ -119,6 +157,33 @@ const SYNTHESIS_TOOL = {
   input_schema: {
     type: "object",
     properties: {
+      overall_feedback: {
+        type: "object",
+        description:
+          "A holistic read on the whole mock interview, not any one answer — how the candidate did across all " +
+          "their turns. Only assess this if the transcript actually has candidate answers; otherwise use the " +
+          "'weak' rating and say plainly there's nothing to assess yet.",
+        properties: {
+          rating: {
+            type: "string",
+            enum: ["strong", "solid", "needs_work", "weak"],
+            description:
+              "Calibrate across the full range — don't default low. Judge consistency of story structure (STAR) " +
+              "and concrete impact across answers, not any single answer in isolation.",
+          },
+          summary: { type: "string", description: "1-2 sentences on how the interview went overall." },
+          strengths: { type: "array", items: { type: "string" }, description: "At most 3 short bullets — real patterns across answers, not restated single moments." },
+          areas_to_improve: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "At most 3 short bullets. Prioritize recurring structural gaps (a STAR part consistently missing, " +
+              "answers thin on impact/result) over one-off wording issues.",
+          },
+          readiness: { type: "string", description: "A short, direct verdict — e.g. 'Ready' or what one thing to fix before the real interview." },
+        },
+        required: ["rating", "summary", "strengths", "areas_to_improve", "readiness"],
+      },
       stories: {
         type: "array",
         items: {
@@ -145,7 +210,7 @@ const SYNTHESIS_TOOL = {
       },
       questions_to_ask: { type: "array", items: { type: "string" } },
     },
-    required: ["stories", "competencies", "questions_to_ask"],
+    required: ["overall_feedback", "stories", "competencies", "questions_to_ask"],
   },
 };
 
@@ -226,10 +291,14 @@ function findToolUse(data: { content?: Array<{ type: string; name?: string; inpu
 async function critiqueAnswer(apiKey: string, prep: PrepContext, question: string | null, answer: string) {
   const data = await callClaude(apiKey, {
     model: MODEL,
-    max_tokens: 1200,
+    max_tokens: 700,
     system:
-      "You are an interview coach, stepping OUT of character to critique one answer. Be specific and honest, " +
-      "not just encouraging. Call report_feedback.",
+      "You are an interview coach, stepping OUT of character to critique one answer against the question it " +
+      "responded to. Map the answer onto STAR (Situation, Task, Action, Result) and name the single biggest " +
+      "structural gap, if any — prioritize story structure and a concrete result/impact over wording or delivery " +
+      "nitpicks. Calibrate ratings honestly across the full range: a complete, specific answer is 'strong', not " +
+      "'needs_work' by default — don't manufacture criticism an answer doesn't have. Be concise: a couple of short " +
+      "bullets, not paragraphs. Call report_feedback.",
     tools: [FEEDBACK_TOOL],
     tool_choice: { type: "tool", name: "report_feedback" },
     messages: [
@@ -424,9 +493,11 @@ Deno.serve(async (req) => {
         max_tokens: 4000,
         system:
           "You close out an interview prep session. Read the role/research context, the mock-interview transcript, " +
-          "and any coach feedback, then call report_prep_summary with a tight, specific closing sheet — real stories " +
-          "grounded in what the candidate actually said (not generic advice), the competencies this interview is " +
-          "really testing, and sharp questions worth asking back.",
+          "and any coach feedback, then call report_prep_summary with a tight, specific closing sheet: an honest " +
+          "overall_feedback verdict on how the whole rehearsal went (patterns across answers, not a single moment), " +
+          "real stories grounded in what the candidate actually said (not generic advice), the competencies this " +
+          "interview is really testing, and sharp questions worth asking back. Calibrate overall_feedback honestly " +
+          "— don't default to a low rating — and keep every field short.",
         tools: [SYNTHESIS_TOOL],
         tool_choice: { type: "tool", name: "report_prep_summary" },
         messages: [

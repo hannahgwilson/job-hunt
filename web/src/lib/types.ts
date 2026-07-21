@@ -81,6 +81,17 @@ export interface Interview {
   decision_notes: string | null;
 }
 
+// Every interview across every application, for the all-up Interviews page —
+// same columns as Interview plus the role/company context RoleDetail gets for
+// free from being nested under one application.
+export interface InterviewListRow extends Interview {
+  application_id: string;
+  job_posting_id: string;
+  role_title: string;
+  organization_id: string;
+  organization_name: string;
+}
+
 // ── prioritization (see semantic/metrics/priority_score.yaml) ────────────────
 export type CareerTrajectory = "step_up" | "lateral" | "step_back";
 export type GrowthStage = "seed" | "early" | "growth" | "late" | "public" | "unknown";
@@ -655,6 +666,31 @@ export interface InterviewPrepSession {
   interviewer: { contact_id: string; name: string; title: string | null } | null;
   ob_suggestions: Array<{ thought_id: string; content: string; created_at: string }>;
   session: InterviewPrepSessionRow | null;
+}
+
+// ── story cheat sheet (get_story_cheat_sheet) ─────────────────────────────────
+// One row per interview whose prep was synthesized, carrying that session's
+// stories/competencies/questions. Rolled up across every interview so far —
+// the cheat-sheet page groups these by organization_name client-side.
+export interface CheatSheetSession {
+  interview_id: string;
+  interview_type: string | null;
+  scheduled_at: string | null;
+  application_id: string;
+  job_posting_id: string;
+  role_title: string;
+  organization_id: string;
+  organization_name: string;
+  synthesized_at: string | null;
+  stories: InterviewPrepStory[];
+  competencies: InterviewPrepCompetency[];
+  questions_to_ask: string[];
+}
+
+export interface StoryCheatSheet {
+  success: boolean;
+  error?: string;
+  sessions: CheatSheetSession[];
 }
 
 // One rejected/withdrawn application for the Pipeline "Rejected" area. Computed

@@ -8,6 +8,7 @@ import {
 import type { Application, ActionQueue, FunnelMetrics, RoleAnalytics, ApplicationStatus } from "../lib/types";
 import { useBatchRunner } from "../lib/useBatchRunner";
 import FitScatter from "../components/FitScatter";
+import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
 
 // The forward steps that have a "next" stage — the ones with a pass-through rate
 // and an in-stage dwell. 'accepted' is the terminal success, so it's omitted.
@@ -28,6 +29,8 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<ApplicationStatus | null>(null);
+  const [addingInterview, setAddingInterview] = useState(false);
+  const [pickedAppId, setPickedAppId] = useState("");
   const batch = useBatchRunner();
 
   function load() {
@@ -82,7 +85,8 @@ export default function Dashboard() {
 
   const counts: Record<string, number> = {};
   for (const a of apps) counts[a.status] = (counts[a.status] ?? 0) + 1;
-  const active = apps.filter((a) => !["rejected", "withdrawn", "accepted", "closed"].includes(a.status)).length;
+  const activeApps = apps.filter((a) => !["rejected", "withdrawn", "accepted", "closed"].includes(a.status));
+  const active = activeApps.length;
   // bars scale to the biggest bucket so the distribution reads as a chart
   const maxCount = Math.max(1, ...STATUS_DISPLAY_ORDER.map((s) => counts[s] ?? 0));
   const selectedApps = selected ? apps.filter((a) => a.status === selected) : [];
@@ -117,8 +121,43 @@ export default function Dashboard() {
         <div className="card stat"><div className="stat-num">{apps.length}</div><div className="muted">applications</div></div>
         <div className="card stat"><div className="stat-num">{active}</div><div className="muted">active</div></div>
         <div className="card stat"><div className="stat-num">{queue?.roles_to_apply.length ?? "–"}</div><div className="muted">to apply</div></div>
-        <div className="card stat"><div className="stat-num">{queue?.upcoming_interviews.length ?? "–"}</div><div className="muted">interviews soon</div></div>
+        <div
+          className="card stat clickable"
+          onClick={() => setAddingInterview((cur) => !cur)}
+          title="Add an interview"
+        >
+          <div className="stat-num">{queue?.upcoming_interviews.length ?? "–"}</div>
+          <div className="muted">interviews soon</div>
+        </div>
       </div>
+
+      {addingInterview && (
+        <section className="card">
+          <div className="section-head">
+            <h2>Add interview</h2>
+            <button className="ghost sm" onClick={() => { setAddingInterview(false); setPickedAppId(""); }}>Close</button>
+          </div>
+          <label className="muted small">
+            Application
+            <select value={pickedAppId} onChange={(e) => setPickedAppId(e.target.value)}>
+              <option value="">Choose a role…</option>
+              {activeApps.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.job_postings?.title ?? "Untitled role"} @ {a.job_postings?.organizations?.name ?? ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {pickedAppId && (
+            <ScheduleInterviewForm
+              applicationId={pickedAppId}
+              startOpen
+              onCancel={() => setPickedAppId("")}
+              onScheduled={() => { load(); setAddingInterview(false); setPickedAppId(""); }}
+            />
+          )}
+        </section>
+      )}
 
       <div className="cols">
         {/* By status — every category in funnel order, click one to list its apps */}
@@ -182,20 +221,6 @@ export default function Dashboard() {
         </section>
       </div>
 
-      {/* The insights "2x2": fit (x) vs career-move + company-growth (y), the
-          top-right quadrant being the sweet spot. Backfill judges from the head. */}
-      <section className="card span-2">
-        <h2>Fit map</h2>
-        <p className="muted small">
-          Each role placed by <strong>resume fit</strong> (x) against its{" "}
-          <strong>career move + company growth</strong> (y); bubble size is comp, the
-          label is location. Top-right is the sweet spot. Faded roles aren't fully
-          judged yet — run “Judge career + growth” above to place them for real.
-          Only roles you haven’t applied to yet are shown.
-        </p>
-        {roles == null ? <p className="muted">Loading…</p> : <FitScatter roles={openRoles} />}
-      </section>
-
       {/* Drill-down: the applications in the clicked status */}
       {selected && (
         <section className="card span-2">
@@ -230,6 +255,20 @@ export default function Dashboard() {
           ))}
         </ul>
         <p><Link to="/queue">See the full action queue →</Link></p>
+      </section>
+
+      {/* The insights "2x2": fit (x) vs career-move + company-growth (y), the
+          top-right quadrant being the sweet spot. Backfill judges from the head. */}
+      <section className="card span-2">
+        <h2>Fit map</h2>
+        <p className="muted small">
+          Each role placed by <strong>resume fit</strong> (x) against its{" "}
+          <strong>career move + company growth</strong> (y); bubble size is comp, the
+          label is location. Top-right is the sweet spot. Faded roles aren't fully
+          judged yet — run “Judge career + growth” above to place them for real.
+          Only roles you haven’t applied to yet are shown.
+        </p>
+        {roles == null ? <p className="muted">Loading…</p> : <FitScatter roles={openRoles} />}
       </section>
     </div>
   );

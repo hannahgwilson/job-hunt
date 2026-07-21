@@ -2473,6 +2473,52 @@ GRANT EXECUTE ON FUNCTION save_interview_prep_research(uuid, jsonb, text, uuid) 
 GRANT EXECUTE ON FUNCTION save_interview_prep_transcript(uuid, jsonb, uuid)   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_interview_prep_synthesis(uuid, jsonb, text, uuid) TO authenticated, service_role;
 
+-- get_story_cheat_sheet — every STAR story, competency, and question-to-ask
+-- synthesized across ALL interview prep sessions, in one read. Not a new
+-- table: it's a rollup over interview_prep_sessions.synthesis (the same JSON
+-- shape save_interview_prep_synthesis writes), joined out to role/company so
+-- the page can group by employer. Backs a standalone "cheat sheet" page,
+-- distinct from the per-interview prep flow above — the thing you skim right
+-- before walking in, not the thing you build one interview at a time.
+CREATE OR REPLACE FUNCTION get_story_cheat_sheet(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'sessions', COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'interview_id', i.id,
+                'interview_type', i.interview_type,
+                'scheduled_at', i.scheduled_at,
+                'application_id', a.id,
+                'job_posting_id', a.job_posting_id,
+                'role_title', jp.title,
+                'organization_id', jp.organization_id,
+                'organization_name', o.name,
+                'synthesized_at', s.synthesized_at,
+                'stories', COALESCE(s.synthesis->'stories', '[]'::jsonb),
+                'competencies', COALESCE(s.synthesis->'competencies', '[]'::jsonb),
+                'questions_to_ask', COALESCE(s.synthesis->'questions_to_ask', '[]'::jsonb)
+            )
+            ORDER BY o.name, COALESCE(i.scheduled_at, s.synthesized_at) DESC
+        ), '[]'::jsonb)
+    )
+    FROM interview_prep_sessions s
+    JOIN interviews i     ON i.id = s.interview_id
+    JOIN applications a   ON a.id = i.application_id
+    JOIN job_postings jp  ON jp.id = a.job_posting_id
+    JOIN organizations o  ON o.id = jp.organization_id
+    WHERE s.user_id = p_user_id AND s.synthesis IS NOT NULL;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_story_cheat_sheet(uuid) TO authenticated, service_role;
+
 -- ============================================================================
 -- LinkedIn prospect contacts (migration 019)
 -- A prospect is a contacts row tagged 'prospect' (+ 'job-hunt') — someone found

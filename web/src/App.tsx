@@ -11,6 +11,8 @@ import Company from "./pages/Company";
 import Profile from "./pages/Profile";
 import TuningBench from "./pages/TuningBench";
 import InterviewPrepPage from "./pages/InterviewPrepPage";
+import Interviews from "./pages/Interviews";
+import CheatSheet from "./pages/CheatSheet";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -72,6 +74,8 @@ const NAV: { to: string; label: string; end: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/pipeline", label: "Pipeline", end: false },
   { to: "/queue", label: "Action Queue", end: false },
+  { to: "/interviews", label: "Interviews", end: false },
+  { to: "/cheat-sheet", label: "Cheat Sheet", end: false },
   { to: "/resume", label: "Resumes", end: false },
   { to: "/bench", label: "Tune", end: false },
 ];
@@ -118,6 +122,8 @@ export default function App() {
           <Route path="/posting/:id" element={<RoleFit />} />
           <Route path="/company/:id" element={<Company />} />
           <Route path="/interview-prep/:interviewId" element={<InterviewPrepPage />} />
+          <Route path="/interviews" element={<Interviews />} />
+          <Route path="/cheat-sheet" element={<CheatSheet />} />
         </Routes>
       </main>
     </div>

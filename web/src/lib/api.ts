@@ -12,7 +12,7 @@ import type {
   ApplicationStatus, ClosedReason, ClosedRole, RejectedApplication,
   FitRating, FitEvalRow,
   Task, JobChecklist, Suggestions, InterviewPrep, TaskPriority, TaskStatus,
-  InterviewPrepSession, InterviewPrepDraftFeedback,
+  InterviewPrepSession, InterviewPrepDraftFeedback, StoryCheatSheet, InterviewListRow,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -128,6 +128,45 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
       };
     }),
   };
+}
+
+// Every interview across every application, all-up — the Interviews page.
+// Plain RLS-scoped select + join, same pattern as fetchApplications/fetchCompany.
+export async function fetchInterviews(): Promise<InterviewListRow[]> {
+  const { data, error } = await supabase
+    .from("interviews")
+    .select(`
+      id, interview_type, scheduled_at, status, notes, rating, feedback, advance_decision, decision_notes,
+      application_id,
+      applications:application_id (
+        id,
+        job_postings:job_posting_id (
+          id, title,
+          organizations:organization_id ( id, name )
+        )
+      )
+    `)
+    .order("scheduled_at", { ascending: false, nullsFirst: true });
+  if (error) throw error;
+
+  type Raw = Interview & {
+    application_id: string;
+    applications: {
+      id: string;
+      job_postings: { id: string; title: string; organizations: { id: string; name: string } | null } | null;
+    } | null;
+  };
+
+  return ((data ?? []) as unknown as Raw[]).map((iv) => ({
+    id: iv.id, interview_type: iv.interview_type, scheduled_at: iv.scheduled_at, status: iv.status,
+    notes: iv.notes, rating: iv.rating, feedback: iv.feedback,
+    advance_decision: iv.advance_decision, decision_notes: iv.decision_notes,
+    application_id: iv.application_id,
+    job_posting_id: iv.applications?.job_postings?.id ?? "",
+    role_title: iv.applications?.job_postings?.title ?? "Unknown role",
+    organization_id: iv.applications?.job_postings?.organizations?.id ?? "",
+    organization_name: iv.applications?.job_postings?.organizations?.name ?? "Unknown company",
+  }));
 }
 
 // Prospects found via the "Find hiring manager" LinkedIn search launcher —
@@ -311,6 +350,14 @@ export async function startInterviewPrep(
   });
   if (error) throw error;
   return data as InterviewPrepSession;
+}
+
+// Every synthesized story/competency/question across all interview prep
+// sessions so far — the standalone cheat-sheet page.
+export async function fetchStoryCheatSheet(): Promise<StoryCheatSheet> {
+  const { data, error } = await supabase.rpc("get_story_cheat_sheet");
+  if (error) throw error;
+  return data as StoryCheatSheet;
 }
 
 export async function fetchFunnelMetrics(windowDays?: number): Promise<FunnelMetrics> {

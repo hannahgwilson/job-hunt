@@ -83,11 +83,21 @@ When I paste a job-description link (or describe a role):
     pipeline, fit score, and interview count (computed from the status history).
   - `schedule_interview({ application_id, interview_type, scheduled_at,
     interviewer_contact_id?, add_to_calendar: true })` — `add_to_calendar` also
-    surfaces it in the family-calendar week view.
+    surfaces it in the family-calendar week view. **Find-or-create**: same
+    application + `scheduled_at` + `interview_type` returns the existing round
+    with `created: false` instead of a duplicate (and skips minting a second
+    calendar event), so re-running a calendar import is safe.
   - After each round: `log_interview_notes({ interview_id, feedback, rating,
     advance_decision: 'advance' | 'hold' | 'withdraw' | 'rejected',
     decision_notes })`. **`advance_decision` is the explicit "do I move
-    forward?" call** the requirements asked for.
+    forward?" call** the requirements asked for. It marks the interview
+    `completed`; a round that didn't happen goes to `cancelled` / `no_show`
+    instead. In the UI these are the **Done… / Cancelled / No-show** buttons on
+    every interview card (Interviews page and role page) — "Done…" opens the
+    debrief (rating, notes, go/no-go), and **Reopen** undoes a mis-click.
+    Rounds whose date has passed but were never closed out collect in
+    Interviews → **"Needs debrief"**, with a "Mark all completed" sweep; until
+    they're closed they keep counting as `interviews_pending` on the Dashboard.
 - **Close out a filled role:** `close_role({ job_posting_id, reason })` —
   `reason` ∈ `filled` (default) | `expired` | `removed` |
   `no_longer_interested` | `duplicate` | `other`. "Filled" is a property of the *posting*, so

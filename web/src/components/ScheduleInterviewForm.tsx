@@ -37,11 +37,17 @@ export default function ScheduleInterviewForm({
       // of UTC — the "tomorrow shows up as tonight" bug. A date+time string
       // with no offset parses as local time, which is what the inputs mean.
       const scheduledAt = date ? new Date(`${date}T${time || "00:00"}`).toISOString() : undefined;
-      await scheduleInterview({
+      const { created } = await scheduleInterview({
         applicationId,
         scheduledAt,
         notes: notes.trim() || undefined,
       });
+      // schedule_interview find-or-creates, so a double-submit is harmless —
+      // but say so rather than silently looking like it worked twice.
+      if (!created) {
+        setError("That round was already on the books — nothing added.");
+        return;
+      }
       setOpen(false);
       setDate("");
       setTime("");

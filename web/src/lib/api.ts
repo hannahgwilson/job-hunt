@@ -13,6 +13,7 @@ import type {
   FitRating, FitEvalRow,
   Task, JobChecklist, Suggestions, InterviewPrep, TaskPriority, TaskStatus,
   InterviewPrepSession, InterviewPrepDraftFeedback, StoryCheatSheet, InterviewListRow,
+  InterviewStatus, AdvanceDecision,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -777,17 +778,45 @@ export async function advanceApplication(
 }
 
 // Add an interview round to an application (the role page's "Schedule
-// interview" form — just a date + free-text notes). Backed by schedule_interview.
+// interview" form — just a date + free-text notes). Backed by schedule_interview,
+// which find-or-creates: booking the same application + datetime + type twice
+// returns the existing round with `created: false` instead of a duplicate.
 export async function scheduleInterview(input: {
   applicationId: string;
   scheduledAt?: string;
   notes?: string;
-}): Promise<Interview> {
+}): Promise<{ interview: Interview; created: boolean }> {
   const { data, error } = await supabase.rpc("schedule_interview", {
     p_application_id: input.applicationId,
     p_scheduled_at: input.scheduledAt ?? null,
     p_interview_type: null,
     p_notes: input.notes ?? null,
+  });
+  if (error) throw error;
+  const row = data as { interview: Interview; created: boolean };
+  return { interview: row.interview, created: row.created };
+}
+
+// Record the outcome of an interview round: mark it completed / cancelled /
+// no_show, optionally with the debrief (rating, feedback, and the go/no-go
+// advance_decision). Omitted fields are left as-is server-side, so the one-click
+// "Done" and the full debrief are the same call. Backed by complete_interview —
+// the same RPC the MCP's log_interview_notes wraps.
+export async function completeInterview(input: {
+  interviewId: string;
+  status?: InterviewStatus;
+  rating?: number;
+  feedback?: string;
+  advanceDecision?: AdvanceDecision;
+  decisionNotes?: string;
+}): Promise<Interview> {
+  const { data, error } = await supabase.rpc("complete_interview", {
+    p_interview_id: input.interviewId,
+    p_status: input.status ?? "completed",
+    p_rating: input.rating ?? null,
+    p_feedback: input.feedback ?? null,
+    p_advance_decision: input.advanceDecision ?? null,
+    p_decision_notes: input.decisionNotes ?? null,
   });
   if (error) throw error;
   return (data as { interview: Interview }).interview;

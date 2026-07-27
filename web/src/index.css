@@ -163,6 +163,23 @@ label.checkbox input { width: auto; }
 .interview:first-of-type { border-top: none; margin-top: 0; }
 .iv-head { display: flex; justify-content: space-between; }
 
+/* Interview outcome control — close a round out (InterviewOutcome.tsx) */
+.iv-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-top: 0.5rem; }
+.iv-debrief { display: grid; gap: 0.6rem; margin-top: 0.6rem; max-width: 420px; }
+.iv-debrief label { display: grid; gap: 0.25rem; }
+.iv-debrief-actions { display: flex; gap: 0.4rem; }
+.iv-decision { border: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.iv-decision legend { padding: 0; margin-bottom: 0.3rem; }
+/* Selected go/no-go, and selected stars — the one bit of state the row carries */
+.iv-decision button.on { color: var(--accent); border-color: var(--accent); }
+.iv-stars { display: inline-flex; gap: 0.1rem; }
+.iv-star {
+  background: none; border: none; padding: 0 0.1rem; cursor: pointer;
+  font-size: 1.15rem; line-height: 1; color: var(--border);
+}
+.iv-star.on { color: var(--warn); }
+.iv-star:disabled { cursor: default; }
+
 /* Schedule-interview form (role page) */
 .schedule-interview-form { display: grid; gap: 0.5rem; margin-top: 0.6rem; max-width: 360px; }
 .schedule-interview-form label { display: grid; gap: 0.25rem; }

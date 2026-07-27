@@ -8,6 +8,7 @@ import CloseRoleControl from "../components/CloseRoleControl";
 import StatusActions from "../components/StatusActions";
 import AddToChecklist from "../components/AddToChecklist";
 import InterviewPrep from "../components/InterviewPrep";
+import InterviewOutcome from "../components/InterviewOutcome";
 import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
@@ -126,7 +127,7 @@ export default function RoleDetail() {
                 <span className="muted">{iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString() : "unscheduled"}</span>
               </div>
               <div className="iv-meta">
-                <span className="muted">{iv.status}</span>
+                <span className="muted">{iv.status === "no_show" ? "no-show" : iv.status}</span>
                 {iv.rating != null && <span> · {"★".repeat(iv.rating)}</span>}
                 {iv.advance_decision && (
                   <span className={`pill ${DECISION_PILL[iv.advance_decision] ?? ""}`}>{iv.advance_decision}</span>
@@ -136,6 +137,10 @@ export default function RoleDetail() {
               {iv.feedback && <p className="small">{iv.feedback}</p>}
               {iv.decision_notes && <p className="muted small">Decision: {iv.decision_notes}</p>}
               <InterviewPrep interviewId={iv.id} />
+              <InterviewOutcome
+                interview={iv}
+                onChanged={(u) => setInterviews((cur) => cur.map((x) => (x.id === u.id ? { ...x, ...u } : x)))}
+              />
             </div>
           ))}
           <ScheduleInterviewForm applicationId={app.id} onScheduled={load} />

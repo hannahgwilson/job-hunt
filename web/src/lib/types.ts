@@ -75,16 +75,25 @@ export interface StatusHistoryRow {
 // (advance_decision, rating) are naturally left null on networking rows.
 export type InterviewCategory = "interview" | "networking";
 
+// interviews.status — 'scheduled' until the round is debriefed. The three
+// terminal values are written by complete_interview (UI + MCP both go through
+// it); nothing else moves an interview off 'scheduled'.
+export type InterviewStatus = "scheduled" | "completed" | "cancelled" | "no_show";
+
+// The go/no-go recorded after a round — "do I move forward?", distinct from the
+// rating (how it went) and from the application's own status.
+export type AdvanceDecision = "advance" | "hold" | "withdraw" | "rejected";
+
 export interface Interview {
   id: string;
   interview_type: string | null;
   category: InterviewCategory;
   scheduled_at: string | null;
-  status: string;
+  status: InterviewStatus;
   notes: string | null;
   rating: number | null;
   feedback: string | null;
-  advance_decision: "advance" | "hold" | "withdraw" | "rejected" | null;
+  advance_decision: AdvanceDecision | null;
   decision_notes: string | null;
   // Names from this round's synthesized competencies (interview_prep_sessions.synthesis),
   // joined in by fetchRole so RoleDetail can show the same tags as the Interviews tab.

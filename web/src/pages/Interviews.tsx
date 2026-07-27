@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchInterviews, fetchStoryCheatSheet, fetchInterviewPrep } from "../lib/api";
+import { completeInterview, fetchInterviews, fetchStoryCheatSheet, fetchInterviewPrep } from "../lib/api";
+import InterviewOutcome from "../components/InterviewOutcome";
 import type {
-  InterviewListRow, CheatSheetSession, InterviewPrepStory, InterviewPrep as PrepDoc,
+  Interview, InterviewListRow, CheatSheetSession, InterviewPrepStory, InterviewPrep as PrepDoc,
 } from "../lib/types";
 
 // The merged Interviews tab: three sub-views over the same underlying data.
@@ -74,6 +75,7 @@ export default function Interviews() {
 
   const [libQuery, setLibQuery] = useState("");
   const [competency, setCompetency] = useState<string | null>(null);
+  const [sweeping, setSweeping] = useState(false);
 
   useEffect(() => {
     fetchInterviews().then(setInterviews).catch((e) => setError(e.message));
@@ -85,12 +87,47 @@ export default function Interviews() {
       .catch((e) => setError(e.message));
   }, []);
 
+  // Patch one row in place rather than refetching the whole list — keeps the
+  // section a row is sitting in from jumping out from under the cursor mid-edit.
+  function patchInterview(updated: Interview) {
+    setInterviews((cur) => (cur ?? []).map((iv) => (iv.id === updated.id ? { ...iv, ...updated } : iv)));
+  }
+
   const upcoming = useMemo(() => {
     const now = new Date().toISOString();
     return (interviews ?? [])
       .filter((iv) => iv.scheduled_at && iv.scheduled_at >= now && iv.status === "scheduled")
       .sort((a, b) => (a.scheduled_at! < b.scheduled_at! ? -1 : 1));
   }, [interviews]);
+
+  // Still 'scheduled' but the date has passed (or there's no date at all) — a
+  // round that happened and was never closed out. Undated rows land here too:
+  // an interview with no date that's still open is exactly as much of a loose
+  // end as an overdue one.
+  const needsDebrief = useMemo(() => {
+    const now = new Date().toISOString();
+    return (interviews ?? [])
+      .filter((iv) => iv.status === "scheduled" && (!iv.scheduled_at || iv.scheduled_at < now))
+      .sort((a, b) => (b.scheduled_at ?? "").localeCompare(a.scheduled_at ?? ""));
+  }, [interviews]);
+
+  // Bulk escape hatch for the backlog: mark every overdue round completed with
+  // no debrief. Deliberately status-only — sweeping in a rating or a go/no-go
+  // you didn't actually think about would poison the funnel metrics.
+  async function sweepPast() {
+    setSweeping(true);
+    setError(null);
+    try {
+      const updated = await Promise.all(
+        needsDebrief.map((iv) => completeInterview({ interviewId: iv.id, status: "completed" })),
+      );
+      updated.forEach(patchInterview);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSweeping(false);
+    }
+  }
 
   const storiesByInterview = useMemo(() => {
     const map = new Map<string, CheatSheetSession>();
@@ -187,12 +224,48 @@ export default function Interviews() {
                 <p className="small" style={{ marginTop: "0.5rem" }}>
                   <button className="linklike" onClick={() => openPrepFor(iv.id)}>Open prep →</button>
                 </p>
+                <InterviewOutcome interview={iv} onChanged={patchInterview} />
               </div>
             ))}
           </div>
           <div className="upcoming-legend">
             <span><i className="k-interview" />Interview — tied to an application</span>
             <span><i className="k-networking" />Networking call — tied to a contact, application optional</span>
+          </div>
+
+          <div className="section-head" style={{ marginTop: "1.6rem" }}>
+            <h2 style={{ margin: 0 }}>Needs debrief <span className="count">· {needsDebrief.length}</span></h2>
+            {needsDebrief.length > 0 && (
+              <button className="ghost sm" disabled={sweeping} onClick={sweepPast}>
+                {sweeping ? "…" : "Mark all completed"}
+              </button>
+            )}
+          </div>
+          <p className="muted small">These dates have passed but the rounds were never closed out — they still count as pending on the Dashboard.</p>
+          {needsDebrief.length === 0 && <p className="muted">Nothing waiting on a debrief.</p>}
+          <div className="prep-list">
+            {needsDebrief.map((iv) => (
+              <div className="prep-card is-open" key={iv.id}>
+                <div className="prep-card-head" style={{ cursor: "default" }}>
+                  <span>
+                    <span className="upcoming-when">{formatWhen(iv.scheduled_at)}</span>
+                    <div className="upcoming-co">
+                      <Link to={`/company/${iv.organization_id}`}>{iv.organization_name}</Link>
+                      {iv.role_title && <span className="muted"> — {iv.role_title}</span>}
+                    </div>
+                    <div className="muted small">
+                      {iv.interview_type && <span className="pill">{iv.interview_type.replace(/_/g, " ")}</span>}
+                      {" · "}{iv.status}
+                    </div>
+                  </span>
+                </div>
+                <div className="prep-card-body">
+                  {iv.notes && <p className="muted small">{iv.notes}</p>}
+                  <p className="small"><Link to={`/interview-prep/${iv.id}`}>Prep →</Link></p>
+                  <InterviewOutcome interview={iv} onChanged={patchInterview} />
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}

@@ -787,14 +787,26 @@ END;
 $$;
 
 
--- schedule_interview — add an interview round to an application, OR (as of
--- migration 020) a standalone networking call against an organization when
+-- schedule_interview — find-or-create an interview round on an application, OR
+-- (migration 020) a standalone networking call against an organization when
 -- there's no application yet. Exactly one of p_application_id / p_organization_id
--- must resolve (see interviews_application_or_org). The tracking hub's role
--- page calls this for the plain date + notes case, application-scoped; the MCP
--- tool of the same name additionally supports interviewer_contact_id, category,
--- and the add_to_calendar bridge (it inserts into events itself, then passes
--- the resulting event_id through — no SQL-side calendar logic needed here).
+-- must resolve (see interviews_application_or_org). Both callers — the
+-- tracking hub's schedule form and the MCP tool — go through here, so the
+-- dedup predicate lives in one place. The MCP tool owns the calendar bridge:
+-- it inserts the `events` row itself and passes the resulting event_id
+-- through, and uses the returned `created` flag to skip minting a second
+-- event when the round was already on the books.
+--
+-- Was an unconditional INSERT until migration 021, which is how a re-run
+-- calendar import produced a second copy of every round. A UNIQUE index is
+-- deliberately NOT in place yet — see 021's header.
+--
+-- The pre-020 5-arg signature is dropped explicitly: several of the new params
+-- land before p_user_id rather than purely at the end, so CREATE OR REPLACE
+-- would otherwise leave the old function behind as a distinct overload and
+-- make every plain 4-5-arg call ambiguous.
+DROP FUNCTION IF EXISTS schedule_interview(uuid, timestamptz, text, text, uuid);
+
 CREATE OR REPLACE FUNCTION schedule_interview(
     p_application_id uuid DEFAULT NULL,
     p_scheduled_at timestamptz DEFAULT NULL,
@@ -802,7 +814,9 @@ CREATE OR REPLACE FUNCTION schedule_interview(
     p_notes text DEFAULT NULL,
     p_organization_id uuid DEFAULT NULL,
     p_category text DEFAULT 'interview',
+    p_duration_minutes integer DEFAULT NULL,
     p_interviewer_contact_id uuid DEFAULT NULL,
+    p_event_id uuid DEFAULT NULL,
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
@@ -810,6 +824,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_interview interviews;
+    v_created boolean := false;
 BEGIN
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'schedule_interview: no user_id';
@@ -831,15 +846,106 @@ BEGIN
         RAISE EXCEPTION 'schedule_interview: organization % not found or not owned', p_organization_id;
     END IF;
 
-    INSERT INTO interviews (
-        user_id, application_id, organization_id, category,
-        interviewer_contact_id, interview_type, scheduled_at, notes
-    )
-    VALUES (
-        p_user_id, p_application_id, p_organization_id, COALESCE(p_category, 'interview'),
-        p_interviewer_contact_id, p_interview_type, p_scheduled_at, p_notes
-    )
+    -- Find-or-create. The natural key is (application OR organization,
+    -- scheduled_at, interview_type):
+    --   * only when scheduled_at IS NOT NULL — two undated placeholders on the
+    --     same application are two distinct intentions, not a collision;
+    --   * IS NOT DISTINCT FROM throughout so NULL matches NULL (an untyped
+    --     round, or a networking call with no application_id, scheduled twice
+    --     the same way is still one round);
+    --   * cancelled rows are skipped, so re-booking a round you cancelled
+    --     creates a fresh one instead of resurrecting the dead row.
+    IF p_scheduled_at IS NOT NULL THEN
+        SELECT * INTO v_interview
+        FROM interviews
+        WHERE user_id = p_user_id
+          AND application_id IS NOT DISTINCT FROM p_application_id
+          AND organization_id IS NOT DISTINCT FROM p_organization_id
+          AND scheduled_at = p_scheduled_at
+          AND interview_type IS NOT DISTINCT FROM p_interview_type
+          AND status <> 'cancelled'
+        ORDER BY created_at ASC   -- if dupes already exist, settle on the first
+        LIMIT 1;
+    END IF;
+
+    IF v_interview.id IS NULL THEN
+        INSERT INTO interviews (
+            user_id, application_id, organization_id, category,
+            interview_type, scheduled_at, notes,
+            duration_minutes, interviewer_contact_id, event_id
+        )
+        VALUES (
+            p_user_id, p_application_id, p_organization_id, COALESCE(p_category, 'interview'),
+            p_interview_type, p_scheduled_at, p_notes,
+            p_duration_minutes, p_interviewer_contact_id, p_event_id
+        )
+        RETURNING * INTO v_interview;
+        v_created := true;
+    ELSE
+        -- Re-scheduling an existing round fills in blanks but never clobbers
+        -- what's already recorded — a re-import must not wipe hand-written
+        -- notes or unlink a calendar event.
+        UPDATE interviews
+        SET notes                  = COALESCE(notes, p_notes),
+            duration_minutes       = COALESCE(duration_minutes, p_duration_minutes),
+            interviewer_contact_id = COALESCE(interviewer_contact_id, p_interviewer_contact_id),
+            event_id               = COALESCE(event_id, p_event_id)
+        WHERE id = v_interview.id
+        RETURNING * INTO v_interview;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'created', v_created,
+        'interview', to_jsonb(v_interview)
+    );
+END;
+$$;
+
+
+-- complete_interview — the post-round debrief write (migration 021). Sets the
+-- outcome status and, optionally, the reflection fields; NULL args leave the
+-- existing value alone, so "just mark it done" and "mark it done AND record the
+-- go/no-go" are the same call at different arity. The MCP's log_interview_notes
+-- wraps this rather than updating the table directly.
+CREATE OR REPLACE FUNCTION complete_interview(
+    p_interview_id uuid,
+    p_status text DEFAULT 'completed',
+    p_rating integer DEFAULT NULL,
+    p_feedback text DEFAULT NULL,
+    p_advance_decision text DEFAULT NULL,
+    p_decision_notes text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_interview interviews;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'complete_interview: no user_id';
+    END IF;
+
+    -- Guard the enum here rather than relying on the column CHECK: a bad value
+    -- from the UI should name the allowed set, not surface a constraint error.
+    IF p_status NOT IN ('scheduled', 'completed', 'cancelled', 'no_show') THEN
+        RAISE EXCEPTION 'complete_interview: status must be one of scheduled, completed, cancelled, no_show (got %)', p_status;
+    END IF;
+
+    UPDATE interviews
+    SET status           = p_status,
+        rating           = COALESCE(p_rating, rating),
+        feedback         = COALESCE(p_feedback, feedback),
+        advance_decision = COALESCE(p_advance_decision, advance_decision),
+        decision_notes   = COALESCE(p_decision_notes, decision_notes)
+    WHERE id = p_interview_id
+      AND user_id = p_user_id
     RETURNING * INTO v_interview;
+
+    IF v_interview.id IS NULL THEN
+        RAISE EXCEPTION 'complete_interview: interview % not found or not owned', p_interview_id;
+    END IF;
 
     RETURN jsonb_build_object('success', true, 'interview', to_jsonb(v_interview));
 END;
@@ -2023,6 +2129,8 @@ GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], 
 GRANT EXECUTE ON FUNCTION submit_application(uuid, uuid, text, date, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION schedule_interview(uuid, timestamptz, text, text, uuid, text, integer, uuid, uuid, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION complete_interview(uuid, text, integer, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION close_role(uuid, text, uuid)             TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION reopen_role(uuid, uuid)                  TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume(uuid)                          TO authenticated, service_role;

@@ -69,9 +69,16 @@ export interface StatusHistoryRow {
   notes: string | null;
 }
 
+// 'interview' = a formal round tied to an application. 'networking' = a
+// standalone call (coffee chat, informational, recruiter call) that may have
+// no application yet — see migration 020. Funnel-specific fields
+// (advance_decision, rating) are naturally left null on networking rows.
+export type InterviewCategory = "interview" | "networking";
+
 export interface Interview {
   id: string;
   interview_type: string | null;
+  category: InterviewCategory;
   scheduled_at: string | null;
   status: string;
   notes: string | null;
@@ -79,17 +86,23 @@ export interface Interview {
   feedback: string | null;
   advance_decision: "advance" | "hold" | "withdraw" | "rejected" | null;
   decision_notes: string | null;
+  // Names from this round's synthesized competencies (interview_prep_sessions.synthesis),
+  // joined in by fetchRole so RoleDetail can show the same tags as the Interviews tab.
+  // Absent (not just empty) until that query populates it.
+  competencies?: string[];
 }
 
-// Every interview across every application, for the all-up Interviews page —
-// same columns as Interview plus the role/company context RoleDetail gets for
-// free from being nested under one application.
+// Every interview + networking call across every application, for the all-up
+// Interviews tab. A formal round carries application_id/job_posting_id and
+// gets org context via the application; a standalone call carries
+// organization_id directly and application_id/job_posting_id are null.
 export interface InterviewListRow extends Interview {
-  application_id: string;
-  job_posting_id: string;
-  role_title: string;
+  application_id: string | null;
+  job_posting_id: string | null;
+  role_title: string | null;
   organization_id: string;
   organization_name: string;
+  contact_name: string | null;
 }
 
 // ── prioritization (see semantic/metrics/priority_score.yaml) ────────────────
@@ -655,9 +668,18 @@ export interface InterviewPrepDraftFeedback {
   question?: string | null;
 }
 
+// Stories synthesized before this change carry only `story` (one blob) and no
+// `competency` tag. Newer sessions carry the STAR fields + competency instead
+// — components render whichever is present (see storyText/hasStar helpers
+// wherever these are consumed) so old prep sessions don't need backfilling.
 export interface InterviewPrepStory {
   title: string;
-  story: string;
+  competency?: string;      // matches a `competencies[].name` in the same synthesis
+  situation?: string;
+  task?: string;
+  action?: string;
+  result?: string;
+  story?: string;           // legacy single-blob shape, pre-STAR-split
   best_for?: string;
 }
 

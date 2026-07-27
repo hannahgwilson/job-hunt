@@ -80,7 +80,10 @@ const closedReasonEnum = z.enum([
 ]);
 const interviewTypeEnum = z.enum([
   "phone_screen", "technical", "behavioral", "system_design", "hiring_manager", "team", "final",
+  // networking-call shapes (migration 020) — no application required
+  "recruiter_call", "networking_call", "coffee_chat", "informational",
 ]);
+const interviewCategoryEnum = z.enum(["interview", "networking"]);
 const remotePolicyEnum = z.enum(["remote", "hybrid", "onsite"]);
 const sourceEnum = z.enum(["linkedin", "company-site", "referral", "recruiter", "other"]);
 // Prioritization signals (see semantic/metrics/priority_score.yaml).
@@ -106,7 +109,9 @@ const userId = requireEnv("DEFAULT_USER_ID");
 // ──────────────────────────────────────────────────────────────────────────────
 
 interface ScheduleInterviewArgs {
-  application_id: string;
+  application_id?: string;
+  organization_id?: string;
+  category?: z.infer<typeof interviewCategoryEnum>;
   interview_type: z.infer<typeof interviewTypeEnum>;
   scheduled_at?: string;
   duration_minutes?: number;
@@ -120,32 +125,49 @@ async function handleScheduleInterview(
   userId: string,
   args: ScheduleInterviewArgs,
 ): Promise<Record<string, unknown>> {
+  if (!args.application_id && !args.organization_id) {
+    throw new Error("schedule_interview: one of application_id / organization_id is required");
+  }
+
   let eventId: string | null = null;
 
   // Optional calendar bridge: create a one-off event so the interview shows
   // up in the family-calendar week view.
   if (args.add_to_calendar && args.scheduled_at) {
-    // Derive a title for the event by joining out to the application + posting + org.
-    const { data: applicationCtx } = await supabase
-      .from("applications")
-      .select(`
-        id,
-        job_postings!inner (
-          title,
-          organizations!inner ( name )
-        )
-      `)
-      .eq("id", args.application_id)
-      .eq("user_id", userId)
-      .maybeSingle();
+    let postingTitle = "Interview";
+    let orgName = "";
 
-    const postingTitle =
-      (applicationCtx?.job_postings as { title?: string } | undefined)?.title ?? "Interview";
-    const orgName =
-      (
-        (applicationCtx?.job_postings as { organizations?: { name?: string } } | undefined)
-          ?.organizations as { name?: string } | undefined
-      )?.name ?? "";
+    if (args.application_id) {
+      // Derive a title for the event by joining out to the application + posting + org.
+      const { data: applicationCtx } = await supabase
+        .from("applications")
+        .select(`
+          id,
+          job_postings!inner (
+            title,
+            organizations!inner ( name )
+          )
+        `)
+        .eq("id", args.application_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      postingTitle = (applicationCtx?.job_postings as { title?: string } | undefined)?.title ?? "Interview";
+      orgName =
+        (
+          (applicationCtx?.job_postings as { organizations?: { name?: string } } | undefined)
+            ?.organizations as { name?: string } | undefined
+        )?.name ?? "";
+    } else if (args.organization_id) {
+      const { data: org } = await supabase
+        .from("organizations")
+        .select("name")
+        .eq("id", args.organization_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      postingTitle = "Networking call";
+      orgName = org?.name ?? "";
+    }
 
     const dt = new Date(args.scheduled_at);
     if (Number.isNaN(dt.getTime())) {
@@ -160,8 +182,8 @@ async function handleScheduleInterview(
     }
 
     const eventTitle = orgName
-      ? `Interview: ${postingTitle} @ ${orgName}`
-      : `Interview: ${postingTitle}`;
+      ? `${postingTitle}: ${postingTitle === "Networking call" ? orgName : `${postingTitle} @ ${orgName}`}`
+      : postingTitle;
 
     const { data: eventRow, error: eventErr } = await supabase
       .from("events")
@@ -189,7 +211,9 @@ async function handleScheduleInterview(
     .from("interviews")
     .insert({
       user_id: userId,
-      application_id: args.application_id,
+      application_id: args.application_id ?? null,
+      organization_id: args.organization_id ?? null,
+      category: args.category ?? "interview",
       interviewer_contact_id: args.interviewer_contact_id ?? null,
       event_id: eventId,
       interview_type: args.interview_type,
@@ -545,13 +569,15 @@ server.tool(
 // ───────────────────────────────────────────────────────────────────────
 server.tool(
   "schedule_interview",
-  "Schedule an interview for an application. Pass `add_to_calendar: true` to also create a row in `events` so the interview shows in the family-calendar week view.",
+  "Schedule an interview for an application, or (pass organization_id instead of application_id, category: 'networking') a standalone networking call — a coffee chat, informational, or recruiter call with someone at a target company before there's a live application. Pass `add_to_calendar: true` to also create a row in `events` so it shows in the family-calendar week view.",
   {
-    application_id: z.string(),
+    application_id: z.string().optional().describe("Required unless organization_id is set"),
+    organization_id: z.string().optional().describe("For a standalone networking call with no application yet"),
+    category: interviewCategoryEnum.optional().describe("Default 'interview'; use 'networking' for calls"),
     interview_type: interviewTypeEnum,
     scheduled_at: z.string().optional().describe("ISO 8601 timestamp"),
     duration_minutes: z.number().optional(),
-    interviewer_contact_id: z.string().optional().describe("UUID of the interviewer in contacts"),
+    interviewer_contact_id: z.string().optional().describe("UUID of the interviewer/contact"),
     notes: z.string().optional().describe("Pre-interview prep notes"),
     add_to_calendar: z.boolean().optional().describe("Default false. When true, also writes to `events`."),
   },
@@ -672,7 +698,7 @@ server.tool(
 // ───────────────────────────────────────────────────────────────────────
 server.tool(
   "get_upcoming_interviews",
-  "List scheduled interviews in the next N days (default 14) with org / role context.",
+  "List scheduled interviews AND networking calls in the next N days (default 14), with org / role context. Networking calls (category='networking') carry organization context directly since they may have no application yet.",
   {
     days_ahead: z.number().optional(),
   },
@@ -680,17 +706,21 @@ server.tool(
     const future = new Date();
     future.setDate(future.getDate() + (days_ahead ?? 14));
 
+    // Left joins on both paths: an interview round has applications set (and
+    // organization_id null), a standalone call has organization_id set (and
+    // applications null) — see migration 020.
     const { data, error } = await supabase
       .from("interviews")
       .select(`
         *,
-        applications!inner (
+        applications (
           id,
-          job_postings!inner (
+          job_postings (
             id, title,
-            organizations!inner ( id, name )
+            organizations ( id, name )
           )
-        )
+        ),
+        organizations ( id, name )
       `)
       .eq("user_id", userId)
       .eq("status", "scheduled")

@@ -131,6 +131,9 @@ export default function RoleDetail() {
                 {iv.advance_decision && (
                   <span className={`pill ${DECISION_PILL[iv.advance_decision] ?? ""}`}>{iv.advance_decision}</span>
                 )}
+                {iv.competencies?.map((name) => (
+                  <span className="pill competency-pill" key={name}>{name}</span>
+                ))}
               </div>
               {iv.notes && <p className="muted small">{iv.notes}</p>}
               {iv.feedback && <p className="small">{iv.feedback}</p>}

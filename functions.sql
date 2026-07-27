@@ -787,16 +787,22 @@ END;
 $$;
 
 
--- schedule_interview — add an interview round to an application. The tracking
--- hub's role page uses this for the plain date + notes case; the MCP tool of
--- the same name additionally supports interviewer_contact_id and the
--- add_to_calendar bridge (it inserts into events itself, then passes the
--- resulting event_id through — no SQL-side calendar logic needed here).
+-- schedule_interview — add an interview round to an application, OR (as of
+-- migration 020) a standalone networking call against an organization when
+-- there's no application yet. Exactly one of p_application_id / p_organization_id
+-- must resolve (see interviews_application_or_org). The tracking hub's role
+-- page calls this for the plain date + notes case, application-scoped; the MCP
+-- tool of the same name additionally supports interviewer_contact_id, category,
+-- and the add_to_calendar bridge (it inserts into events itself, then passes
+-- the resulting event_id through — no SQL-side calendar logic needed here).
 CREATE OR REPLACE FUNCTION schedule_interview(
-    p_application_id uuid,
+    p_application_id uuid DEFAULT NULL,
     p_scheduled_at timestamptz DEFAULT NULL,
     p_interview_type text DEFAULT NULL,
     p_notes text DEFAULT NULL,
+    p_organization_id uuid DEFAULT NULL,
+    p_category text DEFAULT 'interview',
+    p_interviewer_contact_id uuid DEFAULT NULL,
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
@@ -809,14 +815,30 @@ BEGIN
         RAISE EXCEPTION 'schedule_interview: no user_id';
     END IF;
 
-    IF NOT EXISTS (
+    IF p_application_id IS NULL AND p_organization_id IS NULL THEN
+        RAISE EXCEPTION 'schedule_interview: one of application_id / organization_id is required';
+    END IF;
+
+    IF p_application_id IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM applications WHERE id = p_application_id AND user_id = p_user_id
     ) THEN
         RAISE EXCEPTION 'schedule_interview: application % not found or not owned', p_application_id;
     END IF;
 
-    INSERT INTO interviews (user_id, application_id, interview_type, scheduled_at, notes)
-    VALUES (p_user_id, p_application_id, p_interview_type, p_scheduled_at, p_notes)
+    IF p_organization_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM organizations WHERE id = p_organization_id AND user_id = p_user_id
+    ) THEN
+        RAISE EXCEPTION 'schedule_interview: organization % not found or not owned', p_organization_id;
+    END IF;
+
+    INSERT INTO interviews (
+        user_id, application_id, organization_id, category,
+        interviewer_contact_id, interview_type, scheduled_at, notes
+    )
+    VALUES (
+        p_user_id, p_application_id, p_organization_id, COALESCE(p_category, 'interview'),
+        p_interviewer_contact_id, p_interview_type, p_scheduled_at, p_notes
+    )
     RETURNING * INTO v_interview;
 
     RETURN jsonb_build_object('success', true, 'interview', to_jsonb(v_interview));

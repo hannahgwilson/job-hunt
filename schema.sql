@@ -153,7 +153,18 @@ CREATE INDEX IF NOT EXISTS idx_application_status_history_user_time
 CREATE TABLE IF NOT EXISTS interviews (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL,
-    application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+
+    -- A formal interview round is tied to an application. A networking call
+    -- (coffee chat, informational, recruiter call) often predates any
+    -- application, so it hangs off organization_id directly instead — one of
+    -- the two must be set (see interviews_application_or_org below). Kept as
+    -- one fact table rather than a second one for calls: both are "a
+    -- scheduled conversation about a role/company," conformed to the same
+    -- contacts/organizations dims (migration 020).
+    application_id UUID REFERENCES applications(id) ON DELETE CASCADE,
+    organization_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
+    category TEXT NOT NULL DEFAULT 'interview'
+        CHECK (category IN ('interview', 'networking')),
 
     interviewer_contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
 
@@ -162,7 +173,10 @@ CREATE TABLE IF NOT EXISTS interviews (
     event_id UUID REFERENCES events(id) ON DELETE SET NULL,
 
     interview_type TEXT
-        CHECK (interview_type IN ('phone_screen', 'technical', 'behavioral', 'system_design', 'hiring_manager', 'team', 'final')),
+        CHECK (interview_type IN (
+            'phone_screen', 'technical', 'behavioral', 'system_design', 'hiring_manager', 'team', 'final',
+            'recruiter_call', 'networking_call', 'coffee_chat', 'informational'
+        )),
 
     scheduled_at TIMESTAMPTZ,
     duration_minutes INTEGER,
@@ -175,12 +189,15 @@ CREATE TABLE IF NOT EXISTS interviews (
     rating INTEGER CHECK ((rating BETWEEN 1 AND 5) OR rating IS NULL),
 
     -- go/no-go: after this round, do you move forward? Distinct from feedback.
+    -- Naturally left null on networking calls — there's no round to advance.
     advance_decision TEXT
         CHECK (advance_decision IN ('advance', 'hold', 'withdraw', 'rejected') OR advance_decision IS NULL),
     decision_notes TEXT,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT interviews_application_or_org CHECK (application_id IS NOT NULL OR organization_id IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_interviews_application_scheduled
@@ -189,6 +206,10 @@ CREATE INDEX IF NOT EXISTS idx_interviews_user_scheduled
     ON interviews(user_id, scheduled_at) WHERE scheduled_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_interviews_interviewer
     ON interviews(interviewer_contact_id) WHERE interviewer_contact_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_interviews_organization
+    ON interviews(organization_id) WHERE organization_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_interviews_category
+    ON interviews(user_id, category, scheduled_at);
 
 -- job_search_profile (migration 003) was removed by migration 017 — superseded
 -- by the `resumes` dim below. get_resume / upsert_resume read & write `resumes`.

@@ -61,6 +61,15 @@
  *     mock-interview chat transcript, a closing prep sheet). The AI-heavy
  *     stages live in the new `interview-prep` edge function, driven from the
  *     tracking hub's Interview Prep page, not from these tools.
+ *
+ * What changed in v2.7 (interview completion + dedup — migration 021):
+ *   - `schedule_interview` now goes through the SQL RPC of the same name, which
+ *     find-or-creates on (application, scheduled_at, interview_type). Re-running
+ *     a calendar import is a no-op; the response carries `created` so you can
+ *     tell "booked" from "already on the books". The calendar bridge only fires
+ *     for genuinely new rounds, so duplicates no longer leave orphan `events`.
+ *   - `log_interview_notes` is now a wrapper over the `complete_interview` RPC —
+ *     the same call the tracking hub's Done / Cancelled / No-show control makes.
  */
 
 import { Hono } from "hono";
@@ -129,11 +138,37 @@ async function handleScheduleInterview(
     throw new Error("schedule_interview: one of application_id / organization_id is required");
   }
 
-  let eventId: string | null = null;
+  // Book the round FIRST, via the shared RPC — it find-or-creates on
+  // (application/organization, scheduled_at, interview_type), so a re-run
+  // calendar import is a no-op instead of a second copy. Only then do we touch
+  // the calendar: this ordering is what keeps a duplicate call from minting an
+  // orphan `events` row, which is exactly what the old insert-event-then-
+  // insert-interview sequence did.
+  const { data: booked, error: bookErr } = await supabase.rpc("schedule_interview", {
+    p_application_id: args.application_id ?? null,
+    p_scheduled_at: args.scheduled_at ?? null,
+    p_interview_type: args.interview_type,
+    p_notes: args.notes ?? null,
+    p_organization_id: args.organization_id ?? null,
+    p_category: args.category ?? "interview",
+    p_duration_minutes: args.duration_minutes ?? null,
+    p_interviewer_contact_id: args.interviewer_contact_id ?? null,
+    p_event_id: null,
+    p_user_id: userId,
+  });
+  if (bookErr) throw new Error(`schedule_interview failed: ${bookErr.message}`);
 
-  // Optional calendar bridge: create a one-off event so the interview shows
-  // up in the family-calendar week view.
-  if (args.add_to_calendar && args.scheduled_at) {
+  const result = booked as {
+    created: boolean;
+    interview: { id: string; event_id: string | null };
+  };
+  let interview = result.interview;
+  let eventId: string | null = interview.event_id;
+
+  // Optional calendar bridge: create a one-off event so the interview shows up
+  // in the family-calendar week view. Skipped when the round already existed —
+  // it either already has its event or was deliberately booked without one.
+  if (result.created && args.add_to_calendar && args.scheduled_at) {
     let postingTitle = "Interview";
     let orgName = "";
 
@@ -205,28 +240,29 @@ async function handleScheduleInterview(
       throw new Error(`schedule_interview: failed to create calendar event: ${eventErr.message}`);
     }
     eventId = eventRow?.id ?? null;
+
+    // Attach the event to the round we just booked.
+    const { data: linked, error: linkErr } = await supabase
+      .from("interviews")
+      .update({ event_id: eventId })
+      .eq("id", interview.id)
+      .eq("user_id", userId)
+      .select()
+      .single();
+    if (linkErr) {
+      throw new Error(`schedule_interview: failed to link calendar event: ${linkErr.message}`);
+    }
+    interview = linked;
   }
 
-  const { data, error } = await supabase
-    .from("interviews")
-    .insert({
-      user_id: userId,
-      application_id: args.application_id ?? null,
-      organization_id: args.organization_id ?? null,
-      category: args.category ?? "interview",
-      interviewer_contact_id: args.interviewer_contact_id ?? null,
-      event_id: eventId,
-      interview_type: args.interview_type,
-      scheduled_at: args.scheduled_at ?? null,
-      duration_minutes: args.duration_minutes ?? null,
-      status: "scheduled",
-      notes: args.notes ?? null,
-    })
-    .select()
-    .single();
-
-  if (error) throw new Error(`schedule_interview failed: ${error.message}`);
-  return { success: true, interview: data, calendar_event_id: eventId };
+  // `created: false` means this round was already on the books — the caller
+  // should read that as "nothing to do", not as a fresh booking.
+  return {
+    success: true,
+    created: result.created,
+    interview,
+    calendar_event_id: eventId,
+  };
 }
 
 async function handleGetPipelineOverview(
@@ -602,21 +638,20 @@ server.tool(
     decision_notes: z.string().optional().describe("Why you decided to advance / hold / withdraw"),
   },
   async (args) => {
-    const patch: Record<string, unknown> = { status: "completed" };
-    if (args.feedback !== undefined) patch.feedback = args.feedback;
-    if (args.rating !== undefined) patch.rating = args.rating;
-    if (args.advance_decision !== undefined) patch.advance_decision = args.advance_decision;
-    if (args.decision_notes !== undefined) patch.decision_notes = args.decision_notes;
-
-    const { data, error } = await supabase
-      .from("interviews")
-      .update(patch)
-      .eq("id", args.interview_id)
-      .eq("user_id", userId)
-      .select()
-      .single();
+    // Thin wrapper over complete_interview (migration 021) — the same RPC the
+    // tracking hub's Done / Cancelled / No-show control calls, so marking a
+    // round complete behaves identically from chat and from the UI.
+    const { data, error } = await supabase.rpc("complete_interview", {
+      p_interview_id: args.interview_id,
+      p_status: "completed",
+      p_rating: args.rating ?? null,
+      p_feedback: args.feedback ?? null,
+      p_advance_decision: args.advance_decision ?? null,
+      p_decision_notes: args.decision_notes ?? null,
+      p_user_id: userId,
+    });
     if (error) throw new Error(`log_interview_notes failed: ${error.message}`);
-    return ok({ success: true, interview: data });
+    return ok(data as Record<string, unknown>);
   },
 );
 

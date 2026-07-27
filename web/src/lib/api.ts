@@ -4,7 +4,7 @@
 
 import { supabase } from "./supabase";
 import type {
-  Application, ActionQueue, FunnelMetrics, Interview, StatusHistoryRow,
+  Application, ActionQueue, FunnelMetrics, StageRoles, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
   CompanyData, CompanyConnection, FitCoveragePosting, ResumeFeedbackResponse, CareerProfile, RoleAnalytics,
   PriorityComponents, PriorityWeightsResponse,
@@ -366,6 +366,12 @@ export async function fetchFunnelMetrics(windowDays?: number): Promise<FunnelMet
   });
   if (error) throw error;
   return data as FunnelMetrics;
+}
+
+export async function fetchStageRoles(): Promise<StageRoles> {
+  const { data, error } = await supabase.rpc("get_stage_roles");
+  if (error) throw error;
+  return data as StageRoles;
 }
 
 // ── writes ───────────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ Why bother for a personal job search? Two reasons:
 | Days in stage (dwell) | [`metrics/days_in_stage.yaml`](metrics/days_in_stage.yaml) | `get_funnel_metrics()` → `median_days_in_stage` |
 | Conversion rate | [`metrics/conversion_rate.yaml`](metrics/conversion_rate.yaml) | `get_funnel_metrics()` → `conversion_rates` |
 | Pass-through rate | [`metrics/pass_through_rate.yaml`](metrics/pass_through_rate.yaml) | `get_funnel_metrics()` → `pass_through` |
+| Roles by stage (drill-down) | [`metrics/stage_roles.yaml`](metrics/stage_roles.yaml) | `get_stage_roles()` → `roles` |
 | Priority score | [`metrics/priority_score.yaml`](metrics/priority_score.yaml) | `compute_priority()`, surfaced by `get_prioritized_roles()` / `get_action_queue()` |
 
 The funnel pairs are easy to confuse, so they're defined as distinct metrics:

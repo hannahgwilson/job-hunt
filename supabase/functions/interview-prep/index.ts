@@ -190,10 +190,23 @@ const SYNTHESIS_TOOL = {
           type: "object",
           properties: {
             title: { type: "string" },
-            story: { type: "string", description: "The STAR-shaped story to tell, specific and concrete." },
-            best_for: { type: "string", description: "Which competency or question type this story best answers." },
+            competency: {
+              type: "string",
+              description:
+                "The single competency (by name) this story is the primary answer for — must match one entry in " +
+                "`competencies`. In a live interview the candidate is asked for a competency ('tell me about a time " +
+                "you handled conflict'), not for a company, so this is the primary index into the story.",
+            },
+            situation: { type: "string", description: "The concrete context/setup — specific, not generic." },
+            task: { type: "string", description: "What the candidate specifically needed to do or decide." },
+            action: { type: "string", description: "What the candidate actually did, step by step." },
+            result: { type: "string", description: "The concrete outcome — a number, a decision reversed, a system shipped." },
+            best_for: {
+              type: "string",
+              description: "Optional: secondary competencies or question types this story also answers well.",
+            },
           },
-          required: ["title", "story"],
+          required: ["title", "competency", "situation", "task", "action", "result"],
         },
       },
       competencies: {
@@ -495,9 +508,12 @@ Deno.serve(async (req) => {
           "You close out an interview prep session. Read the role/research context, the mock-interview transcript, " +
           "and any coach feedback, then call report_prep_summary with a tight, specific closing sheet: an honest " +
           "overall_feedback verdict on how the whole rehearsal went (patterns across answers, not a single moment), " +
-          "real stories grounded in what the candidate actually said (not generic advice), the competencies this " +
-          "interview is really testing, and sharp questions worth asking back. Calibrate overall_feedback honestly " +
-          "— don't default to a low rating — and keep every field short.",
+          "the competencies this interview is really testing, and sharp questions worth asking back. Calibrate " +
+          "overall_feedback honestly — don't default to a low rating — and keep every field short. Identify the " +
+          "competencies FIRST, then write each story pre-broken into situation/task/action/result — concrete and " +
+          "specific, grounded in what the candidate actually said, not generic advice — and tag it with the single " +
+          "competency (by exact name) it's the strongest answer for. In a live interview the candidate gets asked " +
+          "for a competency, not a company, so this tag is how they'll find the right story fast.",
         tools: [SYNTHESIS_TOOL],
         tool_choice: { type: "tool", name: "report_prep_summary" },
         messages: [

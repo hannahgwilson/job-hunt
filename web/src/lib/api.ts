@@ -58,17 +58,33 @@ export async function fetchRole(applicationId: string): Promise<{
     .order("changed_at", { ascending: true });
   if (histErr) throw histErr;
 
+  // interview_prep_sessions embeds via its interview_id FK (one row per
+  // interview, migration 018) so the role page can show each round's
+  // synthesized competencies without a second round trip.
   const { data: interviews, error: intErr } = await supabase
     .from("interviews")
-    .select("id, interview_type, scheduled_at, status, notes, rating, feedback, advance_decision, decision_notes")
+    .select(`
+      id, interview_type, category, scheduled_at, status, notes, rating, feedback, advance_decision, decision_notes,
+      interview_prep_sessions ( synthesis )
+    `)
     .eq("application_id", applicationId)
     .order("scheduled_at", { ascending: true, nullsFirst: false });
   if (intErr) throw intErr;
 
+  type RawInterview = Interview & {
+    interview_prep_sessions: { synthesis: { competencies?: Array<{ name: string }> } | null }[] | null;
+  };
+
+  const interviewsWithCompetencies: Interview[] = ((interviews ?? []) as unknown as RawInterview[]).map((iv) => {
+    const { interview_prep_sessions, ...rest } = iv;
+    const competencies = interview_prep_sessions?.[0]?.synthesis?.competencies?.map((c) => c.name) ?? [];
+    return { ...rest, competencies };
+  });
+
   return {
     application: application as unknown as Application,
     history: (history ?? []) as StatusHistoryRow[],
-    interviews: (interviews ?? []) as Interview[],
+    interviews: interviewsWithCompetencies,
   };
 }
 
@@ -130,43 +146,56 @@ export async function fetchCompany(orgId: string): Promise<CompanyData> {
   };
 }
 
-// Every interview across every application, all-up — the Interviews page.
-// Plain RLS-scoped select + join, same pattern as fetchApplications/fetchCompany.
+// Every interview AND networking call across every application, all-up — the
+// Interviews tab's Upcoming view. A formal round gets org context via
+// applications->job_postings->organizations; a standalone call (no
+// application_id) carries organization_id directly (migration 020) — both
+// embeds default to a left join, so either path can be null.
 export async function fetchInterviews(): Promise<InterviewListRow[]> {
   const { data, error } = await supabase
     .from("interviews")
     .select(`
-      id, interview_type, scheduled_at, status, notes, rating, feedback, advance_decision, decision_notes,
-      application_id,
+      id, interview_type, category, scheduled_at, status, notes, rating, feedback, advance_decision, decision_notes,
+      application_id, organization_id,
       applications:application_id (
         id,
         job_postings:job_posting_id (
           id, title,
           organizations:organization_id ( id, name )
         )
-      )
+      ),
+      organizations:organization_id ( id, name ),
+      contacts:interviewer_contact_id ( name )
     `)
     .order("scheduled_at", { ascending: false, nullsFirst: true });
   if (error) throw error;
 
   type Raw = Interview & {
-    application_id: string;
+    application_id: string | null;
+    organization_id: string | null;
     applications: {
       id: string;
       job_postings: { id: string; title: string; organizations: { id: string; name: string } | null } | null;
     } | null;
+    organizations: { id: string; name: string } | null;
+    contacts: { name: string } | null;
   };
 
-  return ((data ?? []) as unknown as Raw[]).map((iv) => ({
-    id: iv.id, interview_type: iv.interview_type, scheduled_at: iv.scheduled_at, status: iv.status,
-    notes: iv.notes, rating: iv.rating, feedback: iv.feedback,
-    advance_decision: iv.advance_decision, decision_notes: iv.decision_notes,
-    application_id: iv.application_id,
-    job_posting_id: iv.applications?.job_postings?.id ?? "",
-    role_title: iv.applications?.job_postings?.title ?? "Unknown role",
-    organization_id: iv.applications?.job_postings?.organizations?.id ?? "",
-    organization_name: iv.applications?.job_postings?.organizations?.name ?? "Unknown company",
-  }));
+  return ((data ?? []) as unknown as Raw[]).map((iv) => {
+    const viaApplication = iv.applications?.job_postings?.organizations;
+    const org = viaApplication ?? iv.organizations;
+    return {
+      id: iv.id, interview_type: iv.interview_type, category: iv.category, scheduled_at: iv.scheduled_at, status: iv.status,
+      notes: iv.notes, rating: iv.rating, feedback: iv.feedback,
+      advance_decision: iv.advance_decision, decision_notes: iv.decision_notes,
+      application_id: iv.application_id,
+      job_posting_id: iv.applications?.job_postings?.id ?? null,
+      role_title: iv.applications?.job_postings?.title ?? null,
+      organization_id: org?.id ?? "",
+      organization_name: org?.name ?? "Unknown company",
+      contact_name: iv.contacts?.name ?? null,
+    };
+  });
 }
 
 // Prospects found via the "Find hiring manager" LinkedIn search launcher —

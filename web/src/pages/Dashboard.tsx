@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import {
-  fetchApplications, fetchActionQueue, fetchFunnelMetrics,
+  fetchApplications, fetchActionQueue, fetchFunnelMetrics, fetchStageRoles,
   fetchRolesAnalytics, runCareerJudge, runGrowthJudge,
 } from "../lib/api";
-import type { Application, ActionQueue, FunnelMetrics, RoleAnalytics, ApplicationStatus } from "../lib/types";
+import type { Application, ActionQueue, FunnelMetrics, StageRoles, RoleAnalytics, ApplicationStatus } from "../lib/types";
 import { useBatchRunner } from "../lib/useBatchRunner";
 import FitScatter from "../components/FitScatter";
 import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
@@ -25,10 +25,12 @@ export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
   const [queue, setQueue] = useState<ActionQueue | null>(null);
   const [funnel, setFunnel] = useState<FunnelMetrics | null>(null);
+  const [stageRoles, setStageRoles] = useState<StageRoles | null>(null);
   const [roles, setRoles] = useState<RoleAnalytics[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<ApplicationStatus | null>(null);
+  const [selectedStage, setSelectedStage] = useState<(typeof STAGE_STEPS)[number] | null>(null);
   const [addingInterview, setAddingInterview] = useState(false);
   const [pickedAppId, setPickedAppId] = useState("");
   const batch = useBatchRunner();
@@ -36,8 +38,8 @@ export default function Dashboard() {
   function load() {
     setRefreshing(true);
     setError(null);
-    Promise.all([fetchApplications(), fetchActionQueue(), fetchFunnelMetrics(), fetchRolesAnalytics()])
-      .then(([a, q, f, r]) => { setApps(a); setQueue(q); setFunnel(f); setRoles(r); })
+    Promise.all([fetchApplications(), fetchActionQueue(), fetchFunnelMetrics(), fetchStageRoles(), fetchRolesAnalytics()])
+      .then(([a, q, f, sr, r]) => { setApps(a); setQueue(q); setFunnel(f); setStageRoles(sr); setRoles(r); })
       .catch((e) => setError(e.message))
       .finally(() => setRefreshing(false));
   }
@@ -188,35 +190,43 @@ export default function Dashboard() {
         <section className="card stage-metrics">
           <h2>Stage funnel</h2>
           {!funnel ? <p className="muted">Loading…</p> : (
-            <table className="stage-table">
-              <thead>
-                <tr>
-                  <th>Stage</th><th className="num">Total</th>
-                  <th className="num">Pass-through</th><th className="num">Pending</th>
-                  <th className="num">Median days</th>
-                </tr>
-              </thead>
-              <tbody>
-                {STAGE_STEPS.map((s) => {
-                  const pt = funnel.pass_through?.[s];
-                  const dwell = funnel.median_days_in_stage?.[s];
-                  const decided = pt ? pt.moved_on + pt.terminated_here : 0;
-                  return (
-                    <tr key={s}>
-                      <td><span className={`pill pill-${s}`}>{s}</span></td>
-                      <td className="num">{pt?.total_ever ?? 0}</td>
-                      <td className="num">
-                        {pt && pt.rate != null
-                          ? <>{Math.round(pt.rate * 100)}% <span className="muted">({pt.moved_on}/{decided})</span></>
-                          : <span className="muted">—</span>}
-                      </td>
-                      <td className="num">{pt?.pending ?? 0}</td>
-                      <td className="num">{dwell != null ? dwell : <span className="muted">—</span>}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <>
+              <p className="muted small">Click a stage to see the roles that reached it.</p>
+              <table className="stage-table">
+                <thead>
+                  <tr>
+                    <th>Stage</th><th className="num">Total</th>
+                    <th className="num">Pass-through</th><th className="num">Pending</th>
+                    <th className="num">Median days</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {STAGE_STEPS.map((s) => {
+                    const pt = funnel.pass_through?.[s];
+                    const dwell = funnel.median_days_in_stage?.[s];
+                    const decided = pt ? pt.moved_on + pt.terminated_here : 0;
+                    const total = pt?.total_ever ?? 0;
+                    return (
+                      <tr
+                        key={s}
+                        className={`${total > 0 ? "clickable" : ""}${selectedStage === s ? " active" : ""}`}
+                        onClick={total > 0 ? () => setSelectedStage((cur) => (cur === s ? null : s)) : undefined}
+                      >
+                        <td><span className={`pill pill-${s}`}>{s}</span></td>
+                        <td className="num">{total}</td>
+                        <td className="num">
+                          {pt && pt.rate != null
+                            ? <>{Math.round(pt.rate * 100)}% <span className="muted">({pt.moved_on}/{decided})</span></>
+                            : <span className="muted">—</span>}
+                        </td>
+                        <td className="num">{pt?.pending ?? 0}</td>
+                        <td className="num">{dwell != null ? dwell : <span className="muted">—</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
           )}
         </section>
       </div>
@@ -237,6 +247,49 @@ export default function Dashboard() {
             ))}
             {selectedApps.length === 0 && <li className="muted">None.</li>}
           </ul>
+        </section>
+      )}
+
+      {/* Drill-down: every role that ever reached the clicked stage (semantic/metrics/stage_roles.yaml) */}
+      {selectedStage && (
+        <section className="card span-2">
+          <div className="section-head">
+            <h2>
+              <span className={`pill pill-${selectedStage}`}>{selectedStage}</span> roles{" "}
+              <span className="count">{stageRoles?.roles?.[selectedStage]?.length ?? 0}</span>
+            </h2>
+            <button className="ghost sm" onClick={() => setSelectedStage(null)}>Close</button>
+          </div>
+          <table className="stage-table">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th className="num">Interviews done</th>
+                <th className="num">Interviews pending</th>
+                <th>Furthest round</th>
+                <th className="num">Days since applied</th>
+                <th className="num">Days since screen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(stageRoles?.roles?.[selectedStage] ?? []).map((r) => (
+                <tr key={r.application_id}>
+                  <td>
+                    <Link to={`/role/${r.application_id}`}>{r.title}</Link>
+                    <span className="muted"> @ {r.organization_name}</span>
+                  </td>
+                  <td className="num">{r.interviews_completed}</td>
+                  <td className="num">{r.interviews_pending}</td>
+                  <td>{r.furthest_round ?? <span className="muted">—</span>}</td>
+                  <td className="num">{r.days_since_applied ?? <span className="muted">—</span>}</td>
+                  <td className="num">{r.days_since_screen ?? <span className="muted">—</span>}</td>
+                </tr>
+              ))}
+              {(stageRoles?.roles?.[selectedStage] ?? []).length === 0 && (
+                <tr><td colSpan={6} className="muted">None.</td></tr>
+              )}
+            </tbody>
+          </table>
         </section>
       )}
 

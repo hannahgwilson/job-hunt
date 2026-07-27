@@ -504,6 +504,26 @@ export interface FunnelMetrics {
   median_days_in_stage: Record<string, number | null>;
 }
 
+// ── get_stage_roles() return shape (semantic/metrics/stage_roles.yaml) ────────
+// The Stage funnel tile's drill-down roster: every role that EVER reached a
+// stage (reached-based, same population as pass_through.<stage>.total_ever).
+export interface StageRoleEntry {
+  application_id: string;
+  job_posting_id: string;
+  title: string;
+  organization_name: string;
+  interviews_completed: number;
+  interviews_pending: number;
+  furthest_round: string | null;
+  days_since_applied: number | null;
+  days_since_screen: number | null;
+}
+
+export interface StageRoles {
+  success: boolean;
+  roles: Record<string, StageRoleEntry[]>;
+}
+
 // ── action checklist (canonical tasks dim; domain='job-hunt', migration 016) ──
 export type TaskPriority = "asap" | "high" | "normal" | "low";
 export type TaskStatus = "open" | "done" | "dismissed" | "snoozed";

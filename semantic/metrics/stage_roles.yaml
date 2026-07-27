@@ -1,0 +1,70 @@
+metric: stage_roles
+label: Roles by stage (drill-down)
+description: >
+  The role-level roster behind each Stage funnel row — every application that
+  EVER reached a given stage, with per-role interview progress and elapsed
+  time. This is the drill-down for the Total column: click a stage and see
+  which roles make up that count, not just a number.
+owner: hannah
+grain: one application × stage reached
+unit: n/a   # a roster with several per-row measures, not a single number
+
+source:
+  table: [application_status_history, applications, interviews, job_postings, organizations]
+  columns: [application_id, to_status, changed_at, status, interview_type, scheduled_at]
+  notes: >
+    Reuses the same "first reached" population as get_funnel_metrics (see
+    pass_through_rate.yaml / conversion_rate.yaml) — reached-based, not
+    current-status. An application now interviewing still appears under
+    'applied' and 'screening' rows too, so each stage's roster count matches
+    that stage's existing Total column exactly.
+
+definition: >
+  For each application and each forward stage it ever reached (applied,
+  screening, interviewing, offer — same stage_order as the other funnel
+  metrics), emit one roster row with:
+    - role            — posting title @ organization
+    - interviews_completed — count of this application's interviews with
+                             status = 'completed'
+    - interviews_pending   — count with status = 'scheduled'
+                             (cancelled / no_show count toward neither)
+    - furthest_round  — interview_type of the chronologically-last interview
+                         that is completed or still scheduled (by scheduled_at);
+                         null if no interview has been logged yet
+    - days_since_applied — now() - first reached 'applied', in whole days
+    - days_since_screen  — now() - first reached 'screening', in whole days;
+                            null if the application never reached screening
+  The interview counts, furthest round, and day-counters are properties of the
+  APPLICATION (computed once), not of the stage row — the same values repeat
+  on every stage row that application appears under.
+
+stage_order: [applied, screening, interviewing, offer]
+# 'accepted' has no forward roster (nothing to drill into beyond the win).
+
+dimensions:
+  - stage   # which stage's roster
+
+implemented_by:
+  function: get_stage_roles(p_user_id uuid)
+  file: functions.sql
+  returns_key: roles   # { <stage>: [ {application_id, job_posting_id, title, organization_name, interviews_completed, interviews_pending, furthest_round, days_since_applied, days_since_screen}, ... ] }
+  surfaced_in:
+    - web/src/pages/Dashboard.tsx   # Stage funnel tile, click a row to expand its roster
+    - MCP tool get_stage_roles
+
+interpretation: >
+  Pairs with pass_through_rate and days_in_stage: those tell you the stage is
+  slow or lossy in aggregate, this tells you WHICH roles are why — e.g. an
+  'interviewing' row with a high median dwell might be one role stuck at
+  round 3 for three weeks, not every role running long.
+
+related:
+  - pass_through_rate   # same reached-based population, aggregated to a rate
+  - days_in_stage       # same population, aggregated to a median dwell
+
+caveats:
+  - furthest_round reads interview_type, which isn't inherently ordered
+    (phone_screen vs. final aren't ranked) — "furthest" here means most
+    recent by scheduled_at, a proxy for progress, not a strict round number.
+  - days_since_screen is null for roles that haven't had a recruiter screen
+    logged as a status transition yet, even if an interview exists.

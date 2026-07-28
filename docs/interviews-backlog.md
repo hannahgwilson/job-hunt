@@ -50,7 +50,7 @@ lives only in `functions.sql`. Migration 021 deliberately contains only
 
 ## Defects
 
-D1-D4 came from the post-ship scan; D5-D6 were raised in review.
+D1-D4 came from the post-ship scan; D5-D6 were raised in review; D7 surfaced while scoping T1.7.
 
 ### D1 — `advance_decision` is inert
 
@@ -148,6 +148,40 @@ wall-of-text paragraphs depending on when each session was run. Fixing the
 renderer alone won't help — the legacy rows have no structure to render. They
 need backfilling (an LLM pass splitting the blob into STAR), which makes this a
 natural companion to T2.3.
+
+### D7 — The prep page renders story bodies blank, and copies them as "undefined"
+
+Found while scoping **T1.7**. Both story renderers on `/interview-prep/:id` read
+`s.story` — the **legacy** single-blob field:
+
+```tsx
+// InterviewPrepPage.tsx:259 — rendered list
+<li><strong>{s.title}</strong> — {s.story}{s.best_for && …}</li>
+
+// InterviewPrepPage.tsx:70 — copyMarkdown
+`- **${x.title}** — ${x.story}${x.best_for ? ` _(for: ${x.best_for})_` : ""}`
+```
+
+The synthesis tool schema in the `interview-prep` edge function no longer emits
+that field. Its story properties are `title`, `competency`, `situation`, `task`,
+`action`, `result`, `best_for`, with
+`required: ["title", "competency", "situation", "task", "action", "result"]` —
+and **no `story`**.
+
+So for every session synthesized since `bedfe50`:
+
+- the rendered list shows the title, an em-dash, and nothing after it;
+- **`copyMarkdown` emits the literal string `undefined`**, because `${x.story}`
+  interpolates `undefined` into the template. Anyone who has copied a prep sheet
+  out of the app has pasted `- **Title** — undefined`.
+
+The STAR content is sitting in the object the entire time and simply isn't read.
+T1.7's shared card fixes the rendered list; `copyMarkdown` needs the same
+treatment separately, since it builds a string rather than JSX.
+
+Related to **D6** — the library falls back to `story` for *older* rows that
+genuinely have no STAR fields. The two are opposite ends of the same transition:
+D6 is old data missing new fields, D7 is new data read through an old field.
 
 ---
 
@@ -363,6 +397,36 @@ than discovering the behavior after the inbox fills up.
 
 The largest Tier 1 item — a new edge function, a thoughts write path, and UI
 work, versus a column or a component for the others.
+
+### T1.7 Show the full story card on the prep surfaces (fixes D7)
+
+*Requested: "I want the story cards that are outlined on the Interviews tab to
+show up on the job prep tab."*
+
+The same `InterviewPrepStory` object renders at **three** fidelities today:
+
+| Surface | Renders | Markup |
+|---|---|---|
+| Interviews → **Story library** | Full STAR card — title, `<dl>` of Situation/Task/Action/Result, source, `best_for` footer | `.library-card` + `.library-star` |
+| Interviews → **Prep** sub-tab | Title + competency pill, one line | `.prep-story-row` |
+| **`/interview-prep/:id`** → "Stories to tell" | Title + em-dash + **nothing** — see D7 | inline `<li>` |
+
+**Build one `<StoryCard>` component and use it at all three call sites.** The
+data is already identical: the library reads `session.stories` from
+`get_story_cheat_sheet`, the prep page reads `session.synthesis.stories`, and
+both are `InterviewPrepStory[]`. Only the markup differs. The library's card is
+the one to extract — its styles (`.library-card`, `.library-star`,
+`.library-card-foot`) already exist and need only renaming out of the
+`library-` prefix.
+
+Two judgement calls to make while doing it:
+
+- **The Prep sub-tab is a deliberately compact list.** Swapping one-line rows
+  for full cards turns it from something you scan into something you read.
+  Consider a collapsed-by-default card, or keep the compact row there and put
+  full cards only on the prep page.
+- **The prep-page half is a bug fix, not a preference** (D7). Ship it
+  regardless of what's decided for the sub-tab.
 
 ---
 

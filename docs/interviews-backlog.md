@@ -398,35 +398,58 @@ than discovering the behavior after the inbox fills up.
 The largest Tier 1 item — a new edge function, a thoughts write path, and UI
 work, versus a column or a component for the others.
 
-### T1.7 Show the full story card on the prep surfaces (fixes D7)
+### T1.7 One story card, rendered on the prep page (fixes D7)
 
-*Requested: "I want the story cards that are outlined on the Interviews tab to
-show up on the job prep tab."*
+*Requested: "the story cards outlined on the Interviews tab should show up on
+[`/interview-prep/:id`]. I think part of the confusion is having both — can we
+simplify?"*
 
-The same `InterviewPrepStory` object renders at **three** fidelities today:
+#### The actual redundancy
 
-| Surface | Renders | Markup |
+The same `InterviewPrepStory` object renders in three places, at three
+fidelities:
+
+| Surface | Axis | Renders |
 |---|---|---|
-| Interviews → **Story library** | Full STAR card — title, `<dl>` of Situation/Task/Action/Result, source, `best_for` footer | `.library-card` + `.library-star` |
-| Interviews → **Prep** sub-tab | Title + competency pill, one line | `.prep-story-row` |
-| **`/interview-prep/:id`** → "Stories to tell" | Title + em-dash + **nothing** — see D7 | inline `<li>` |
+| Interviews → **Story library** | by **competency**, across all companies | Full STAR card — title, `<dl>` of Situation/Task/Action/Result, source, `best_for` footer |
+| Interviews → **Prep** sub-tab | by **round** | Title + competency pill, one line |
+| **`/interview-prep/:id`** → "Stories to tell" | by **round** (one round) | Title + em-dash + **nothing** — see D7 |
 
-**Build one `<StoryCard>` component and use it at all three call sites.** The
-data is already identical: the library reads `session.stories` from
+The confusion isn't three surfaces — it's that **rows 2 and 3 answer the same
+question** ("what am I telling in this round?") at two different, both-degraded
+fidelities, and row 2 exists mainly to link to row 3. The library is on a
+genuinely different axis and earns its place: *"what stories do I have?"* is not
+*"what am I telling on Thursday?"*
+
+#### Decision
+
+1. **The prep page is where you read a round's stories.** Render the full STAR
+   card there — replacing the `<ul className="clean">` under "Stories to tell",
+   which sits between the Prep-summary card and "Competencies to focus on".
+2. **The Prep sub-tab becomes an index, not a second renderer.** Keep the
+   chronological round list, the spikes/gaps panel, and "Open full prep session
+   →"; drop its own inline story list (a count is enough). That removes the
+   duplicate rendering rather than upgrading it — one fewer place showing
+   stories differently.
+3. **The Story library is unchanged.** Different axis, different job.
+
+Net: one `<StoryCard>` component, two call sites (library + prep page), on two
+different axes.
+
+#### Implementation
+
+The data is already identical — the library reads `session.stories` from
 `get_story_cheat_sheet`, the prep page reads `session.synthesis.stories`, and
-both are `InterviewPrepStory[]`. Only the markup differs. The library's card is
-the one to extract — its styles (`.library-card`, `.library-star`,
-`.library-card-foot`) already exist and need only renaming out of the
-`library-` prefix.
+both are `InterviewPrepStory[]`. Only the markup differs. Extract the library's
+card; its styles (`.library-card`, `.library-star`, `.library-card-foot`)
+already exist and need only renaming out of the `library-` prefix.
 
-Two judgement calls to make while doing it:
+**`copyMarkdown` needs the same fix separately** — it builds a string rather
+than JSX, so the shared component doesn't reach it. It is the source of the
+literal `undefined` in copied prep sheets (D7).
 
-- **The Prep sub-tab is a deliberately compact list.** Swapping one-line rows
-  for full cards turns it from something you scan into something you read.
-  Consider a collapsed-by-default card, or keep the compact row there and put
-  full cards only on the prep page.
-- **The prep-page half is a bug fix, not a preference** (D7). Ship it
-  regardless of what's decided for the sub-tab.
+Small: one extracted component, two call sites, one string-builder fix, and a
+deletion in the Prep sub-tab.
 
 ---
 

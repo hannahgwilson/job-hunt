@@ -217,6 +217,8 @@ BEGIN
     -- per-application interview rollup: completed / still-scheduled counts, plus
     -- the furthest round reached (the type of the chronologically-last interview
     -- that happened or is on the books; cancelled/no_show don't count as "reached").
+    -- Formal rounds only — a networking call attached to an application is not
+    -- an interview and must not inflate these or win furthest_round (D2).
     iv AS (
         SELECT
             application_id,
@@ -226,12 +228,17 @@ BEGIN
                 FILTER (WHERE status IN ('completed', 'scheduled')))[1] AS furthest_round
         FROM interviews
         WHERE user_id = p_user_id
+          AND category = 'interview'
         GROUP BY application_id
     ),
     rows AS (
         SELECT
             r.stage,
             a.id AS application_id,
+            -- where the app IS today, vs. the reached-based stage it's listed
+            -- under — without this the drill-down can't tell "still here" from
+            -- "moved on months ago" (T1.5).
+            a.status,
             jp.id AS job_posting_id,
             jp.title,
             o.name AS organization_name,
@@ -253,14 +260,16 @@ BEGIN
     )
     SELECT jsonb_build_object(
         'success', true,
-        -- { <stage>: [ {application_id, job_posting_id, title, organization_name,
-        --               interviews_completed, interviews_pending, furthest_round,
+        -- { <stage>: [ {application_id, status, job_posting_id, title,
+        --               organization_name, interviews_completed,
+        --               interviews_pending, furthest_round,
         --               days_since_applied, days_since_screen}, ... ] }
         'roles', COALESCE((
             SELECT jsonb_object_agg(stage, roles)
             FROM (
                 SELECT stage, jsonb_agg(jsonb_build_object(
                     'application_id', application_id,
+                    'status', status,
                     'job_posting_id', job_posting_id,
                     'title', title,
                     'organization_name', organization_name,
@@ -603,9 +612,36 @@ AS $$
             JOIN job_postings jp ON jp.id = a.job_posting_id
             JOIN organizations o ON o.id = jp.organization_id
             WHERE i.user_id = p_user_id
+              AND i.category = 'interview'   -- networking calls are not rounds (D2)
               AND i.status = 'scheduled'
               AND i.scheduled_at >= now()
               AND i.scheduled_at <= now() + make_interval(days => p_interview_days)
+        ),
+        -- Debriefed 'hold' rounds on live applications: the explicit "do I move
+        -- forward?" you deferred. Advancing/withdrawing the application (or
+        -- re-debriefing the round) clears the row (T1.2).
+        'interview_decisions', (
+            SELECT coalesce(jsonb_agg(
+                jsonb_build_object(
+                    'interview_id', i.id,
+                    'interview_type', i.interview_type,
+                    'scheduled_at', i.scheduled_at,
+                    'application_id', a.id,
+                    'application_status', a.status,
+                    'decision_notes', i.decision_notes,
+                    'title', jp.title,
+                    'organization_name', o.name
+                ) ORDER BY i.scheduled_at DESC NULLS LAST
+            ), '[]'::jsonb)
+            FROM interviews i
+            JOIN applications a ON a.id = i.application_id
+            JOIN job_postings jp ON jp.id = a.job_posting_id
+            JOIN organizations o ON o.id = jp.organization_id
+            WHERE i.user_id = p_user_id
+              AND i.category = 'interview'
+              AND i.status = 'completed'
+              AND i.advance_decision = 'hold'
+              AND a.status IN ('applied', 'screening', 'interviewing', 'offer')
         ),
         'networking', (
             SELECT coalesce(jsonb_agg(
@@ -749,6 +785,21 @@ BEGIN
         p_resume_version, p_cover_letter_notes, p_notes
     )
     RETURNING * INTO v_app;
+
+    -- Auto-close the matching "Apply" checklist task(s) for this posting — once
+    -- the application exists, the reminder to apply has done its job. Any
+    -- non-draft status counts: logging a role directly at screening still means
+    -- you unambiguously applied. (Recovered orphan commit 94bc031; guard
+    -- widened per docs/interviews-backlog.md appendix.)
+    IF v_app.status <> 'draft' THEN
+        UPDATE tasks
+           SET status = 'done', completed_at = now()
+         WHERE user_id = p_user_id
+           AND domain = 'job-hunt'
+           AND kind = 'apply'
+           AND job_posting_id = p_job_posting_id
+           AND status IN ('open', 'snoozed');
+    END IF;
 
     RETURN jsonb_build_object('success', true, 'application', to_jsonb(v_app));
 END;
@@ -922,6 +973,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_interview interviews;
+    v_app_status text;
 BEGIN
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'complete_interview: no user_id';
@@ -947,7 +999,178 @@ BEGIN
         RAISE EXCEPTION 'complete_interview: interview % not found or not owned', p_interview_id;
     END IF;
 
+    -- T1.2 (fixes D1): a debrief that lands 'rejected'/'withdraw' on a formal
+    -- round cascades to the application's status, so the app no longer sits at
+    -- 'interviewing' forever after a no. Only an EXPLICIT terminal decision in
+    -- THIS call fires it (p_advance_decision, not the COALESCEd stored value),
+    -- so re-saving an old debrief or a bare "mark it done" never moves the
+    -- application; 'advance' doesn't auto-bump (which stage is a judgment
+    -- call) and 'hold' surfaces in get_action_queue.interview_decisions. A
+    -- 'rejected' on ANY round terminates the app — "they passed" is a verdict
+    -- on the application. The cascade never touches an already-terminal app,
+    -- and the app's own notes are left alone (the rationale lives on the
+    -- interview row; the history trigger logs the transition).
+    IF p_advance_decision IN ('rejected', 'withdraw')
+       AND p_status = 'completed'
+       AND v_interview.category = 'interview'
+       AND v_interview.application_id IS NOT NULL THEN
+        SELECT status INTO v_app_status
+        FROM applications
+        WHERE id = v_interview.application_id AND user_id = p_user_id;
+
+        IF v_app_status IN ('applied', 'screening', 'interviewing', 'offer') THEN
+            UPDATE applications
+            SET status = CASE p_advance_decision WHEN 'rejected' THEN 'rejected' ELSE 'withdrawn' END,
+                response_date = COALESCE(response_date, current_date)
+            WHERE id = v_interview.application_id AND user_id = p_user_id;
+        END IF;
+    END IF;
+
     RETURN jsonb_build_object('success', true, 'interview', to_jsonb(v_interview));
+END;
+$$;
+
+
+-- find_duplicate_interviews — collision groups on the same natural key
+-- schedule_interview dedups on (T1.1; migration 022). Within each group the
+-- interviews array is ordered best-keeper-first: has a synthesized prep > has
+-- any prep > oldest.
+CREATE OR REPLACE FUNCTION find_duplicate_interviews(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jsonb_build_object(
+        'success', true,
+        'groups', COALESCE(jsonb_agg(g.grp ORDER BY g.scheduled_at DESC), '[]'::jsonb)
+    )
+    FROM (
+        SELECT i.scheduled_at, jsonb_build_object(
+            'application_id', i.application_id,
+            'organization_id', i.organization_id,
+            'scheduled_at', i.scheduled_at,
+            'interview_type', i.interview_type,
+            'title', max(jp.title),
+            'organization_name', COALESCE(max(o.name), max(o2.name)),
+            'count', count(*),
+            'interviews', jsonb_agg(jsonb_build_object(
+                'id', i.id,
+                'status', i.status,
+                'category', i.category,
+                'created_at', i.created_at,
+                'notes', i.notes,
+                'rating', i.rating,
+                'feedback', i.feedback,
+                'advance_decision', i.advance_decision,
+                'has_event', (i.event_id IS NOT NULL),
+                'has_prep', (s.interview_id IS NOT NULL),
+                'has_synthesis', (s.synthesis IS NOT NULL)
+            ) ORDER BY (s.synthesis IS NOT NULL) DESC,
+                       (s.interview_id IS NOT NULL) DESC,
+                       i.created_at ASC)
+        ) AS grp
+        FROM interviews i
+        LEFT JOIN interview_prep_sessions s ON s.interview_id = i.id
+        LEFT JOIN applications a  ON a.id = i.application_id
+        LEFT JOIN job_postings jp ON jp.id = a.job_posting_id
+        LEFT JOIN organizations o ON o.id = jp.organization_id
+        LEFT JOIN organizations o2 ON o2.id = i.organization_id
+        WHERE i.user_id = p_user_id
+          AND i.scheduled_at IS NOT NULL
+          AND i.status <> 'cancelled'
+        GROUP BY i.application_id, i.organization_id, i.scheduled_at, i.interview_type
+        HAVING count(*) > 1
+    ) g;
+$$;
+
+
+-- merge_interviews — collapse duplicates into one reviewed keeper (T1.1).
+-- Blank fields on the keeper are filled from each dupe (never clobbered); prep
+-- sessions and checklist tasks are re-pointed; a dupe's now-redundant calendar
+-- event is removed (it was the duplicate the import minted); then the dupe row
+-- is deleted. Refuses to merge when both rounds carry a prep session — that
+-- needs a human pick, not a silent overwrite.
+CREATE OR REPLACE FUNCTION merge_interviews(
+    p_keep_id uuid,
+    p_merge_ids uuid[],
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_keep interviews;
+    v_dupe interviews;
+    v_dupe_id uuid;
+    v_keep_event uuid;
+    v_merged int := 0;
+    v_events_removed int := 0;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'merge_interviews: no user_id';
+    END IF;
+
+    SELECT * INTO v_keep FROM interviews WHERE id = p_keep_id AND user_id = p_user_id;
+    IF v_keep.id IS NULL THEN
+        RAISE EXCEPTION 'merge_interviews: keeper % not found or not owned', p_keep_id;
+    END IF;
+
+    FOREACH v_dupe_id IN ARRAY p_merge_ids LOOP
+        CONTINUE WHEN v_dupe_id = p_keep_id;
+
+        SELECT * INTO v_dupe FROM interviews WHERE id = v_dupe_id AND user_id = p_user_id;
+        IF v_dupe.id IS NULL THEN
+            RAISE EXCEPTION 'merge_interviews: interview % not found or not owned', v_dupe_id;
+        END IF;
+
+        IF EXISTS (SELECT 1 FROM interview_prep_sessions WHERE interview_id = v_dupe_id) THEN
+            IF EXISTS (SELECT 1 FROM interview_prep_sessions WHERE interview_id = p_keep_id) THEN
+                RAISE EXCEPTION 'merge_interviews: both % and % carry a prep session — keep the round whose prep you want and merge the other way, or resolve by hand', p_keep_id, v_dupe_id;
+            END IF;
+            UPDATE interview_prep_sessions SET interview_id = p_keep_id
+            WHERE interview_id = v_dupe_id AND user_id = p_user_id;
+        END IF;
+
+        UPDATE tasks SET interview_id = p_keep_id
+        WHERE interview_id = v_dupe_id AND user_id = p_user_id;
+
+        UPDATE interviews SET
+            interview_type         = COALESCE(interview_type, v_dupe.interview_type),
+            duration_minutes       = COALESCE(duration_minutes, v_dupe.duration_minutes),
+            interviewer_contact_id = COALESCE(interviewer_contact_id, v_dupe.interviewer_contact_id),
+            event_id               = COALESCE(event_id, v_dupe.event_id),
+            rating                 = COALESCE(rating, v_dupe.rating),
+            feedback               = COALESCE(feedback, v_dupe.feedback),
+            advance_decision       = COALESCE(advance_decision, v_dupe.advance_decision),
+            decision_notes         = COALESCE(decision_notes, v_dupe.decision_notes),
+            notes = CASE
+                WHEN notes IS NULL THEN v_dupe.notes
+                WHEN v_dupe.notes IS NULL OR v_dupe.notes = notes THEN notes
+                ELSE notes || E'\n\n' || v_dupe.notes
+            END
+        WHERE id = p_keep_id AND user_id = p_user_id;
+
+        -- The keeper may have just adopted the dupe's event via the COALESCE
+        -- above; only an event the keeper did NOT take is the redundant copy.
+        SELECT event_id INTO v_keep_event FROM interviews WHERE id = p_keep_id;
+        IF v_dupe.event_id IS NOT NULL AND v_dupe.event_id IS DISTINCT FROM v_keep_event THEN
+            DELETE FROM events WHERE id = v_dupe.event_id AND user_id = p_user_id;
+            v_events_removed := v_events_removed + 1;
+        END IF;
+
+        DELETE FROM interviews WHERE id = v_dupe_id AND user_id = p_user_id;
+        v_merged := v_merged + 1;
+    END LOOP;
+
+    SELECT * INTO v_keep FROM interviews WHERE id = p_keep_id AND user_id = p_user_id;
+    RETURN jsonb_build_object(
+        'success', true,
+        'merged', v_merged,
+        'calendar_events_removed', v_events_removed,
+        'interview', to_jsonb(v_keep)
+    );
 END;
 $$;
 
@@ -2131,6 +2354,8 @@ GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO a
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION schedule_interview(uuid, timestamptz, text, text, uuid, text, integer, uuid, uuid, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION complete_interview(uuid, text, integer, text, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION find_duplicate_interviews(uuid)      TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION merge_interviews(uuid, uuid[], uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION close_role(uuid, text, uuid)             TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION reopen_role(uuid, uuid)                  TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_resume(uuid)                          TO authenticated, service_role;
@@ -2532,7 +2757,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
     WITH iv AS (
-        SELECT i.id, i.interview_type, i.scheduled_at, i.status,
+        SELECT i.id, i.interview_type, i.scheduled_at, i.status, i.notes,
                i.interviewer_contact_id,
                a.id AS application_id, a.job_posting_id, jp.title AS role_title,
                jp.organization_id, jp.growth_stage, o.name AS organization_name,
@@ -2548,9 +2773,13 @@ AS $$
         ELSE (
             SELECT jsonb_build_object(
                 'success', true,
+                -- notes = the scheduling-time context (D5): the page pre-fills
+                -- a fresh intake box from it; contextSeed folds it into the
+                -- model prompt.
                 'interview', jsonb_build_object(
                     'id', iv.id, 'interview_type', iv.interview_type,
-                    'scheduled_at', iv.scheduled_at, 'status', iv.status),
+                    'scheduled_at', iv.scheduled_at, 'status', iv.status,
+                    'notes', iv.notes),
                 'role', jsonb_build_object(
                     'application_id', iv.application_id,
                     'job_posting_id', iv.job_posting_id, 'title', iv.role_title,
@@ -2612,8 +2841,19 @@ BEGIN
         RAISE EXCEPTION 'start_interview_prep: interview % not found', p_interview_id;
     END IF;
 
+    -- D5: a fresh session seeds its intake from the round's scheduling notes —
+    -- interviews.notes is where "Competencies: …, Interviewer: …" actually
+    -- lands at scheduling time, and the AI context is built from intake_notes.
     INSERT INTO interview_prep_sessions (user_id, interview_id, intake_notes, source_thought_id)
-    VALUES (p_user_id, p_interview_id, p_intake_notes, p_source_thought_id)
+    VALUES (
+        p_user_id,
+        p_interview_id,
+        COALESCE(
+            p_intake_notes,
+            (SELECT notes FROM interviews WHERE id = p_interview_id AND user_id = p_user_id)
+        ),
+        p_source_thought_id
+    )
     ON CONFLICT (interview_id) DO UPDATE SET
         intake_notes = COALESCE(EXCLUDED.intake_notes, interview_prep_sessions.intake_notes),
         source_thought_id = COALESCE(EXCLUDED.source_thought_id, interview_prep_sessions.source_thought_id);
@@ -2744,7 +2984,10 @@ AS $$
     JOIN applications a   ON a.id = i.application_id
     JOIN job_postings jp  ON jp.id = a.job_posting_id
     JOIN organizations o  ON o.id = jp.organization_id
-    WHERE s.user_id = p_user_id AND s.synthesis IS NOT NULL;
+    WHERE s.user_id = p_user_id
+      -- formal rounds only — enforcing the invariant 020's header claims (D3)
+      AND i.category = 'interview'
+      AND s.synthesis IS NOT NULL;
 $$;
 
 GRANT EXECUTE ON FUNCTION get_story_cheat_sheet(uuid) TO authenticated, service_role;

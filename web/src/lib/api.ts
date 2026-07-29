@@ -13,7 +13,7 @@ import type {
   FitRating, FitEvalRow,
   Task, JobChecklist, Suggestions, InterviewPrep, TaskPriority, TaskStatus,
   InterviewPrepSession, InterviewPrepDraftFeedback, StoryCheatSheet, InterviewListRow,
-  InterviewStatus, AdvanceDecision,
+  InterviewStatus, InterviewCategory, AdvanceDecision, DuplicateInterviewGroup,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -639,6 +639,29 @@ export async function synthesizeInterviewPrep(interviewId: string): Promise<Inte
   return invokeFunction<InterviewPrepSession>("interview-prep", { interview_id: interviewId, stage: "synthesize" });
 }
 
+// ── intake from a JD link (T1.6) ─────────────────────────────────────────────
+// What the intake-from-url edge function extracts from a posting page. All
+// optional: it reports only what the page states.
+export interface ExtractedRole {
+  organization_name?: string;
+  title?: string;
+  salary_min?: number;
+  salary_max?: number;
+  location?: string;
+  remote_policy?: string;
+  requirements?: string[];
+  nice_to_haves?: string[];
+  notes?: string;
+}
+
+// Fetch + extract a posting server-side (browser CORS blocks doing it here).
+// A prefill for AddRole — persists nothing; the user reviews, then intake_role
+// saves. Throws with a readable message on walled/unreadable pages.
+export async function extractRoleFromUrl(url: string): Promise<ExtractedRole> {
+  const res = await invokeFunction<{ role: ExtractedRole }>("intake-from-url", { url });
+  return res.role ?? {};
+}
+
 // The career profile (baseline + ambition) judge-career reads. Edited on Profile.
 export async function getCareerProfile(): Promise<{ has_profile: boolean; profile: CareerProfile | null }> {
   const { data, error } = await supabase.rpc("get_career_profile", {});
@@ -806,24 +829,60 @@ export async function advanceApplication(
   if (error) throw error;
 }
 
-// Add an interview round to an application (the role page's "Schedule
-// interview" form — just a date + free-text notes). Backed by schedule_interview,
+// Add an interview round to an application — or, with organizationId instead,
+// a standalone networking call (migration 020). Backed by schedule_interview,
 // which find-or-creates: booking the same application + datetime + type twice
 // returns the existing round with `created: false` instead of a duplicate.
 export async function scheduleInterview(input: {
-  applicationId: string;
+  applicationId?: string;
+  organizationId?: string;
+  category?: InterviewCategory;
   scheduledAt?: string;
+  interviewType?: string;
+  durationMinutes?: number;
+  interviewerContactId?: string;
   notes?: string;
 }): Promise<{ interview: Interview; created: boolean }> {
   const { data, error } = await supabase.rpc("schedule_interview", {
-    p_application_id: input.applicationId,
+    p_application_id: input.applicationId ?? null,
+    p_organization_id: input.organizationId ?? null,
+    p_category: input.category ?? "interview",
     p_scheduled_at: input.scheduledAt ?? null,
-    p_interview_type: null,
+    p_interview_type: input.interviewType ?? null,
+    p_duration_minutes: input.durationMinutes ?? null,
+    p_interviewer_contact_id: input.interviewerContactId ?? null,
     p_notes: input.notes ?? null,
   });
   if (error) throw error;
   const row = data as { interview: Interview; created: boolean };
   return { interview: row.interview, created: row.created };
+}
+
+// The people already logged at a company (any tag), for the schedule form's
+// interviewer picker. Given an applicationId, resolves the org first.
+export async function fetchOrgContacts(params: {
+  organizationId?: string;
+  applicationId?: string;
+}): Promise<Array<{ id: string; name: string; title: string | null }>> {
+  let orgId = params.organizationId ?? null;
+  if (!orgId && params.applicationId) {
+    const { data, error } = await supabase
+      .from("applications")
+      .select("job_postings:job_posting_id ( organization_id )")
+      .eq("id", params.applicationId)
+      .single();
+    if (error) throw error;
+    const jp = (data as { job_postings: { organization_id: string } | { organization_id: string }[] | null }).job_postings;
+    orgId = (Array.isArray(jp) ? jp[0]?.organization_id : jp?.organization_id) ?? null;
+  }
+  if (!orgId) return [];
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id, name, title")
+    .eq("organization_id", orgId)
+    .order("name");
+  if (error) throw error;
+  return (data ?? []) as Array<{ id: string; name: string; title: string | null }>;
 }
 
 // Record the outcome of an interview round: mark it completed / cancelled /
@@ -849,6 +908,26 @@ export async function completeInterview(input: {
   });
   if (error) throw error;
   return (data as { interview: Interview }).interview;
+}
+
+// ── duplicate interview review & merge (T1.1) ────────────────────────────────
+
+export async function findDuplicateInterviews(): Promise<DuplicateInterviewGroup[]> {
+  const { data, error } = await supabase.rpc("find_duplicate_interviews", {});
+  if (error) throw error;
+  return (data as { groups: DuplicateInterviewGroup[] }).groups ?? [];
+}
+
+// Collapse a reviewed group into the keeper. Server-side this re-points prep
+// sessions + tasks, fills the keeper's blanks, removes the dupes' redundant
+// calendar events, and deletes the dupe rows — see merge_interviews.
+export async function mergeInterviews(keepId: string, mergeIds: string[]): Promise<{ merged: number }> {
+  const { data, error } = await supabase.rpc("merge_interviews", {
+    p_keep_id: keepId,
+    p_merge_ids: mergeIds,
+  });
+  if (error) throw error;
+  return { merged: (data as { merged: number }).merged ?? 0 };
 }
 
 // Close out a role (filled / pulled / not pursuing). Works whether or not I've

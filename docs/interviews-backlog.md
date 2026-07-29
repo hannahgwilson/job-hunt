@@ -1,6 +1,14 @@
 # Backlog — Interviews: completion, dedup, and what's still half-built
 
-Status: **scanned, Tier 1 awaiting build** · Owner: Hannah · 2026-07-27
+Status: **v2 built (2026-07-28)** — T1.1–T1.7, T2.1, D5, D7, and the appendix
+commit are implemented on this branch; T1.2's cascade included. Everything was
+exercised in the running app as demo@jobhunt.test except the SQL-dependent
+paths, which wait on **`migrations/022_interviews_v2.sql` being applied in the
+SQL editor** (then re-run to add the unique index once duplicates are merged).
+Deployed already: `intake-from-url` (new), `interview-prep` (D5 context),
+`job-hunt-mcp` (new `list_interviews`). Still open: T1.6's required Open Brain
+notes write (ownership decision — see that section), T2.2, T2.3, Tier 3, and
+**D8 below, found during this build**. · Owner: Hannah · 2026-07-27
 
 Written after shipping the interview-debrief work
 (`8703dd1`, migration 021). That change added the ability to mark a round
@@ -182,6 +190,28 @@ treatment separately, since it builds a string rather than JSX.
 Related to **D6** — the library falls back to `story` for *older* rows that
 genuinely have no STAR fields. The two are opposite ends of the same transition:
 D6 is old data missing new fields, D7 is new data read through an old field.
+
+### D8 — Open Brain thoughts leak across auth users (found 2026-07-28)
+
+Signed in as **demo@jobhunt.test**, the Action Queue's "From Open Brain"
+suggestions showed the real account's job-search notes (companies, a named
+contact's candid intel). Three `SECURITY DEFINER` functions read `thoughts`
+with **no owner predicate** — `get_suggestions`, `get_interview_prep`
+(company_intel.notes), `get_interview_prep_session` (ob_suggestions) — and
+`promote_suggestion` UPDATEs a thought's status by id, also unscoped, so
+another signed-in user can both read and mutate them.
+
+The root cause is structural: **`thoughts` has no owner column at all**
+(probed via PostgREST: `user_id`, `owner_id`, `created_by`, … all 42703).
+Open Brain is single-user by construction, and these readers use
+`SECURITY DEFINER` precisely to cross into it — so any *other* authenticated
+user of this database inherits the same view. This contradicts the README's
+"another signed-in user would see only their own rows."
+
+Not fixed in v2 because the clean fix is an Open Brain schema decision (add an
+owner column + RLS there, then scope these four functions), which is the same
+cross-system ownership question T1.6's notes-write raised. Until then: don't
+hand demo credentials to anyone who shouldn't read the real notes.
 
 ---
 

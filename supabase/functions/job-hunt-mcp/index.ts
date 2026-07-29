@@ -769,6 +769,57 @@ server.tool(
 );
 
 // ───────────────────────────────────────────────────────────────────────
+// list_interviews — every round, past ones included. get_upcoming_interviews
+// covers what's on the books; this is the read for cleaning up what already
+// happened from chat (T1.4): filter to completed / cancelled / no_show (or
+// pass status: 'scheduled' with only_past: true for the un-debriefed
+// backlog), then amend with log_interview_notes.
+// ───────────────────────────────────────────────────────────────────────
+server.tool(
+  "list_interviews",
+  "List interview rounds and networking calls, PAST ones included — unlike get_upcoming_interviews. Filter by status (completed | cancelled | no_show | scheduled), category, or organization; only_past limits to rounds whose date has passed (or was never set). Use with log_interview_notes to debrief or clean up old rounds.",
+  {
+    status: z.enum(["scheduled", "completed", "cancelled", "no_show"]).optional(),
+    category: interviewCategoryEnum.optional(),
+    organization_id: z.string().optional().describe("Direct org (networking) or via the application's posting"),
+    only_past: z.boolean().optional().describe("Only rounds with scheduled_at in the past or null"),
+    limit: z.number().optional().describe("Default 50"),
+  },
+  async ({ status, category, organization_id, only_past, limit }) => {
+    let qb = supabase
+      .from("interviews")
+      .select(`
+        *,
+        applications (
+          id, status,
+          job_postings (
+            id, title, organization_id,
+            organizations ( id, name )
+          )
+        ),
+        organizations ( id, name ),
+        contacts:interviewer_contact_id ( id, name, title )
+      `)
+      .eq("user_id", userId)
+      .order("scheduled_at", { ascending: false, nullsFirst: false })
+      .limit(limit ?? 50);
+    if (status) qb = qb.eq("status", status);
+    if (category) qb = qb.eq("category", category);
+    if (only_past) qb = qb.or(`scheduled_at.lte.${new Date().toISOString()},scheduled_at.is.null`);
+    const { data, error } = await qb;
+    if (error) throw new Error(`list_interviews failed: ${error.message}`);
+    // organization filter spans two join paths (direct for networking calls,
+    // via the posting for rounds), so it's applied here rather than in SQL.
+    const rows = organization_id
+      ? (data ?? []).filter((iv: Record<string, any>) =>
+          iv.organization_id === organization_id ||
+          iv.applications?.job_postings?.organization_id === organization_id)
+      : (data ?? []);
+    return ok({ success: true, count: rows.length, interviews: rows });
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────────
 // start_interview_prep / get_interview_prep — the interview-prep flow's
 // intake + read. The AI-heavy stages (research / mock-interview chat /
 // synthesis) live in the interview-prep edge function and stay UI-button

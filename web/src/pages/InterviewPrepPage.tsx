@@ -4,6 +4,7 @@ import {
   fetchInterviewPrepSession, startInterviewPrep, runInterviewPrepResearch, synthesizeInterviewPrep,
 } from "../lib/api";
 import InterviewPrepChat, { ratingPillClass } from "../components/InterviewPrepChat";
+import StoryCard, { storyMarkdown } from "../components/StoryCard";
 import type { InterviewPrepSession } from "../lib/types";
 
 export default function InterviewPrepPage() {
@@ -21,6 +22,9 @@ export default function InterviewPrepPage() {
       .then((p) => {
         setPrep(p);
         if (p.session?.intake_notes && !intakeDraft) setIntakeDraft(p.session.intake_notes);
+        // Fresh session: pre-fill the intake from the round's scheduling notes
+        // (competencies, who you're meeting) instead of an empty box (D5).
+        else if (!p.session && p.interview?.notes && !intakeDraft) setIntakeDraft(p.interview.notes);
       })
       .catch((e) => setError(e.message));
   }
@@ -67,7 +71,7 @@ export default function InterviewPrepPage() {
         "",
       ] : []),
       "## Stories to tell",
-      ...s.stories.map((x) => `- **${x.title}** — ${x.story}${x.best_for ? ` _(for: ${x.best_for})_` : ""}`),
+      ...s.stories.map(storyMarkdown),
       "",
       "## Competencies to focus on",
       ...s.competencies.map((x) => `- **${x.name}**${x.why_it_matters ? ` — ${x.why_it_matters}` : ""}${x.evidence ? ` (evidence: ${x.evidence})` : ""}`),
@@ -254,11 +258,9 @@ export default function InterviewPrepPage() {
                 </div>
               )}
               <h3>Stories to tell</h3>
-              <ul className="clean">
-                {session.synthesis.stories.map((s, i) => (
-                  <li key={i}><strong>{s.title}</strong> — {s.story}{s.best_for && <span className="muted small"> (for: {s.best_for})</span>}</li>
-                ))}
-              </ul>
+              {session.synthesis.stories.map((s, i) => (
+                <StoryCard key={i} story={s} />
+              ))}
               <h3>Competencies to focus on</h3>
               <ul className="clean">
                 {session.synthesis.competencies.map((c, i) => (

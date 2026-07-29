@@ -57,9 +57,14 @@ export default function InterviewOutcome({
     }
   }
 
-  if (interview.status !== "scheduled") {
+  if (interview.status !== "scheduled" && !open) {
     return (
       <div className="iv-actions">
+        {/* Amend a finished round in place (T1.4) — same debrief form, same
+            complete_interview call, keeping whatever terminal status it has. */}
+        <button className="ghost sm" disabled={busy} onClick={() => setOpen(true)}>
+          Edit debrief…
+        </button>
         <button className="ghost sm" disabled={busy} onClick={() => set("scheduled")}>
           Reopen
         </button>
@@ -143,8 +148,14 @@ export default function InterviewOutcome({
       )}
 
       <div className="iv-debrief-actions">
-        <button className="sm" disabled={busy} onClick={() => set("completed", true)}>
-          {busy ? "…" : "Mark completed"}
+        <button
+          className="sm"
+          disabled={busy}
+          // Editing a finished round keeps its terminal status; debriefing a
+          // scheduled one is what moves it to 'completed'.
+          onClick={() => set(interview.status === "scheduled" ? "completed" : interview.status, true)}
+        >
+          {busy ? "…" : interview.status === "scheduled" ? "Mark completed" : "Save debrief"}
         </button>
         <button className="ghost sm" disabled={busy} onClick={() => { setOpen(false); setError(null); }}>
           Cancel

@@ -1,14 +1,20 @@
 # Backlog — Interviews: completion, dedup, and what's still half-built
 
-Status: **v2 built (2026-07-28)** — T1.1–T1.7, T2.1, D5, D7, and the appendix
-commit are implemented on this branch; T1.2's cascade included. Everything was
-exercised in the running app as demo@jobhunt.test except the SQL-dependent
-paths, which wait on **`migrations/022_interviews_v2.sql` being applied in the
-SQL editor** (then re-run to add the unique index once duplicates are merged).
-Deployed already: `intake-from-url` (new), `interview-prep` (D5 context),
-`job-hunt-mcp` (new `list_interviews`). Still open: T1.6's required Open Brain
-notes write (ownership decision — see that section), T2.2, T2.3, Tier 3, and
-**D8 below, found during this build**. · Owner: Hannah · 2026-07-27
+Status: **v2 shipped** ([PR #21](https://github.com/hannahgwilson/job-hunt/pull/21))
+· Owner: Hannah · 2026-07-27, updated 2026-07-31
+
+Everything below marked ✅ was built on this branch, exercised in the running
+app as demo@jobhunt.test, and re-verified against the live database after
+`migrations/022_interviews_v2.sql` was applied on 2026-07-31. Edge functions
+deployed: `intake-from-url` (new), `interview-prep` (D5 context),
+`job-hunt-mcp` (new `list_interviews` tool).
+
+| | |
+|---|---|
+| ✅ Fixed | D1, D2, D3, D4, D5 (SQL path), D7 |
+| ✅ Built | T1.1, T1.2, T1.3, T1.4, T1.5, T1.6 (prefill), T1.7, T2.1, appendix commit |
+| ⏳ Still open | **D8** (found during this build — see below), T1.6's required Open Brain notes write (ownership decision), D6 backfill (waits on T2.3), T2.2, T2.3, Tier 3 |
+| ⚠️ Check | the unique index installs only when the DO block finds no duplicates — if the SQL editor printed the NOTICE, merge (Interviews → Past → Duplicate rounds) and re-run 022 |
 
 Written after shipping the interview-debrief work
 (`8703dd1`, migration 021). That change added the ability to mark a round
@@ -60,7 +66,7 @@ lives only in `functions.sql`. Migration 021 deliberately contains only
 
 D1-D4 came from the post-ship scan; D5-D6 were raised in review; D7 surfaced while scoping T1.7.
 
-### D1 — `advance_decision` is inert
+### D1 — `advance_decision` is inert — ✅ fixed by T1.2 (migration 022)
 
 The go/no-go is written by the MCP's `log_interview_notes` and by the new
 debrief control, and rendered as a pill on two pages — but **nothing reads it**.
@@ -74,7 +80,7 @@ asked for." Today it is decorative.
 *Evidence:* every non-write reference to `advance_decision` across `*.sql`,
 `*.ts`, `*.tsx` is either a column definition, a form binding, or a display pill.
 
-### D2 — Networking calls pollute interview analytics
+### D2 — Networking calls pollute interview analytics — ✅ fixed by T2.1 (migration 022)
 
 `get_stage_roles` rolls up interviews per application with **no `category`
 filter**, so a networking call attached to an application inflates
@@ -85,14 +91,14 @@ filter**, so a networking call attached to an application inflates
 application_id` — no category predicate. Same for the action queue's
 `upcoming_interviews` sub-select.
 
-### D3 — Migration 020 documents an invariant it doesn't enforce
+### D3 — Migration 020 documents an invariant it doesn't enforce — ✅ fixed by T2.1 (migration 022)
 
 020's header states the synthesis / story-cheat-sheet flow "stays scoped to
 `category = 'interview'` rows — see `get_story_cheat_sheet` in functions.sql".
 `get_story_cheat_sheet` has no such filter. It works by accident: networking
 calls rarely have an `interview_prep_sessions.synthesis` row to join to.
 
-### D4 — Networking calls (and interview types) can't be created from the UI
+### D4 — Networking calls (and interview types) can't be created from the UI — ✅ fixed by T1.3
 
 The table, the RPC, the list query, the card styling and the Upcoming legend all
 support `category = 'networking'` — but no write path passes `p_organization_id`
@@ -103,7 +109,14 @@ time, and notes only, so every round created through the app is untyped. That
 leaves `furthest_round` null and makes the new dedup natural key coarser than it
 should be.
 
-### D5 — Prep sessions ignore the context captured at scheduling time
+### D5 — Prep sessions ignore the context captured at scheduling time — ✅ fixed (both halves)
+
+> **Shipped 2026-07-28:** `start_interview_prep` defaults `intake_notes` to
+> `interviews.notes` on first insert (migration 022); `get_interview_prep_session`
+> returns the scheduling notes on the `interview` object, the prep page
+> pre-fills a fresh intake box from them, and `contextSeed()` folds them into
+> the model prompt (deduped when the intake was seeded from them verbatim).
+> The multi-interviewer modelling limit below remains open.
 
 *Reported: "the context I've shared for individual interviews — competencies
 tested, people I'm meeting with, notes — is not populating on the prep session.
@@ -141,7 +154,12 @@ former also fixes the empty-textarea symptom.
 > there is nowhere else to put them. Structured multi-interviewer support would
 > need an `interview_interviewers` join table.
 
-### D6 — Story library renders legacy stories as undifferentiated text
+### D6 — Story library renders legacy stories as undifferentiated text — ⏳ open (backfill waits on T2.3)
+
+> **Renderer note:** the shared `<StoryCard>` (T1.7) now falls back to the
+> legacy `story` blob wherever stories render, so old rows show their text
+> rather than nothing — but the blobs still have no STAR structure. The LLM
+> backfill remains bundled with T2.3.
 
 *Reported: "the formatting is just blocks of text which is not helpful."*
 
@@ -157,7 +175,11 @@ renderer alone won't help — the legacy rows have no structure to render. They
 need backfilling (an LLM pass splitting the blob into STAR), which makes this a
 natural companion to T2.3.
 
-### D7 — The prep page renders story bodies blank, and copies them as "undefined"
+### D7 — The prep page renders story bodies blank, and copies them as "undefined" — ✅ fixed by T1.7
+
+> **Shipped 2026-07-28:** the prep page renders the shared `<StoryCard>`, and
+> `copyMarkdown` uses `storyMarkdown()` (same component file) which emits the
+> STAR fields with the blob fallback — verified the copied text end-to-end.
 
 Found while scoping **T1.7**. Both story renderers on `/interview-prep/:id` read
 `s.story` — the **legacy** single-blob field:
@@ -217,7 +239,17 @@ hand demo credentials to anyone who shouldn't read the real notes.
 
 ## Tier 1 — finish what's half-built
 
-### T1.1 Duplicate review & merge, then the `UNIQUE` index
+### T1.1 Duplicate review & merge, then the `UNIQUE` index — ✅ shipped
+
+> **Shipped 2026-07-28:** `find_duplicate_interviews()` (groups on the natural
+> key, best-keeper-first ordering: has synthesis > has prep > oldest) and
+> `merge_interviews(p_keep_id, p_merge_ids)` in migration 022 + functions.sql,
+> with a review panel on Interviews → Past that appears only when groups
+> exist. The merge fills keeper blanks, re-points prep sessions and tasks,
+> deletes a dupe's redundant calendar event, and **refuses** when both copies
+> carry a prep session. The `UNIQUE` index is in the same migration inside a
+> conditional DO block — it installs only once no duplicates remain, so re-run
+> 022 after merging if the NOTICE fired.
 
 Migration 021 guards against *new* duplicates but leaves existing ones in place,
 and deliberately ships **no** `UNIQUE` index — creating one would fail against
@@ -237,7 +269,16 @@ naive version destructive:
 - `interviews.event_id` is `ON DELETE SET NULL` *on the events side only*.
   Deleting an interview leaves its calendar event orphaned in the week view.
 
-### T1.2 Wire up `advance_decision` (fixes D1)
+### T1.2 Wire up `advance_decision` (fixes D1) — ✅ shipped
+
+> **Shipped 2026-07-28**, in `complete_interview` (migration 022). Decisions
+> made: the cascade fires only on an *explicit* `rejected`/`withdraw` in the
+> call (never the COALESCEd stored value), only on `status='completed'`, only
+> for `category='interview'`, and only when the application is live; `advance`
+> never auto-bumps the application. **A `rejected` on ANY round terminates the
+> application** — "they passed" read as a verdict on the application, not the
+> round; flag if per-round semantics are wanted instead. `hold` rounds surface
+> in `get_action_queue.interview_decisions` + an Action Queue card.
 
 `rejected` / `withdraw` on a round cascades to the application status through
 `advance_application`, so the existing status-history trigger logs the
@@ -245,14 +286,28 @@ transition. `hold` surfaces in the action queue as a decision owed. Decide
 explicitly whether a non-final round's `rejected` should terminate the whole
 application or only that round.
 
-### T1.3 Full schedule form (fixes D4)
+### T1.3 Full schedule form (fixes D4) — ✅ shipped
+
+> **Shipped 2026-07-28:** kind (interview/networking, with type lists split
+> accordingly), type, date/time, duration, and an interviewer picker (fetches
+> the org's contacts lazily; hidden when there are none). The form now also
+> takes `organizationId` — the Company page mounts it as "+ Log a networking
+> call…", closing the networking gap. Dedup guard surfaces "already on the
+> books" instead of silently no-oping.
 
 Extend `ScheduleInterviewForm` to collect interview type, category, duration,
 and interviewer contact. Closes both UI gaps in one component and makes
 networking calls creatable. The RPC already accepts every one of these
 parameters — this is purely a client-side gap.
 
-### T1.4 An "old interviews" view — manage finished rounds
+### T1.4 An "old interviews" view — manage finished rounds — ✅ shipped (both halves)
+
+> **Shipped 2026-07-28:** Interviews → **Past** sub-tab — finished rounds
+> newest-first with rating / `advance_decision` / feedback, searchable,
+> editable in place ("Edit debrief…" keeps the terminal status; Reopen
+> restores `scheduled`), and hosting the T1.1 duplicates panel. The "cheap to
+> do both" call was taken: a `list_interviews` MCP tool (status / category /
+> only_past filters) covers past rounds from chat.
 
 *Requested: "the new Interviews tab is great. I want an 'old interviews' where I
 can use the MCP to clean up, log notes and mark things completed / finished. We
@@ -285,7 +340,13 @@ MCP read tools for *past* rounds (there is `get_upcoming_interviews`, but no
 `list_interviews` covering completed ones) rather than a UI. Cheap to do both;
 they share nothing.
 
-### T1.5 Show current application status in the Stage funnel drill-down
+### T1.5 Show current application status in the Stage funnel drill-down — ✅ shipped
+
+> **Shipped 2026-07-28:** `status` added to `get_stage_roles` rows +
+> `StageRoleEntry`, rendered as a `pill pill-{status}`, terminal rows faded
+> (`.row-terminal`). The design question was settled per the doc's own lean:
+> **column only, no filter toggle** — the row count keeps matching the
+> funnel's Total column.
 
 *Requested: "for companies in each stage, I want to see the status of my
 application."*
@@ -328,7 +389,18 @@ keep the unfiltered count visible alongside it.
 
 Independent of the rest of Tier 1; touches no interviews code.
 
-### T1.6 Intake a role from a JD link, in the UI
+### T1.6 Intake a role from a JD link, in the UI — ✅ prefill shipped · ⏳ Open Brain notes open
+
+> **Shipped 2026-07-28:** `intake-from-url` edge function (server-side
+> `web_fetch`, mirroring judge-growth's auth + call shape) extracts org /
+> title / salary / location / remote policy / requirements and returns them —
+> persisting nothing. Add Role gained a "Fetch from link" button, salary
+> min/max fields for review, and passes extracted requirements + notes into
+> `intake_role`. Walled pages return a readable "fill by hand" message
+> (`fetch_failed` in the tool schema). Verified against a live Greenhouse
+> posting. **The required Open Brain notes write below was deliberately NOT
+> built** — the ownership decision (job-hunt RPC vs. Open Brain capture
+> surface) is still open, now compounded by D8.
 
 *Requested: "I want to take a link from a web posting and add it directly in the
 UI — right now I can only add stuff via Claude chat."*
@@ -428,7 +500,13 @@ than discovering the behavior after the inbox fills up.
 The largest Tier 1 item — a new edge function, a thoughts write path, and UI
 work, versus a column or a component for the others.
 
-### T1.7 One story card, rendered on the prep page (fixes D7)
+### T1.7 One story card, rendered on the prep page (fixes D7) — ✅ shipped
+
+> **Shipped 2026-07-28** exactly per the decision below: shared `<StoryCard>`
+> (styles renamed `library-*` → `story-*`), full STAR on the prep page, Prep
+> sub-tab reduced to count + "Open full prep session →", library unchanged
+> apart from using the shared card. `copyMarkdown` fixed separately via
+> `storyMarkdown()` in the same component file.
 
 *Requested: "the story cards outlined on the Interviews tab should show up on
 [`/interview-prep/:id`]. I think part of the confusion is having both — can we
@@ -485,12 +563,16 @@ deletion in the Prep sub-tab.
 
 ## Tier 2 — correctness
 
-### T2.1 Category-aware analytics (fixes D2 and D3)
+### T2.1 Category-aware analytics (fixes D2 and D3) — ✅ shipped
+
+> **Shipped 2026-07-28** in migration 022: `category = 'interview'` predicates
+> in `get_stage_roles`' `iv` CTE, `get_action_queue.upcoming_interviews` (and
+> the new `interview_decisions` bucket), and `get_story_cheat_sheet`.
 
 Filter `category = 'interview'` in `get_stage_roles`, `get_action_queue`, and
 `get_story_cheat_sheet` — enforcing the invariant 020 already claims.
 
-### T2.2 Idempotent calendar import
+### T2.2 Idempotent calendar import — ⏳ open
 
 The root cause of the original duplicates was a bulk agent-driven import from
 calendar invites with no natural key: four Cityblock rounds created 23 seconds
@@ -499,7 +581,7 @@ guard makes that safe *by accident of the predicate*; a first-class import path
 would make it safe *by design* — preview what will be created, dedup against
 what exists, then commit.
 
-### T2.3 Consolidate the story library — reconcile, don't accumulate
+### T2.3 Consolidate the story library — reconcile, don't accumulate — ⏳ open (carries the D6 backfill)
 
 *Requested: "there are way too many stories. I want to use an LLM to compare the
 story I reference in a prep doc to the 'library', reconcile them so I have like
@@ -540,13 +622,13 @@ building, not after.
 
 ## Tier 3 — new ground
 
-### T3.1 Debrief nudges
+### T3.1 Debrief nudges — ⏳ open
 
 Overdue un-debriefed rounds currently surface only in the Interviews tab's
 "Needs debrief" section. They should also reach the Dashboard and the action
 queue — until a round is closed out it keeps counting as `interviews_pending`.
 
-### T3.2 Outcome analytics
+### T3.2 Outcome analytics — ⏳ open (T1.2 dependency now met)
 
 Ratings and go/no-go decisions across many rounds are about to become a real
 dataset. Pass rate by interview type, by company growth stage, by fit score —
@@ -556,7 +638,12 @@ could tell you, and nothing computes it today. Depends on T1.2, since
 
 ---
 
-## Appendix — unrelated: recovered orphan commit `94bc031`
+## Appendix — unrelated: recovered orphan commit `94bc031` — ✅ taken (guard widened)
+
+> **Shipped 2026-07-28** in `submit_application` (migration 022), with the
+> change this section argued for: the `IF v_app.status = 'applied'` guard is
+> widened to any non-`draft` status. (It did ride the Tier-1 branch after all —
+> one migration was chosen over two to avoid another two-020s incident.)
 
 **Not an interviews item.** Parked here because it was found during the
 worktree cleanup that produced this document and would otherwise be lost — it

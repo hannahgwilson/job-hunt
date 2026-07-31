@@ -27,13 +27,15 @@ query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
 |---|---|
 | `/` | Dashboard — high-level counts, status breakdown, next interviews |
 | `/pipeline` | **Roles to apply** (force-ranked, sortable table) + kanban by stage (Realtime), posting links, one-click advance, **+ Add a role** |
-| `/queue` | Action queue — follow-ups, interviews, networking (to-apply lives on the Pipeline) |
+| `/queue` | Action queue — follow-ups, interviews, **"Decide: move forward?"** (completed rounds debriefed as `hold` on live apps), networking (to-apply lives on the Pipeline) |
+| `/interviews` | All-up Interviews tab: **Upcoming** (interviews + networking calls, with "Needs debrief" + a sweep), **Past** (finished rounds — amend a debrief, Reopen, and the **duplicate-round review/merge** panel), **Prep** (per-round index), **Story library** (STAR cards by competency) |
+| `/interview-prep/:id` | Per-round AI prep: intake (pre-seeded from the round's scheduling notes) → research → mock interview → synthesized summary with full STAR story cards + copy-as-markdown |
 | `/funnel` | Conversion + median time-in-stage from `application_status_history` |
 | `/insights` | One-click **career + growth backfill** across all un-judged roles, plus a fit-vs-(career+growth) scatter — bubble size = comp, label = location |
 | `/resume` | Resume **variants** (senior-IC / manager / …), the **career profile** the career judge reads, AI fit scoring per role, and the **judge-feedback digest** — every role's tweaks synthesized into ranked, bucketed themes |
-| `/role/:id` | Stage-history timeline + interviews with go/no-go decisions, plus the priority breakdown + AI judges for the role |
+| `/role/:id` | Stage-history timeline + interviews with go/no-go decisions (a `rejected`/`withdraw` debrief cascades to the application), the full schedule form (type, category, duration, interviewer), plus the priority breakdown + AI judges for the role |
 | `/posting/:id` | Standalone role fit page — run the AI judges, compare resume variants |
-| `/company/:id` | Company view — org details, connections there (with LinkedIn profile links), roles queued, **prospect capture** for people you've found but haven't confirmed as a contact yet |
+| `/company/:id` | Company view — org details, connections there (with LinkedIn profile links), roles queued, **prospect capture** for people you've found but haven't confirmed as a contact yet, and **+ Log a networking call** (a standalone round against the org, no application needed) |
 
 ## Run
 
@@ -51,6 +53,10 @@ sign-in is wired up on the login screen.
 ## Adding a role
 
 The **+ Add a role** form calls `intake_role` (find-or-create org + posting in
-one transaction), optionally marking it applied. To auto-fill from a job link,
-paste the link to Claude and ask it to intake the role — enrichment is the
-agent's job; both paths land in the same RPC.
+one transaction), optionally marking it applied. Paste a posting URL and hit
+**Fetch from link** to auto-fill the fields for review — the `intake-from-url`
+edge function fetches the page server-side (browser CORS can't) and extracts
+title, company, salary, location, remote policy, and requirements. Walled pages
+(LinkedIn, most ATSes) can't be read; type those in by hand, or paste the link
+to Claude — every path lands in the same RPC. Submitting also auto-completes
+any open "apply" checklist task for the posting.

@@ -44,7 +44,7 @@ is force-ranked, so "what do I work next" is the top card. **Sliders on the
 Pipeline page** let you re-weight the search; the change persists per-user and
 re-ranks the queue immediately — for both the dashboard and the agent.
 
-**Judge with AI** — five server-side Claude functions fill the subjective work:
+**Judge with AI** — six server-side Claude functions fill the subjective work:
 - `judge-fit` — decides whether the JD is an **IC or a manager role**, then scores
   each résumé variant against the skills that track demands (spikes / gaps /
   tweaks), and flags a track mismatch (an IC résumé aimed at a manager role);
@@ -52,7 +52,10 @@ re-ranks the queue immediately — for both the dashboard and the agent.
 - `judge-growth` — web-searches the company's stage and momentum;
 - `synthesize-feedback` — rolls every judge's résumé tweaks into ranked, bucketed themes;
 - `assemble-resume` — selects and orders the strongest bullets from your library to
-  draft a one-page résumé tailored to a specific JD.
+  draft a one-page résumé tailored to a specific JD;
+- `intake-from-url` — fetches a pasted job-posting link server-side and extracts
+  the intake fields, prefilling the **Add a role** form for review (walled pages
+  fall back to hand entry).
 
 **Build résumés** — a **bullet library** of reusable, tagged, orderable lines; the
 generator picks the best of them per JD into an editable one-pager. Synthesis
@@ -177,10 +180,11 @@ sees nothing.
 ```
 schema.sql            Tables, triggers, RLS
 functions.sql         The shared logic layer (reads + write RPCs)
-migrations/           Ordered deltas (001–013); re-run functions.sql after
+migrations/           Ordered deltas (001–022); re-run functions.sql after
 supabase/functions/   job-hunt-mcp (the agent surface) + the AI functions:
                       judge-fit, judge-career, judge-growth,
-                      synthesize-feedback, assemble-resume
+                      synthesize-feedback, assemble-resume, intake-from-url,
+                      interview-prep
 semantic/             YAML metric specs → the SQL that implements them
 resume/               resume.example.md — the expected long-form shape
 web/                  The tracking-hub SPA (Vite + React)

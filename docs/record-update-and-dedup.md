@@ -191,14 +191,16 @@ bespoke version of either.
 Three items in [`interviews-backlog.md`](interviews-backlog.md) are the same
 problem seen from inside job-hunt:
 
-- **T1.1 (duplicate interview merge)** is Requirement 2 applied to a table
-  where the duplicates already exist. The guard shipped in migration 021
-  prevents new ones; the merge tool cleans up the backlog. If a shared dedup
-  utility lands first, T1.1's detection half should use it.
-- **T1.6 (intake a role from a JD link)** is the surface most likely to
-  *create* duplicates once it exists — pasting a link for a role already
-  tracked is the obvious re-add case. It should call the dedup path from day
-  one rather than shipping and being retrofitted.
+- **T1.1 (duplicate interview merge)** — ✅ shipped 2026-07-28 as
+  `find_duplicate_interviews` / `merge_interviews` (migration 022) + a review
+  panel on Interviews → Past, without waiting for the shared utility; if that
+  utility lands later, this is the reference implementation to conform to.
+- **T1.6 (intake a role from a JD link)** — the prefill layer ✅ shipped
+  2026-07-28 **without** a dedup path: the sequencing suggestion below lost to
+  Tier-1 priority, so pasting a link for a role already tracked WILL create a
+  second posting today (`intake_role` reuses the org but always inserts the
+  posting). This is now the retrofit this doc warned about — the postings
+  dedup check is the next instance of Requirement 2 to build.
 - **T2.2 (idempotent calendar import)** is the same shape again: a bulk create
   path that needs a natural key.
 

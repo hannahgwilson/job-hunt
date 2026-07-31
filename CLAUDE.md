@@ -27,6 +27,12 @@ but **writes are easiest to do here, in conversation.**
 
 When I paste a job-description link (or describe a role):
 
+> This play now has a UI twin: Pipeline → **+ Add a role** → paste URL →
+> **Fetch from link** (the `intake-from-url` edge function does the
+> enrichment server-side, the user reviews, `intake_role` persists). The chat
+> play remains the richer path — UI intake does **not** yet write the Open
+> Brain notes in step 3.
+
 1. **Enrich.** Read the posting at the URL and extract: title, salary range,
    key requirements, location, remote policy, source. If the page is walled,
    ask me for the fields instead. **Also judge the three prioritization signals**

@@ -1,6 +1,6 @@
 # Backlog — Interviews: completion, dedup, and what's still half-built
 
-Status: **v2 shipped** ([PR #21](https://github.com/hannahgwilson/job-hunt/pull/21))
+Status: **v3 shipped** — Tier 3's three items
 · Owner: Hannah · 2026-07-27, updated 2026-07-31
 
 Everything below marked ✅ was built on this branch, exercised in the running
@@ -12,9 +12,16 @@ deployed: `intake-from-url` (new), `interview-prep` (D5 context),
 | | |
 |---|---|
 | ✅ Fixed | D1, D2, D3, D4, D5 (SQL path), D7 |
-| ✅ Built | T1.1, T1.2, T1.3, T1.4, T1.5, T1.6 (prefill), T1.7, T2.1, appendix commit |
-| ⏳ Still open | **D8** (found during this build — see below), T1.6's required Open Brain notes write (ownership decision), D6 backfill (waits on T2.3), T2.2, T2.3, Tier 3 (incl. new T3.3 — split Interviewing column, drop Accepted) |
+| ✅ Built | T1.1, T1.2, T1.3, T1.4, T1.5, T1.6 (prefill), T1.7, T2.1, appendix commit, **T3.1, T3.2, T3.3** |
+| ⏳ Still open | **D8** (blocked on an Open Brain schema decision), T1.6's required Open Brain notes write (same decision), D6 backfill (waits on T2.3), T2.2, T2.3 |
 | ⚠️ Check | the unique index installs only when the DO block finds no duplicates — if the SQL editor printed the NOTICE, merge (Interviews → Past → Duplicate rounds) and re-run 022 |
+| ⏳ To apply | `migrations/023_debrief_nudges.sql` (additive; the UI does **not** depend on it — see T3.1) |
+
+**New in v3:** SQL can now be exercised before it's pasted into the SQL editor —
+`./dev/local_db.sh` builds schema + every migration + `functions.sql` + the demo
+seed in a throwaway local Postgres. See ["Verifying SQL before it
+ships"](#verifying-sql-before-it-ships) below; migration 023 and the enriched
+seed were both validated that way.
 
 Written after shipping the interview-debrief work
 (`8703dd1`, migration 021). That change added the ability to mark a round
@@ -234,6 +241,12 @@ Not fixed in v2 because the clean fix is an Open Brain schema decision (add an
 owner column + RLS there, then scope these four functions), which is the same
 cross-system ownership question T1.6's notes-write raised. Until then: don't
 hand demo credentials to anyone who shouldn't read the real notes.
+
+> **Still live, re-confirmed 2026-07-31** while testing v3 as demo@jobhunt.test:
+> the Action Queue's "From Open Brain" panel showed 12 suggestions from the real
+> account, including named-contact intel and notes about specific companies. It
+> is the most consequential item left on this document and the only one that
+> leaks data rather than merely being unfinished.
 
 ---
 
@@ -622,13 +635,63 @@ building, not after.
 
 ## Tier 3 — new ground
 
-### T3.1 Debrief nudges — ⏳ open
+### T3.1 Debrief nudges — ✅ shipped
+
+> **Shipped 2026-07-31.** The predicate moved out of `Interviews.tsx` into
+> `awaitingDebrief()` (`web/src/lib/rounds.ts`) and now feeds three surfaces:
+> the Interviews tab's "Needs debrief" section (unchanged behaviour), a
+> **"need a debrief"** tile on the Dashboard's top-line strip (rendered only
+> when the count is non-zero, and it links through), and a **"Debrief these
+> rounds"** card on the Action Queue that mounts the same `<InterviewOutcome>`
+> control the Interviews tab uses — so a round is closable from where the
+> triage actually happens, which is the point.
+>
+> **Decision taken:** the three UI surfaces compute the set client-side from
+> rows they already load, so none of them waits on a migration.
+> `migrations/023_debrief_nudges.sql` adds a `debrief_overdue` bucket to
+> `get_action_queue` for the **MCP / Play 3** path only — additive, and nothing
+> in the tracking hub depends on the key existing. That's deliberate: it means
+> the recurring "frontend shipped; the schema didn't" failure can't bite here.
 
 Overdue un-debriefed rounds currently surface only in the Interviews tab's
 "Needs debrief" section. They should also reach the Dashboard and the action
 queue — until a round is closed out it keeps counting as `interviews_pending`.
 
-### T3.2 Outcome analytics — ⏳ open (T1.2 dependency now met)
+### T3.2 Outcome analytics — ✅ shipped
+
+> **Shipped 2026-07-31** as Interviews → **Outcomes**
+> (`web/src/components/OutcomesPanel.tsx` over `web/src/lib/outcomes.ts`), with
+> the metric defined in
+> [`semantic/metrics/round_pass_rate.yaml`](../semantic/metrics/round_pass_rate.yaml).
+> Three cuts over completed formal rounds: **by round type** (in loop order),
+> **by company growth stage**, **by resume-fit band**, each with rounds /
+> pass rate / lost / withdrew / undecided / average rating.
+>
+> **Decisions taken, all worth knowing:**
+>
+> - **The rate mirrors `pass_through_rate`** — `advanced ÷ (advanced + lost)`.
+>   A `withdraw` is *my* decision, not a verdict, so it's held out of the
+>   denominator rather than counted as a loss; a `hold` or a missing decision
+>   is pending, same as the stage funnel. That makes the two numbers directly
+>   comparable, which they wouldn't be if withdrawals counted against you.
+> - **Rates built on fewer than 3 decided rounds are greyed**, not hidden. The
+>   denominator here is rounds-within-a-stage — thinner than the funnel's — and
+>   "0%" off a single rejection is worse than no number.
+> - **Computed client-side**, the only metric in `semantic/metrics/` that is.
+>   Every input was already loaded by the Interviews tab, and the cuts are still
+>   settling. **The cost: you can't ask this in chat.** Promoting it to a SQL
+>   function + an MCP tool is the obvious follow-up if the by-round-type cut
+>   turns out to be the one you actually use — the YAML is already the
+>   definition, so that's a port, not a redesign.
+> - **Postings are read directly, not via `get_roles_analytics`** — that
+>   function drops closed postings, and a role you interviewed at is exactly the
+>   kind that later gets marked filled. Routing through it would have quietly
+>   biased every rate.
+>
+> The by-fit cut has a second reading worth watching: if the pass rate is flat
+> across fit bands, `experience_alignment` isn't predicting how loops actually
+> go — which is a signal about **judge-fit**, not about the interviews, and it
+> drives 35% of the priority score.
 
 Ratings and go/no-go decisions across many rounds are about to become a real
 dataset. Pass rate by interview type, by company growth stage, by fit score —
@@ -636,7 +699,47 @@ dataset. Pass rate by interview type, by company growth stage, by fit score —
 could tell you, and nothing computes it today. Depends on T1.2, since
 `advance_decision` is the signal.
 
-### T3.3 Split the "Interviewing" Kanban column by round type; drop Accepted — ⏳ open
+### T3.3 Split the "Interviewing" Kanban column by round type; drop Accepted — ✅ shipped
+
+> **Shipped 2026-07-31.** The board is now seven columns —
+> *applied · screening · **interviewing · hiring manager · panel · final** ·
+> offer* — driven by `BOARD_COLUMNS` / `boardColumnFor()` in
+> `web/src/lib/board.ts`. `fetchApplications` embeds each app's rounds so the
+> bucketing is a pure client-side derivation; **`applications.status` is
+> untouched**, so the funnel, the status-history trigger and `STATUS_ORDER` all
+> carry on as before. No migration.
+>
+> The two open questions were settled as follows:
+>
+> - **`panel` = the schema's `team`.** Relabelled, not migrated: adding a
+>   `panel` value to the `interview_type` CHECK would have meant shipping a UI
+>   that writes a value the deployed database rejects until the migration lands
+>   — precisely this repo's known failure mode, for a cosmetic gain. The whole
+>   round vocabulary (rank + label) now lives in `web/src/lib/rounds.ts`, so
+>   promoting `panel` to a real enum value later is a two-line change plus a
+>   CHECK migration. **Flag if you want the real value** — it's cheap now, and
+>   `team` (meet-the-team) and `panel` (several interviewers at once) arguably
+>   aren't the same thing.
+> - **The four earlier types are not dropped.** `phone_screen`, `technical`,
+>   `behavioral` and `system_design` fall into the generic **interviewing**
+>   column, labelled *"early rounds"*. An `interviewing` app with **no** rounds
+>   logged lands there too and says *"no rounds logged"* on the card — which is
+>   useful rather than embarrassing: it's a record that's drifted.
+> - **`accepted` gets an "Accepted offers" section** below the board, mirroring
+>   how rejected/withdrawn apps and closed roles already collapse. Off the
+>   board, never invisible.
+>
+> **One deliberate divergence to be aware of.** The board ranks rounds by loop
+> position (`ROUND_RANK`), while `get_stage_roles.furthest_round` takes the
+> chronologically *last* round. They can disagree: schedule a follow-up
+> technical after a final round and the SQL says "technical" while the board
+> still says "final". Date-ordering on a board reads as a bug — the card would
+> slide backwards — so the board ranks. **If these should agree, the SQL is the
+> one to change**; the divergence is commented at both ends.
+>
+> Cards in the interviewing columns also show `furthest: <round>` so the
+> bucketing is never mysterious, and the board scrolls horizontally rather than
+> squeezing seven columns (the page body still never scrolls sideways).
 
 *Requested (2026-07-31): "I want to break out interviewing into hiring
 manager, panel & final round. Drop accepted from the Kanban for space."*
@@ -676,6 +779,41 @@ Two things to settle before building:
   (mirroring how `rejected`/`withdrawn` already collapse into the "Rejected
   applications" section, and closed postings into "Closed roles") rather than
   making accepted offers simply invisible on Pipeline.
+
+---
+
+## Verifying SQL before it ships
+
+The failure this repo keeps repeating is structural, not careless: **SQL reaches
+the deployed database only by being pasted into the Supabase SQL editor by
+hand**, so until now a migration's first real execution was in production. That
+is how migration 020 shipped its frontend and not its schema, and it's why every
+recent frontend change has had to be written to degrade when its migration
+hasn't landed.
+
+`./dev/local_db.sh` closes that gap. It builds the whole SQL layer in a
+throwaway local Postgres — `dev/local_shim.sql` (the auth surface plus stubs of
+the dims this repo depends on but doesn't own: `organizations`, `contacts`,
+`events`, `thoughts`, `tasks`) → `schema.sql` → every migration → `functions.sql`
+→ a **second** pass over the migrations that must be clean → the demo seed.
+Then you can call the functions:
+
+```bash
+./dev/local_db.sh
+psql -h 127.0.0.1 -p 55432 -U postgres -d jh \
+  -c "select jsonb_pretty(get_action_queue('11111111-1111-1111-1111-111111111111'));"
+```
+
+Needs `postgresql@18` + `libpq` on PATH. The cluster lives in `/tmp/jh-localdb`
+and is disposable. Migration 023 and the enriched demo seed in this change were
+both written against it, including the edge cases the seed doesn't cover (a
+networking call with no application; an open round with no date).
+
+**What it does not prove.** The stubs are approximations — only the columns this
+repo reads, no RLS, no constraints from the owning schemas. So it catches
+parse errors, wrong column names, join mistakes and wrong results; it does not
+catch an RLS policy that behaves differently on the real dims. Never apply
+`dev/local_shim.sql` to the deployed database.
 
 ---
 

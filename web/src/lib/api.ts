@@ -3,6 +3,7 @@
 // no logic is reimplemented here.
 
 import { supabase } from "./supabase";
+import type { PostingSignals } from "./outcomes";
 import type {
   Application, ActionQueue, FunnelMetrics, StageRoles, Interview, StatusHistoryRow,
   CareerTrajectory, GrowthStage, ResumeProfile, Resume, ResumeVariant, RoleFitResponse,
@@ -25,7 +26,8 @@ export async function fetchApplications(): Promise<Application[]> {
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
         closed_at, closed_reason,
         organizations:organization_id ( id, name )
-      )
+      ),
+      interviews ( interview_type, category, status, scheduled_at )
     `)
     .order("applied_date", { ascending: false, nullsFirst: false });
   if (error) throw error;
@@ -1049,4 +1051,20 @@ export async function fetchRejectedApplications(): Promise<RejectedApplication[]
 
   // newest verdict first
   return rows.sort((x, y) => +new Date(y.rejected_at ?? 0) - +new Date(x.rejected_at ?? 0));
+}
+
+// The two per-posting signals the outcome analytics need but interview rows
+// don't carry (T3.2). Deliberately NOT get_roles_analytics: that function drops
+// closed postings, and a role you interviewed at is exactly the kind that later
+// gets marked filled — excluding it would silently bias the pass rates.
+export async function fetchPostingSignals(): Promise<Record<string, PostingSignals>> {
+  const { data, error } = await supabase
+    .from("job_postings")
+    .select("id, experience_alignment, growth_stage");
+  if (error) throw error;
+  const out: Record<string, PostingSignals> = {};
+  for (const p of (data ?? []) as Array<{ id: string; experience_alignment: number | null; growth_stage: GrowthStage | null }>) {
+    out[p.id] = { experience_alignment: p.experience_alignment, growth_stage: p.growth_stage };
+  }
+  return out;
 }

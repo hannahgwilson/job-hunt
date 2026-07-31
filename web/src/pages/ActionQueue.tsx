@@ -1,26 +1,43 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { fetchJobChecklist, createTask, fetchActionQueue, dedupeJobTasks } from "../lib/api";
+import { fetchJobChecklist, createTask, fetchActionQueue, fetchInterviews, dedupeJobTasks } from "../lib/api";
 import Checklist from "../components/Checklist";
 import SuggestionInbox from "../components/SuggestionInbox";
 import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
-import type { Task, ActionQueue as Q } from "../lib/types";
+import InterviewOutcome from "../components/InterviewOutcome";
+import { awaitingDebrief, roundLabel } from "../lib/rounds";
+import type { Interview, InterviewListRow, Task, ActionQueue as Q } from "../lib/types";
 
 export default function ActionQueue() {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [q, setQ] = useState<Q | null>(null);
+  const [interviews, setInterviews] = useState<InterviewListRow[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   function loadTasks() { fetchJobChecklist().then(setTasks).catch((e) => setError(e.message)); }
   function loadQueue() { fetchActionQueue().then(setQ).catch((e) => setError(e.message)); }
+  function loadInterviews() { fetchInterviews().then(setInterviews).catch((e) => setError(e.message)); }
   useEffect(() => {
     // Self-heal any duplicate role tasks (e.g. from before promote_suggestion
     // became idempotent) before showing the list. Cleanup failure is non-fatal —
     // don't blank the page over it.
     dedupeJobTasks().catch(() => {}).finally(loadTasks);
     loadQueue();
+    loadInterviews();
   }, []);
+
+  // T3.1 — rounds that happened and were never closed out. Same predicate as
+  // Interviews → "Needs debrief" (lib/rounds), surfaced here because this is
+  // where the weekly triage actually happens, and because an un-debriefed round
+  // keeps counting as pending in the funnel until it's closed.
+  const needsDebrief = useMemo(() => awaitingDebrief(interviews), [interviews]);
+
+  // Patch in place so a row doesn't vanish out from under the cursor mid-edit;
+  // it drops off the list on the next load.
+  function patchInterview(updated: Interview) {
+    setInterviews((cur) => cur.map((iv) => (iv.id === updated.id ? { ...iv, ...updated } : iv)));
+  }
 
   async function addFreeform(e: FormEvent) {
     e.preventDefault();
@@ -63,8 +80,38 @@ export default function ActionQueue() {
             {q.upcoming_interviews.map((i) => (
               <li key={i.interview_id}>
                 <strong>{i.title}</strong> @ {i.organization_name}
-                <span className="muted"> — {i.interview_type} · {new Date(i.scheduled_at).toLocaleString()}</span>
+                <span className="muted"> — {roundLabel(i.interview_type)} · {new Date(i.scheduled_at).toLocaleString()}</span>
                 {" · "}<Link to={`/interview-prep/${i.interview_id}`}>Prep →</Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Rounds whose date has passed but were never closed out (T3.1). Closable
+          in place — the same debrief control the Interviews tab uses — because
+          "go find the other tab" is exactly why the backlog builds up. */}
+      {needsDebrief.length > 0 && (
+        <section className="card">
+          <h2>Debrief these rounds <span className="count">{needsDebrief.length}</span></h2>
+          <p className="muted small">
+            These happened but were never closed out — until they are, they keep counting as
+            pending interviews in the funnel.
+          </p>
+          <ul className="clean">
+            {needsDebrief.map((iv) => (
+              <li key={iv.id} className="queue-debrief">
+                <div>
+                  {iv.application_id
+                    ? <Link to={`/role/${iv.application_id}`}>{iv.role_title ?? "Untitled role"}</Link>
+                    : <Link to={`/company/${iv.organization_id}`}>{iv.organization_name}</Link>}
+                  {iv.application_id && <span className="muted"> @ {iv.organization_name}</span>}
+                  <span className="muted">
+                    {" — "}{iv.interview_type ? `${roundLabel(iv.interview_type)} · ` : ""}
+                    {iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleDateString() : "undated"}
+                  </span>
+                </div>
+                <InterviewOutcome interview={iv} onChanged={patchInterview} />
               </li>
             ))}
           </ul>
@@ -83,7 +130,7 @@ export default function ActionQueue() {
                 <Link to={`/role/${d.application_id}`}>{d.title}</Link>
                 <span className="muted"> @ {d.organization_name}</span>
                 <span className="muted">
-                  {" — "}{d.interview_type ? `${d.interview_type.replace(/_/g, " ")} · ` : ""}
+                  {" — "}{d.interview_type ? `${roundLabel(d.interview_type)} · ` : ""}
                   {d.scheduled_at ? new Date(d.scheduled_at).toLocaleDateString() : "undated"}
                   {" · app "}{d.application_status}
                 </span>

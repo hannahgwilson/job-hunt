@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { fetchApplications, fetchActionQueue, fetchClosedRoles, fetchFitCoverage, fetchJobChecklist, fetchRejectedApplications, reopenRole, submitApplication } from "../lib/api";
-import { CLOSED_REASON_LABELS, PIPELINE_COLUMNS, type Application, type ActionQueue, type ClosedRole, type FitCoveragePosting, type RejectedApplication } from "../lib/types";
+import { CLOSED_REASON_LABELS, type Application, type ActionQueue, type ClosedRole, type FitCoveragePosting, type RejectedApplication } from "../lib/types";
+import { BOARD_COLUMNS, boardColumnFor, furthestRound } from "../lib/board";
+import { roundLabel } from "../lib/rounds";
 import { useBatchJudge } from "../lib/useBatchJudge";
 import AddRole from "./AddRole";
 import RolesToApplyTable from "../components/RolesToApplyTable";
@@ -46,6 +48,9 @@ export default function Pipeline() {
 
   // Backfill: postings nobody has judged yet (skips the ones done by hand).
   const unjudged = coverage.filter((p) => p.judged_resume_ids.length === 0);
+
+  // Off the board, listed underneath it (T3.3).
+  const accepted = apps.filter((a) => a.status === "accepted");
 
   async function backfill() {
     await batch.run(unjudged.map((p) => ({ jobPostingId: p.id })));
@@ -126,33 +131,69 @@ export default function Pipeline() {
         )}
       </section>
 
-      {/* In-flight applications, by stage. */}
+      {/* In-flight applications, by stage. `interviewing` is split across four
+          columns by furthest round (T3.3) — see lib/board.ts for the rule. */}
       <h2 className="board-title">By stage</h2>
-      <div className="kanban">
-        {PIPELINE_COLUMNS.map((col) => {
-          const inCol = apps.filter((a) => a.status === col);
+      <div className="kanban" style={{ ["--kanban-cols" as string]: BOARD_COLUMNS.length }}>
+        {BOARD_COLUMNS.map((col) => {
+          const inCol = apps.filter((a) => boardColumnFor(a) === col.key);
           return (
-            <div key={col} className="kanban-col">
-              <div className="kanban-head"><span className={`pill pill-${col}`}>{col}</span><span className="muted">{inCol.length}</span></div>
-              {inCol.map((a) => (
-                <div key={a.id} className="kanban-card" onClick={() => navigate(`/role/${a.id}`)}>
-                  <div className="kc-title">{a.job_postings?.title ?? "Untitled role"}</div>
-                  <div className="muted">{a.job_postings?.organizations?.name}</div>
-                  <div className="kc-foot">
-                    {a.job_postings?.url && (
-                      <a href={a.job_postings.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>posting ↗</a>
+            <div key={col.key} className="kanban-col">
+              <div className="kanban-head">
+                <span className={`pill ${col.pill}`}>{col.label}</span>
+                <span className="muted">{inCol.length}</span>
+              </div>
+              {col.hint && <div className="kanban-hint muted">{col.hint}</div>}
+              {inCol.map((a) => {
+                const round = roundLabel(furthestRound(a));
+                return (
+                  <div key={a.id} className="kanban-card" onClick={() => navigate(`/role/${a.id}`)}>
+                    <div className="kc-title">{a.job_postings?.title ?? "Untitled role"}</div>
+                    <div className="muted">{a.job_postings?.organizations?.name}</div>
+                    {/* Why this card is in this column — and, in the generic
+                        bucket, whether any round has been logged at all. */}
+                    {a.status === "interviewing" && (
+                      <div className="kc-round muted small">
+                        {round ? `furthest: ${round}` : "no rounds logged"}
+                      </div>
                     )}
-                    {/* Reject / Withdraw move the card off the board into the
-                        "Rejected applications" area below. */}
-                    <StatusActions app={a} onChanged={load} onError={setError} compact />
+                    <div className="kc-foot">
+                      {a.job_postings?.url && (
+                        <a href={a.job_postings.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>posting ↗</a>
+                      )}
+                      {/* Reject / Withdraw move the card off the board into the
+                          "Rejected applications" area below. */}
+                      <StatusActions app={a} onChanged={load} onError={setError} compact />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {inCol.length === 0 && <div className="muted empty">—</div>}
             </div>
           );
         })}
       </div>
+
+      {/* Accepted offers — off the board (T3.3) but never invisible. `accepted`
+          is still a live application status: it's in STATUS_ORDER and the
+          funnel, it just isn't a column you work. */}
+      {accepted.length > 0 && (
+        <section className="card span-2 accepted-apps">
+          <h2>Accepted offers <span className="count">{accepted.length}</span></h2>
+          <ul className="closed-list">
+            {accepted.map((a) => (
+              <li key={a.id}>
+                <span className="pill pill-accepted">accepted</span>
+                <Link to={`/role/${a.id}`}>{a.job_postings?.title ?? "Untitled role"}</Link>
+                <span className="muted"> · {a.job_postings?.organizations?.name}</span>
+                {a.response_date && (
+                  <span className="muted"> · {new Date(a.response_date).toLocaleDateString()}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Closed/filled roles — hidden by default, revealed by the toggle. They're
           kept for history (and the funnel) but stay out of the active search. */}

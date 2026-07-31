@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchOrgContacts, scheduleInterview } from "../lib/api";
+import { roundLabel } from "../lib/rounds";
 import type { InterviewCategory } from "../lib/types";
 
 // The full "add a round" control (T1.3). schedule_interview has accepted
@@ -14,8 +15,6 @@ const INTERVIEW_TYPES = [
   "phone_screen", "technical", "behavioral", "system_design", "hiring_manager", "team", "final",
 ] as const;
 const NETWORKING_TYPES = ["recruiter_call", "networking_call", "coffee_chat", "informational"] as const;
-
-const label = (t: string) => t.replace(/_/g, " ");
 
 export default function ScheduleInterviewForm({
   applicationId,
@@ -133,7 +132,7 @@ export default function ScheduleInterviewForm({
           <select value={type} onChange={(e) => setType(e.target.value)} disabled={busy}>
             <option value="">—</option>
             {typeOptions.map((t) => (
-              <option key={t} value={t}>{label(t)}</option>
+              <option key={t} value={t}>{roundLabel(t)}</option>
             ))}
           </select>
         </label>

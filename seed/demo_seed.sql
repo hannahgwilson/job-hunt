@@ -4,10 +4,16 @@
 -- Populates: 15 roles across 10 companies (a force-ranked apply queue + a kanban
 -- spread across every stage), 2 résumés (an IC and a manager variant), a bullet
 -- library, applications with a backdated history (so the funnel has real
--- time-in-stage), interviews (one upcoming, some completed), pre-scored résumé
--- fits — including a deliberate IC-résumé-vs-manager-role track mismatch — and a
--- cached feedback synthesis. A few roles are left un-judged on purpose so you can
--- demo "Run AI judge" / "Judge N un-judged" live.
+-- time-in-stage), 24 interview rounds, pre-scored résumé fits — including a
+-- deliberate IC-résumé-vs-manager-role track mismatch — and a cached feedback
+-- synthesis. A few roles are left un-judged on purpose so you can demo
+-- "Run AI judge" / "Judge N un-judged" live.
+--
+-- The rounds are shaped to light up the interview surfaces rather than just to
+-- exist: one app per Pipeline board column (the four `interviewing` buckets are
+-- derived from each app's furthest round — T3.3), a rejection / a withdraw / a
+-- panel left on 'hold' so Interviews → Outcomes has a real spread (T3.2), and
+-- one past-dated round left un-debriefed so the debrief nudges appear (T3.1).
 --
 -- ── Setup ────────────────────────────────────────────────────────────────────
 -- 1. Create the demo auth user (Supabase Dashboard → Authentication → Users →
@@ -38,6 +44,9 @@ DECLARE
 
     -- applications
     a_lumen uuid; a_paloma uuid; a_meridian uuid; a_driftwood uuid; a_helio uuid; a_quanta uuid;
+    -- …plus four more so the Pipeline board's four interviewing columns and the
+    -- outcome analytics both have something to show (T3.2 / T3.3).
+    a_brightwave uuid; a_northwind_mgr uuid; a_cobalt_ae uuid; a_northwind_ds uuid;
 BEGIN
     SELECT id INTO v_user FROM auth.users WHERE email = 'demo@jobhunt.test';
     IF v_user IS NULL THEN
@@ -220,11 +229,29 @@ People leadership, hiring, roadmapping, stakeholder management, DS/ML strategy.$
     INSERT INTO applications (user_id, job_posting_id, status, applied_date) VALUES
         (v_user, p_quanta_ml, 'applied', current_date - 6) RETURNING id INTO a_quanta;
 
+    -- Three more 'interviewing' apps, one per named board column. The Pipeline
+    -- splits `interviewing` by furthest round (T3.3), so these differ only in
+    -- how far through their loop they are — Brightwave has a phone screen
+    -- (generic column), Northwind a hiring-manager round, Cobalt a final; Lumen
+    -- below has a panel. One column each, so the split is visible on the board.
+    INSERT INTO applications (user_id, job_posting_id, status, applied_date) VALUES
+        (v_user, p_brightwave_ds, 'interviewing', current_date - 14) RETURNING id INTO a_brightwave;
+    INSERT INTO applications (user_id, job_posting_id, status, applied_date) VALUES
+        (v_user, p_northwind_mgr, 'interviewing', current_date - 18) RETURNING id INTO a_northwind_mgr;
+    INSERT INTO applications (user_id, job_posting_id, status, applied_date) VALUES
+        (v_user, p_cobalt_ae, 'interviewing', current_date - 24) RETURNING id INTO a_cobalt_ae;
+    -- …and a withdrawn one, so 'withdrawn' isn't an empty bar on the Dashboard
+    -- and the outcome analytics have a round I pulled out of (held out of the
+    -- pass rate rather than counted as a loss).
+    INSERT INTO applications (user_id, job_posting_id, status, applied_date, response_date) VALUES
+        (v_user, p_northwind_ds, 'withdrawn', current_date - 26, current_date - 15) RETURNING id INTO a_northwind_ds;
+
     -- Backdated status history → realistic funnel conversion + time-in-stage.
     -- (The insert trigger logged a now() row at each app's current status; replace
     -- those with a hand-built progression.)
     DELETE FROM application_status_history WHERE application_id IN
-        (a_lumen, a_paloma, a_meridian, a_driftwood, a_helio, a_quanta);
+        (a_lumen, a_paloma, a_meridian, a_driftwood, a_helio, a_quanta,
+         a_brightwave, a_northwind_mgr, a_cobalt_ae, a_northwind_ds);
     INSERT INTO application_status_history (user_id, application_id, from_status, to_status, changed_at) VALUES
         (v_user, a_lumen,    NULL,        'applied',      now() - interval '22 days'),
         (v_user, a_lumen,    'applied',   'screening',    now() - interval '15 days'),
@@ -243,15 +270,69 @@ People leadership, hiring, roadmapping, stakeholder management, DS/ML strategy.$
         (v_user, a_helio,    'screening', 'interviewing', now() - interval '22 days'),
         (v_user, a_helio,    'interviewing','offer',      now() - interval '12 days'),
         (v_user, a_helio,    'offer',     'accepted',     now() - interval '4 days'),
-        (v_user, a_quanta,   NULL,        'applied',      now() - interval '6 days');
+        (v_user, a_quanta,   NULL,        'applied',      now() - interval '6 days'),
+        (v_user, a_brightwave,    NULL,          'applied',      now() - interval '14 days'),
+        (v_user, a_brightwave,    'applied',     'screening',    now() - interval '10 days'),
+        (v_user, a_brightwave,    'screening',   'interviewing', now() - interval '6 days'),
+        (v_user, a_northwind_mgr, NULL,          'applied',      now() - interval '18 days'),
+        (v_user, a_northwind_mgr, 'applied',     'screening',    now() - interval '13 days'),
+        (v_user, a_northwind_mgr, 'screening',   'interviewing', now() - interval '7 days'),
+        (v_user, a_cobalt_ae,     NULL,          'applied',      now() - interval '24 days'),
+        (v_user, a_cobalt_ae,     'applied',     'screening',    now() - interval '19 days'),
+        (v_user, a_cobalt_ae,     'screening',   'interviewing', now() - interval '13 days'),
+        (v_user, a_northwind_ds,  NULL,          'applied',      now() - interval '26 days'),
+        (v_user, a_northwind_ds,  'applied',     'screening',    now() - interval '22 days'),
+        (v_user, a_northwind_ds,  'screening',   'interviewing', now() - interval '20 days'),
+        (v_user, a_northwind_ds,  'interviewing','withdrawn',    now() - interval '15 days');
 
     -- ── interviews ───────────────────────────────────────────────────────────
-    INSERT INTO interviews (user_id, application_id, interview_type, scheduled_at, duration_minutes, status, notes) VALUES
-        (v_user, a_lumen, 'hiring_manager', now() + interval '3 days', 45, 'scheduled', 'Prep: experimentation deep-dive + a recent production model.');
-    INSERT INTO interviews (user_id, application_id, interview_type, scheduled_at, status, rating, feedback, advance_decision, decision_notes) VALUES
-        (v_user, a_lumen, 'technical', now() - interval '6 days', 'completed', 4, 'Solid case on causal inference; good signal.', 'advance', 'Clear yes — move to hiring manager.');
-    INSERT INTO interviews (user_id, application_id, interview_type, scheduled_at, status, rating, feedback, advance_decision, decision_notes) VALUES
-        (v_user, a_driftwood, 'final', now() - interval '10 days', 'completed', 5, 'Great fit with the leadership team; offer expected.', 'advance', 'Offer stage.');
+    -- Enough debriefed rounds for Interviews → Outcomes to say something (T3.2):
+    -- a rejection at the phone screen, a withdraw at the hiring manager, a panel
+    -- left on 'hold' (which also lights up the Action Queue's "Decide: move
+    -- forward?" card), and two clean loops that ran to a final.
+    --
+    -- The upcoming rounds are also what put each 'interviewing' app in its
+    -- board column, so the types here are load-bearing for T3.3, not decoration.
+    INSERT INTO interviews (user_id, application_id, category, interview_type, scheduled_at, duration_minutes, status, notes) VALUES
+        (v_user, a_lumen,          'interview', 'team',           now() + interval '4 days', 60, 'scheduled', 'Panel with the DS team. Prep: experimentation deep-dive + a recent production model.'),
+        (v_user, a_northwind_mgr,  'interview', 'hiring_manager', now() + interval '4 days', 45, 'scheduled', 'Prep: how I''d structure and hire the team.'),
+        (v_user, a_cobalt_ae,      'interview', 'final',          now() + interval '6 days', 60, 'scheduled', 'Final with the VP Data.'),
+        (v_user, a_paloma,         'interview', 'technical',      now() - interval '2 days', 60, 'scheduled', 'Case study on experiment design. Interviewer: Dana Reyes, Staff DS.');
+        -- ^ deliberately left un-debriefed and in the past: this is the row that
+        --   populates the Dashboard's "need a debrief" tile and the Action
+        --   Queue's debrief card (T3.1).
+
+    INSERT INTO interviews (user_id, application_id, category, interview_type, scheduled_at, status, rating, feedback, advance_decision, decision_notes) VALUES
+        -- Lumen — mid-loop, panel still to come
+        (v_user, a_lumen,     'interview', 'phone_screen',   now() - interval '20 days', 'completed', 4, 'Recruiter screen; comp and scope lined up.', 'advance', 'Worth the loop.'),
+        (v_user, a_lumen,     'interview', 'technical',      now() - interval '6 days',  'completed', 4, 'Solid case on causal inference; good signal.', 'advance', 'Clear yes — move to hiring manager.'),
+        (v_user, a_lumen,     'interview', 'hiring_manager', now() - interval '3 days',  'completed', 4, 'Good alignment on how the team is run.', 'advance', 'On to the panel.'),
+        -- Paloma — screening, one round done (the technical above is overdue)
+        (v_user, a_paloma,    'interview', 'phone_screen',   now() - interval '8 days',  'completed', 4, 'Good conversation on causal work.', 'advance', 'Moving to the technical.'),
+        -- Meridian — the loss, at the screen
+        (v_user, a_meridian,  'interview', 'phone_screen',   now() - interval '25 days', 'completed', 2, 'They wanted clinical-ML depth I don''t have.', 'rejected', 'Passed at the screen.'),
+        -- Driftwood — ran to an offer, with one panel still on 'hold'
+        (v_user, a_driftwood, 'interview', 'phone_screen',   now() - interval '32 days', 'completed', 4, 'Straightforward screen.', 'advance', NULL),
+        (v_user, a_driftwood, 'interview', 'hiring_manager', now() - interval '20 days', 'completed', 4, 'Strong alignment on team-building.', 'advance', 'Clear yes.'),
+        (v_user, a_driftwood, 'interview', 'team',           now() - interval '15 days', 'completed', 3, 'Panel was lukewarm on the platform work.', 'hold', 'Waiting to hear how the panel landed.'),
+        (v_user, a_driftwood, 'interview', 'final',          now() - interval '10 days', 'completed', 5, 'Great fit with the leadership team; offer expected.', 'advance', 'Offer stage.'),
+        -- Helio — the clean win
+        (v_user, a_helio,     'interview', 'phone_screen',   now() - interval '36 days', 'completed', 4, NULL, 'advance', NULL),
+        (v_user, a_helio,     'interview', 'hiring_manager', now() - interval '28 days', 'completed', 5, 'Best conversation of the search.', 'advance', 'Definite yes.'),
+        (v_user, a_helio,     'interview', 'team',           now() - interval '20 days', 'completed', 4, 'Met four of the team; good energy.', 'advance', NULL),
+        (v_user, a_helio,     'interview', 'final',          now() - interval '14 days', 'completed', 5, 'Exec round; talked strategy.', 'advance', 'Offer expected.'),
+        -- Northwind (Decision Scientist) — the one I withdrew from
+        (v_user, a_northwind_ds,  'interview', 'phone_screen',   now() - interval '19 days', 'completed', 4, NULL, 'advance', NULL),
+        (v_user, a_northwind_ds,  'interview', 'hiring_manager', now() - interval '16 days', 'completed', 3, 'Scope turned out to be a single-team reporting role.', 'withdraw', 'Not the step up I''m after.'),
+        -- Northwind (Manager, DS) — early, hiring-manager round on the books
+        (v_user, a_northwind_mgr, 'interview', 'phone_screen',   now() - interval '12 days', 'completed', 3, 'Small team, early data function.', 'advance', NULL),
+        -- Brightwave — just started
+        (v_user, a_brightwave,    'interview', 'phone_screen',   now() - interval '5 days',  'completed', 4, 'Recruiter screen; growth-analytics remit.', 'advance', NULL),
+        -- Cobalt — deepest live loop, final still to come
+        (v_user, a_cobalt_ae,     'interview', 'phone_screen',   now() - interval '20 days', 'completed', 4, NULL, 'advance', NULL),
+        (v_user, a_cobalt_ae,     'interview', 'technical',      now() - interval '16 days', 'completed', 5, 'dbt / warehouse modelling case went well.', 'advance', 'Strong.'),
+        (v_user, a_cobalt_ae,     'interview', 'hiring_manager', now() - interval '11 days', 'completed', 4, 'Good read on the roadmap.', 'advance', NULL),
+        (v_user, a_cobalt_ae,     'interview', 'team',           now() - interval '6 days',  'completed', 4, 'Panel with three of the analytics team.', 'advance', NULL);
 
     -- ── pre-scored résumé fits (so fit / feedback / Insights are populated) ───
     -- Includes a deliberate track mismatch: the IC résumé scored against the
@@ -329,5 +410,5 @@ People leadership, hiring, roadmapping, stakeholder management, DS/ML strategy.$
     -- application move to the terminal 'closed' status.)
     PERFORM close_role(p_verdant_lead, 'filled', v_user);
 
-    RAISE NOTICE 'Demo seed complete for % — 15 roles (1 closed), 2 résumés, % bullets, 6 applications.', v_user, 10;
+    RAISE NOTICE 'Demo seed complete for % — 15 roles (1 closed), 2 résumés, % bullets, 10 applications, 24 interview rounds.', v_user, 10;
 END $$;

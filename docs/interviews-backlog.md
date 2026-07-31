@@ -13,7 +13,7 @@ deployed: `intake-from-url` (new), `interview-prep` (D5 context),
 |---|---|
 | ✅ Fixed | D1, D2, D3, D4, D5 (SQL path), D7 |
 | ✅ Built | T1.1, T1.2, T1.3, T1.4, T1.5, T1.6 (prefill), T1.7, T2.1, appendix commit |
-| ⏳ Still open | **D8** (found during this build — see below), T1.6's required Open Brain notes write (ownership decision), D6 backfill (waits on T2.3), T2.2, T2.3, Tier 3 |
+| ⏳ Still open | **D8** (found during this build — see below), T1.6's required Open Brain notes write (ownership decision), D6 backfill (waits on T2.3), T2.2, T2.3, Tier 3 (incl. new T3.3 — split Interviewing column, drop Accepted) |
 | ⚠️ Check | the unique index installs only when the DO block finds no duplicates — if the SQL editor printed the NOTICE, merge (Interviews → Past → Duplicate rounds) and re-run 022 |
 
 Written after shipping the interview-debrief work
@@ -635,6 +635,47 @@ dataset. Pass rate by interview type, by company growth stage, by fit score —
 *which round types you actually lose at* is the most useful thing this data
 could tell you, and nothing computes it today. Depends on T1.2, since
 `advance_decision` is the signal.
+
+### T3.3 Split the "Interviewing" Kanban column by round type; drop Accepted — ⏳ open
+
+*Requested (2026-07-31): "I want to break out interviewing into hiring
+manager, panel & final round. Drop accepted from the Kanban for space."*
+
+**Today's Kanban is a 1:1 render of `applications.status`.** `PIPELINE_COLUMNS`
+(`web/src/lib/types.ts:29-31`) is `applied, screening, interviewing, offer,
+accepted`, and `Pipeline.tsx`'s board (`Pipeline.tsx:132-155`) just filters
+`apps` by `a.status === col` per column — one column per status value, nothing
+derived. `interviewing` is a single status; it isn't computed from interview
+rounds at all.
+
+That makes the split non-trivial: splitting the *column* without touching the
+*status* enum (which feeds the funnel metrics, the status-history trigger, and
+`STATUS_ORDER`) means the Kanban needs a second axis to bucket `interviewing`
+apps by round. The natural source is each app's furthest interview round —
+already computed once, elsewhere, as `furthest_round` in `get_stage_roles`
+(`functions.sql:228`, best completed/scheduled `interview_type` for
+`category = 'interview'` rounds per D2/T2.1) — but Pipeline's data source
+(`fetchApplications`) doesn't join `interviews` today, so either that join gets
+added or Pipeline switches to consuming something shaped like
+`get_stage_roles`.
+
+Two things to settle before building:
+
+- **Interview type coverage is wider than three buckets.** The `interview_type`
+  CHECK constraint (`schema.sql:176-179`) is `phone_screen, technical,
+  behavioral, system_design, hiring_manager, team, final` — `hiring_manager` and
+  `final` exist verbatim, but there's no `panel`; the closest value is `team`
+  (rename the label only, or migrate the constraint to add `panel`). And the
+  four earlier types (`phone_screen`, `technical`, `behavioral`,
+  `system_design`) have no obvious column — fold them into a generic
+  "Interviewing" bucket that precedes the three named ones, or into whichever
+  named column comes first, rather than dropping them silently.
+- **Where do `accepted` apps go once the column is gone?** `accepted` is also
+  in `STATUS_ORDER` and the funnel — dropping it from `PIPELINE_COLUMNS` only
+  removes it from the board, not the data model. Give it a landing spot
+  (mirroring how `rejected`/`withdrawn` already collapse into the "Rejected
+  applications" section, and closed postings into "Closed roles") rather than
+  making accepted offers simply invisible on Pipeline.
 
 ---
 

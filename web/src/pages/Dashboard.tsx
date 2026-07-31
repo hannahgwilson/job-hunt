@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import {
   fetchApplications, fetchActionQueue, fetchFunnelMetrics, fetchStageRoles,
-  fetchRolesAnalytics, runCareerJudge, runGrowthJudge,
+  fetchRolesAnalytics, fetchInterviews, runCareerJudge, runGrowthJudge,
 } from "../lib/api";
-import type { Application, ActionQueue, FunnelMetrics, StageRoles, RoleAnalytics, ApplicationStatus } from "../lib/types";
+import { awaitingDebrief, roundLabel } from "../lib/rounds";
+import type {
+  Application, ActionQueue, FunnelMetrics, StageRoles, RoleAnalytics, ApplicationStatus,
+  InterviewListRow,
+} from "../lib/types";
 import { useBatchRunner } from "../lib/useBatchRunner";
 import FitScatter from "../components/FitScatter";
 import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
@@ -33,13 +37,20 @@ export default function Dashboard() {
   const [selectedStage, setSelectedStage] = useState<(typeof STAGE_STEPS)[number] | null>(null);
   const [addingInterview, setAddingInterview] = useState(false);
   const [pickedAppId, setPickedAppId] = useState("");
+  const [interviews, setInterviews] = useState<InterviewListRow[]>([]);
   const batch = useBatchRunner();
+  const navigate = useNavigate();
 
   function load() {
     setRefreshing(true);
     setError(null);
-    Promise.all([fetchApplications(), fetchActionQueue(), fetchFunnelMetrics(), fetchStageRoles(), fetchRolesAnalytics()])
-      .then(([a, q, f, sr, r]) => { setApps(a); setQueue(q); setFunnel(f); setStageRoles(sr); setRoles(r); })
+    Promise.all([
+      fetchApplications(), fetchActionQueue(), fetchFunnelMetrics(), fetchStageRoles(),
+      fetchRolesAnalytics(), fetchInterviews(),
+    ])
+      .then(([a, q, f, sr, r, iv]) => {
+        setApps(a); setQueue(q); setFunnel(f); setStageRoles(sr); setRoles(r); setInterviews(iv);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setRefreshing(false));
   }
@@ -92,6 +103,9 @@ export default function Dashboard() {
   // bars scale to the biggest bucket so the distribution reads as a chart
   const maxCount = Math.max(1, ...STATUS_DISPLAY_ORDER.map((s) => counts[s] ?? 0));
   const selectedApps = selected ? apps.filter((a) => a.status === selected) : [];
+  // T3.1 — overdue rounds distort the funnel (they keep counting as pending),
+  // so they belong on the top-line strip, not only inside the Interviews tab.
+  const overdueDebriefs = awaitingDebrief(interviews);
 
   return (
     <div className="page">
@@ -131,6 +145,18 @@ export default function Dashboard() {
           <div className="stat-num">{queue?.upcoming_interviews.length ?? "–"}</div>
           <div className="muted">interviews soon</div>
         </div>
+        {/* Debrief nudge (T3.1). Only appears when there's a backlog — a zero
+            tile would just be one more number to read past. */}
+        {overdueDebriefs.length > 0 && (
+          <div
+            className="card stat clickable stat-warn"
+            onClick={() => navigate("/interviews")}
+            title="Rounds whose date has passed but were never closed out — they still count as pending in the funnel"
+          >
+            <div className="stat-num">{overdueDebriefs.length}</div>
+            <div className="muted">need a debrief</div>
+          </div>
+        )}
       </div>
 
       {addingInterview && (
@@ -312,7 +338,7 @@ export default function Dashboard() {
           {queue?.upcoming_interviews.map((i) => (
             <li key={i.interview_id}>
               <strong>{i.title}</strong> @ {i.organization_name}
-              <span className="muted"> — {i.interview_type} · {new Date(i.scheduled_at).toLocaleString()}</span>
+              <span className="muted"> — {roundLabel(i.interview_type)} · {new Date(i.scheduled_at).toLocaleString()}</span>
               {" · "}<Link to={`/interview-prep/${i.interview_id}`}>Prep →</Link>
             </li>
           ))}

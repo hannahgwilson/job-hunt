@@ -23,12 +23,11 @@ export const STATUS_ORDER: ApplicationStatus[] = [
   "draft", "applied", "screening", "interviewing", "offer", "accepted", "rejected", "withdrawn",
 ];
 
-// The kanban columns — the forward funnel only. Terminal-negative outcomes
-// (rejected / withdrawn) drop off the board into the Pipeline's "Rejected
-// applications" area, the same way filled roles go to "Closed roles".
-export const PIPELINE_COLUMNS: ApplicationStatus[] = [
-  "applied", "screening", "interviewing", "offer", "accepted",
-];
+// The kanban's columns live in lib/board.ts (BOARD_COLUMNS) — they're no longer
+// 1:1 with this enum, since `interviewing` splits into four round buckets and
+// `accepted` came off the board entirely (T3.3). Terminal outcomes all sit
+// below the board: rejected/withdrawn in "Rejected applications", accepted in
+// "Accepted offers", filled postings in "Closed roles".
 
 export type RemotePolicy = "remote" | "hybrid" | "onsite";
 export type Source = "linkedin" | "company-site" | "referral" | "recruiter" | "other";
@@ -59,6 +58,10 @@ export interface Application {
   response_date: string | null;
   notes: string | null;
   job_postings?: JobPosting;
+  // The app's own rounds, embedded by fetchApplications so the Pipeline board
+  // can bucket `interviewing` cards by furthest round (T3.3 — see lib/board.ts).
+  // Absent (not just empty) for callers that don't ask for the embed.
+  interviews?: Array<Pick<Interview, "interview_type" | "category" | "status" | "scheduled_at">>;
 }
 
 export interface StatusHistoryRow {
@@ -494,6 +497,19 @@ export interface ActionQueue {
     scheduled_at: string;
     title: string;
     organization_name: string;
+  }>;
+  // Rounds whose date has passed but were never closed out (T3.1). Optional:
+  // absent until migration 023 is applied. The tracking hub does NOT depend on
+  // it — Dashboard and Action Queue compute the same set client-side via
+  // awaitingDebrief() — this key is for the MCP / weekly-review path.
+  debrief_overdue?: Array<{
+    interview_id: string;
+    interview_type: string | null;
+    category: InterviewCategory;
+    scheduled_at: string | null;
+    application_id: string | null;
+    title: string | null;
+    organization_name: string | null;
   }>;
   // Debriefed rounds parked on advance_decision='hold' whose application is
   // still live — a go/no-go owed (T1.2). Optional: absent until migration 022

@@ -6,6 +6,9 @@ import {
 } from "../lib/api";
 import InterviewOutcome from "../components/InterviewOutcome";
 import StoryCard from "../components/StoryCard";
+import OutcomesPanel from "../components/OutcomesPanel";
+import { awaitingDebrief, roundLabel } from "../lib/rounds";
+import { decidedRounds } from "../lib/outcomes";
 import type {
   Interview, InterviewListRow, CheatSheetSession, InterviewPrepStory, InterviewPrep as PrepDoc,
   DuplicateInterviewGroup,
@@ -21,7 +24,7 @@ import type {
 // the AI prep flow and story synthesis are scoped to formal interview rounds,
 // which are the only ones with a job_posting/role_fit to ground them in.
 
-type SubTab = "upcoming" | "past" | "prep" | "library";
+type SubTab = "upcoming" | "past" | "prep" | "library" | "outcomes";
 
 // advance_decision → pill styling (same mapping as the role page).
 const DECISION_PILL: Record<string, string> = {
@@ -147,16 +150,10 @@ export default function Interviews() {
       .sort((a, b) => (a.scheduled_at! < b.scheduled_at! ? -1 : 1));
   }, [interviews]);
 
-  // Still 'scheduled' but the date has passed (or there's no date at all) — a
-  // round that happened and was never closed out. Undated rows land here too:
-  // an interview with no date that's still open is exactly as much of a loose
-  // end as an overdue one.
-  const needsDebrief = useMemo(() => {
-    const now = new Date().toISOString();
-    return (interviews ?? [])
-      .filter((iv) => iv.status === "scheduled" && (!iv.scheduled_at || iv.scheduled_at < now))
-      .sort((a, b) => (b.scheduled_at ?? "").localeCompare(a.scheduled_at ?? ""));
-  }, [interviews]);
+  // Rounds that happened and were never closed out. The predicate lives in
+  // lib/rounds so the Dashboard and the Action Queue nudge off exactly the same
+  // set this section lists (T3.1).
+  const needsDebrief = useMemo(() => awaitingDebrief(interviews ?? []), [interviews]);
 
   // Bulk escape hatch for the backlog: mark every overdue round completed with
   // no debrief. Deliberately status-only — sweeping in a rating or a go/no-go
@@ -260,6 +257,9 @@ export default function Interviews() {
         <button className={sub === "library" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("library")}>
           Story library <span className="count">· {[...index.values()].reduce((n, v) => n + v.length, 0)}</span>
         </button>
+        <button className={sub === "outcomes" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("outcomes")}>
+          Outcomes <span className="count">· {decidedRounds(interviews).length}</span>
+        </button>
       </div>
 
       {sub === "upcoming" && (
@@ -277,7 +277,7 @@ export default function Interviews() {
                 </div>
                 <div className="upcoming-co">
                   <Link to={`/company/${iv.organization_id}`}>{iv.organization_name}</Link>
-                  {iv.interview_type && <span className="pill">{iv.interview_type.replace(/_/g, " ")}</span>}
+                  {iv.interview_type && <span className="pill">{roundLabel(iv.interview_type)}</span>}
                 </div>
                 <div className="upcoming-role muted">
                   {iv.role_title ?? (iv.contact_name ? `w/ ${iv.contact_name}` : "—")}
@@ -315,7 +315,7 @@ export default function Interviews() {
                       {iv.role_title && <span className="muted"> — {iv.role_title}</span>}
                     </div>
                     <div className="muted small">
-                      {iv.interview_type && <span className="pill">{iv.interview_type.replace(/_/g, " ")}</span>}
+                      {iv.interview_type && <span className="pill">{roundLabel(iv.interview_type)}</span>}
                       {" · "}{iv.status}
                     </div>
                   </span>
@@ -351,7 +351,7 @@ export default function Interviews() {
                         <div className="upcoming-co">
                           <strong>{g.organization_name ?? "Unknown company"}</strong>
                           {g.title && <span className="muted"> — {g.title}</span>}
-                          {g.interview_type && <span className="pill">{g.interview_type.replace(/_/g, " ")}</span>}
+                          {g.interview_type && <span className="pill">{roundLabel(g.interview_type)}</span>}
                         </div>
                       </span>
                       <button className="sm" disabled={merging === key} onClick={() => mergeGroup(g)}>
@@ -406,7 +406,7 @@ export default function Interviews() {
                       {iv.role_title && <span className="muted"> — {iv.role_title}</span>}
                     </div>
                     <div className="muted small">
-                      {iv.interview_type && <span className="pill">{iv.interview_type.replace(/_/g, " ")}</span>}
+                      {iv.interview_type && <span className="pill">{roundLabel(iv.interview_type)}</span>}
                       {iv.category === "networking" && <span className="pill">networking</span>}
                       <span className={`pill pill-${iv.status === "no_show" ? "withdrawn" : iv.status === "cancelled" ? "closed" : "accepted"}`}>
                         {iv.status === "no_show" ? "no-show" : iv.status}
@@ -455,7 +455,7 @@ export default function Interviews() {
                       <span className="upcoming-when">{formatWhen(iv.scheduled_at)}</span>
                       <div className="upcoming-co">
                         <strong>{iv.organization_name}</strong>
-                        {iv.interview_type && <span className="pill">{iv.interview_type.replace(/_/g, " ")}</span>}
+                        {iv.interview_type && <span className="pill">{roundLabel(iv.interview_type)}</span>}
                       </div>
                       <div className="muted small">{iv.role_title ?? (iv.contact_name ? `w/ ${iv.contact_name}` : "—")}</div>
                     </span>
@@ -557,6 +557,9 @@ export default function Interviews() {
           </div>
         </section>
       )}
+
+      {/* Where the debrief data finally pays off (T3.2). */}
+      {sub === "outcomes" && <OutcomesPanel interviews={interviews} />}
     </div>
   );
 }

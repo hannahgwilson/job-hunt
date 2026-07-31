@@ -87,6 +87,14 @@ When I paste a job-description link (or describe a role):
     page; a rejected/withdrawn app drops off the board into Pipeline → **"Rejected
     applications"**, which shows the stage it died at, days in that stage, days in
     pipeline, fit score, and interview count (computed from the status history).
+    **The board is no longer 1:1 with this enum.** `interviewing` renders as four
+    columns — *interviewing* (early rounds) → *hiring manager* → *panel* →
+    *final* — bucketed by each app's furthest interview round, and `accepted`
+    comes off the board into an "Accepted offers" section beneath it. Nothing in
+    the data model changed: the split is derived client-side in
+    `web/src/lib/board.ts`, so `applications.status` still has exactly one
+    `interviewing` value and the funnel metrics are untouched. (`panel` is the
+    display label for the schema's `team` interview type.)
   - `schedule_interview({ application_id, interview_type, scheduled_at,
     interviewer_contact_id?, add_to_calendar: true })` — `add_to_calendar` also
     surfaces it in the family-calendar week view. **Find-or-create**: same
@@ -107,7 +115,12 @@ When I paste a job-description link (or describe a role):
     Finished rounds live in Interviews → **"Past"** (amend a debrief or Reopen
     there); from chat, `list_interviews({ status?, category?, only_past? })` is
     the read that covers past rounds — `get_upcoming_interviews` only sees
-    what's still on the books. **The go/no-go now acts**: a debrief recording
+    what's still on the books. Debriefs owed also surface **outside** the
+    Interviews tab now — a "need a debrief" tile on the Dashboard and a
+    close-it-out-in-place card on the Action Queue, plus a `debrief_overdue`
+    bucket on `get_action_queue` for this play (migration 023). Worth clearing:
+    an un-debriefed round keeps counting as `interviews_pending` and keeps its
+    application looking live in the funnel. **The go/no-go now acts**: a debrief recording
     `rejected` / `withdraw` cascades the application to that terminal status
     (live apps only), and completed rounds left on `hold` surface in
     `get_action_queue.interview_decisions` as a decision owed.
@@ -138,6 +151,10 @@ When I paste a job-description link (or describe a role):
    - **networking** — `job-hunt` contacts gone stale / never contacted.
 2. Triage with me; for each new networking action, `capture_thought` a task note
    (tags `['job-search','networking']`) so it persists across sessions.
+   The queue also carries **`debrief_overdue`** — rounds that happened and were
+   never closed out. Clear these first: they're the cheapest thing in the queue
+   and everything downstream (the funnel, the outcome analytics) is wrong until
+   they're closed.
 3. `get_pipeline_overview()` for the status snapshot, `get_funnel_metrics()` for
    the funnel metrics when I ask "how's it going?". It returns four per-stage
    metrics (each defined in `semantic/metrics/`): `conversion_rates` and
@@ -146,6 +163,15 @@ When I paste a job-description link (or describe a role):
    and `median_days_in_stage` (dwell within a stage). The tracking-hub
    **Dashboard** surfaces the latter two as the "Stage funnel" table and the
    status distribution; click a status bar there to list the apps in that phase.
+4. **"Where am I actually losing?"** → Interviews → **Outcomes**. Pass rate per
+   *round type* (in loop order), per company growth stage, and per resume-fit
+   band, over debriefed rounds. Same convention as the stage funnel — advanced ÷
+   decided, with `withdraw` and `hold` held out of the denominator rather than
+   counted as losses. Defined in
+   [`semantic/metrics/round_pass_rate.yaml`](semantic/metrics/round_pass_rate.yaml);
+   **computed client-side** (`web/src/lib/outcomes.ts`), so unlike the other
+   metrics there is no SQL function or MCP tool for it yet — you can't ask this
+   one in chat.
 
 ## Play 4 — Prioritize the apply queue (force-ranking)
 

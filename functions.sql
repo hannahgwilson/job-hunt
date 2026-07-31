@@ -617,6 +617,35 @@ AS $$
               AND i.scheduled_at >= now()
               AND i.scheduled_at <= now() + make_interval(days => p_interview_days)
         ),
+        -- Rounds that happened and were never closed out — still 'scheduled'
+        -- with the date behind us, or never dated at all (an open undated round
+        -- is exactly as much of a loose end as an overdue one). Networking calls
+        -- are included deliberately: unlike the analytics buckets, this is a
+        -- housekeeping list, and an un-logged coffee chat is still a loose end.
+        -- Until a round is closed out it keeps counting as interviews_pending,
+        -- so this backlog distorts the funnel, not just the tidiness (T3.1).
+        'debrief_overdue', (
+            SELECT coalesce(jsonb_agg(
+                jsonb_build_object(
+                    'interview_id', i.id,
+                    'interview_type', i.interview_type,
+                    'category', i.category,
+                    'scheduled_at', i.scheduled_at,
+                    'application_id', i.application_id,
+                    'title', jp.title,
+                    'organization_name', coalesce(o.name, io.name)
+                ) ORDER BY i.scheduled_at DESC NULLS FIRST
+            ), '[]'::jsonb)
+            FROM interviews i
+            -- LEFT: a networking call has no application; it carries its own org.
+            LEFT JOIN applications a   ON a.id = i.application_id
+            LEFT JOIN job_postings jp  ON jp.id = a.job_posting_id
+            LEFT JOIN organizations o  ON o.id = jp.organization_id
+            LEFT JOIN organizations io ON io.id = i.organization_id
+            WHERE i.user_id = p_user_id
+              AND i.status = 'scheduled'
+              AND (i.scheduled_at IS NULL OR i.scheduled_at < now())
+        ),
         -- Debriefed 'hold' rounds on live applications: the explicit "do I move
         -- forward?" you deferred. Advancing/withdrawing the application (or
         -- re-debriefing the round) clears the row (T1.2).

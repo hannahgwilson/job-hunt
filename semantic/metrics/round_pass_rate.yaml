@@ -1,0 +1,73 @@
+metric: round_pass_rate
+label: Interview round pass rate
+description: >
+  Of the interview ROUNDS that got a go/no-go, the fraction where I advanced.
+  The per-round sibling of pass_through_rate (which works on application stages):
+  same "decided outcomes only" convention, one level down. This is the number
+  behind "which round types do I actually lose at?".
+owner: hannah
+grain: one interview round type (also cut by company growth stage and resume-fit band)
+unit: ratio   # 0..1, e.g. 0.5 == 50%
+
+source:
+  table: [interviews, job_postings]
+  columns: [category, status, interview_type, advance_decision, rating, job_posting_id, experience_alignment, growth_stage]
+  notes: >
+    Population is `category = 'interview' AND status = 'completed'` — networking
+    calls aren't rounds (D2/T2.1) and a cancelled or no-show round decided
+    nothing. The two dimensional cuts read growth_stage / experience_alignment
+    off the round's posting; job_postings is read directly rather than through
+    get_roles_analytics, which drops closed postings and would bias the rates
+    (a role you interviewed at is exactly the kind that later gets marked filled).
+
+definition: >
+  Classify every completed round by its advance_decision into exactly one of:
+    advanced  — 'advance'
+    lost      — 'rejected'  (they passed)
+    withdrew  — 'withdraw'  (my call, not a verdict — set aside)
+    pending   — 'hold' or no decision recorded (set aside)
+  round_pass_rate = advanced / (advanced + lost)
+  Null when nothing in the bucket has been decided. avg_rating is the mean of
+  the 1-5 self-ratings over the rounds that carry one.
+
+# Worked example (4 completed hiring-manager rounds): 2 advanced, 1 rejected,
+# 1 still on 'hold' →  advanced 2, lost 1, pending 1, rate = 2/3 = 0.67.
+
+dimensions:
+  - interview_type    # loop order per ROUND_RANK (web/src/lib/rounds.ts)
+  - growth_stage      # the company's judged stage (judge-growth, cached per org)
+  - fit_band          # experience_alignment banded: <60 / 60-75 / 75-85 / 85+
+
+implemented_by:
+  # NOTE — client-side, unlike every other metric in this catalog. Every input
+  # is already loaded by the Interviews tab (fetchInterviews + a thin
+  # job_postings read), and the cuts are still settling. Promote to a SQL
+  # function + an MCP tool when this becomes a question worth asking in chat;
+  # this file is the definition either way.
+  module: web/src/lib/outcomes.ts
+  surfaced_in:
+    - web/src/components/OutcomesPanel.tsx   # Interviews -> Outcomes sub-tab
+  not_yet:
+    - SQL function
+    - MCP tool
+
+interpretation: >
+  Read the counts before the percentage — the denominator here is even thinner
+  than pass_through_rate's, because it's rounds within a stage rather than
+  applications. The UI greys any rate built on fewer than 3 decided rounds for
+  that reason. The by-fit cut has a second reading: if the pass rate is flat
+  across fit bands, the judge-fit score isn't predicting how loops actually go,
+  which is a signal about the JUDGE rather than about the interviews.
+
+related:
+  - pass_through_rate   # same convention, application stages instead of rounds
+  - priority_score      # experience_alignment is 35% of it; the by-fit cut back-tests it
+
+caveats:
+  - advance_decision is self-recorded at debrief time, so 'rejected' means "I
+    logged that they passed" — an application that quietly died without a debrief
+    shows up as `pending`, not as a loss, and depresses nothing.
+  - Rounds left un-debriefed are invisible here entirely (they're still
+    'scheduled', not 'completed') — see the debrief_overdue bucket, T3.1.
+  - A 'withdraw' is held out of the rate on purpose. Withdrawing is a decision
+    about the role, not a verdict on the round.

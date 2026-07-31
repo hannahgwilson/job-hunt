@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { completeInterview, fetchInterviews, fetchStoryCheatSheet, fetchInterviewPrep } from "../lib/api";
+import {
+  completeInterview, fetchInterviews, fetchStoryCheatSheet, fetchInterviewPrep,
+  findDuplicateInterviews, mergeInterviews,
+} from "../lib/api";
 import InterviewOutcome from "../components/InterviewOutcome";
+import StoryCard from "../components/StoryCard";
 import type {
   Interview, InterviewListRow, CheatSheetSession, InterviewPrepStory, InterviewPrep as PrepDoc,
+  DuplicateInterviewGroup,
 } from "../lib/types";
 
 // The merged Interviews tab: three sub-views over the same underlying data.
@@ -16,7 +21,15 @@ import type {
 // the AI prep flow and story synthesis are scoped to formal interview rounds,
 // which are the only ones with a job_posting/role_fit to ground them in.
 
-type SubTab = "upcoming" | "prep" | "library";
+type SubTab = "upcoming" | "past" | "prep" | "library";
+
+// advance_decision → pill styling (same mapping as the role page).
+const DECISION_PILL: Record<string, string> = {
+  advance: "pill-accepted",
+  hold: "pill-warn",
+  withdraw: "pill-withdrawn",
+  rejected: "pill-rejected",
+};
 
 function formatWhen(iso: string | null): string {
   if (!iso) return "unscheduled";
@@ -76,9 +89,43 @@ export default function Interviews() {
   const [libQuery, setLibQuery] = useState("");
   const [competency, setCompetency] = useState<string | null>(null);
   const [sweeping, setSweeping] = useState(false);
+  const [pastQuery, setPastQuery] = useState("");
+
+  // Duplicate review (T1.1). null = the read RPC isn't deployed yet — hide the
+  // panel rather than erroring the whole tab.
+  const [dupes, setDupes] = useState<DuplicateInterviewGroup[] | null>(null);
+  const [keeperPick, setKeeperPick] = useState<Record<string, string>>({});
+  const [merging, setMerging] = useState<string | null>(null);
+
+  function loadDupes() {
+    findDuplicateInterviews().then(setDupes).catch(() => setDupes(null));
+  }
+
+  const groupKey = (g: DuplicateInterviewGroup) =>
+    `${g.application_id ?? g.organization_id}|${g.scheduled_at}|${g.interview_type ?? ""}`;
+
+  async function mergeGroup(g: DuplicateInterviewGroup) {
+    const key = groupKey(g);
+    // The SQL orders each group best-keeper-first, so the default pick is [0].
+    const keep = keeperPick[key] ?? g.interviews[0]?.id;
+    if (!keep) return;
+    const merge = g.interviews.map((c) => c.id).filter((id) => id !== keep);
+    setMerging(key);
+    setError(null);
+    try {
+      await mergeInterviews(keep, merge);
+      loadDupes();
+      fetchInterviews().then(setInterviews).catch((e) => setError(e.message));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setMerging(null);
+    }
+  }
 
   useEffect(() => {
     fetchInterviews().then(setInterviews).catch((e) => setError(e.message));
+    loadDupes();
     fetchStoryCheatSheet()
       .then((r) => {
         if (!r.success) setError(r.error ?? "Could not load the story library.");
@@ -128,6 +175,17 @@ export default function Interviews() {
       setSweeping(false);
     }
   }
+
+  // Every round that's been closed out — completed, cancelled, or no-show.
+  // The pre-merge Interviews page had this and the merge dropped it (T1.4);
+  // without it a round vanished the moment you completed it. Newest first.
+  const past = useMemo(
+    () =>
+      (interviews ?? [])
+        .filter((iv) => iv.status !== "scheduled" && matchesQuery(iv, pastQuery))
+        .sort((a, b) => (b.scheduled_at ?? "").localeCompare(a.scheduled_at ?? "")),
+    [interviews, pastQuery],
+  );
 
   const storiesByInterview = useMemo(() => {
     const map = new Map<string, CheatSheetSession>();
@@ -192,6 +250,9 @@ export default function Interviews() {
       <div className="interviews-subnav">
         <button className={sub === "upcoming" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("upcoming")}>
           Upcoming <span className="count">· {upcoming.length}</span>
+        </button>
+        <button className={sub === "past" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("past")}>
+          Past <span className="count">· {(interviews ?? []).filter((iv) => iv.status !== "scheduled").length}</span>
         </button>
         <button className={sub === "prep" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("prep")}>
           Prep <span className="count">· {interviews.length}</span>
@@ -270,6 +331,108 @@ export default function Interviews() {
         </section>
       )}
 
+      {sub === "past" && (
+        <section>
+          {(dupes?.length ?? 0) > 0 && (
+            <div className="card" style={{ marginTop: "0.9rem" }}>
+              <h2 style={{ marginTop: 0 }}>Duplicate rounds <span className="count">· {dupes!.length} group{dupes!.length === 1 ? "" : "s"}</span></h2>
+              <p className="muted small">
+                Same application, date, and type — usually a re-run calendar import. Pick the copy to keep
+                (prep sessions and calendar events follow it); the rest are merged in, never blindly deleted.
+              </p>
+              {dupes!.map((g) => {
+                const key = groupKey(g);
+                const keep = keeperPick[key] ?? g.interviews[0]?.id;
+                return (
+                  <div className="prep-card is-open" key={key} style={{ marginBottom: "0.7rem" }}>
+                    <div className="prep-card-head" style={{ cursor: "default" }}>
+                      <span>
+                        <span className="upcoming-when">{formatWhen(g.scheduled_at)}</span>
+                        <div className="upcoming-co">
+                          <strong>{g.organization_name ?? "Unknown company"}</strong>
+                          {g.title && <span className="muted"> — {g.title}</span>}
+                          {g.interview_type && <span className="pill">{g.interview_type.replace(/_/g, " ")}</span>}
+                        </div>
+                      </span>
+                      <button className="sm" disabled={merging === key} onClick={() => mergeGroup(g)}>
+                        {merging === key ? "…" : `Merge ${g.count} → 1`}
+                      </button>
+                    </div>
+                    <div className="prep-card-body">
+                      {g.interviews.map((c, i) => (
+                        <label key={c.id} className="small" style={{ display: "flex", gap: "0.5rem", alignItems: "baseline", padding: "0.2rem 0" }}>
+                          <input
+                            type="radio"
+                            name={`keep-${key}`}
+                            checked={keep === c.id}
+                            onChange={() => setKeeperPick((cur) => ({ ...cur, [key]: c.id }))}
+                          />
+                          <span>
+                            <strong>{keep === c.id ? "Keep" : "Merge"}</strong>
+                            {i === 0 && <span className="muted"> (suggested)</span>}
+                            {" · "}{c.status === "no_show" ? "no-show" : c.status}
+                            {c.has_synthesis ? " · prep + summary" : c.has_prep ? " · prep started" : ""}
+                            {c.has_event && " · on calendar"}
+                            {c.rating != null && ` · ${"★".repeat(c.rating)}`}
+                            {c.notes && <span className="muted"> · {c.notes.slice(0, 80)}{c.notes.length > 80 ? "…" : ""}</span>}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <p className="muted small" style={{ marginTop: "0.9rem" }}>
+            Finished rounds — completed, cancelled, and no-shows, newest first. Amend a debrief or reopen a mis-click here.
+          </p>
+          <input
+            type="search"
+            placeholder="Search past rounds…"
+            value={pastQuery}
+            onChange={(e) => setPastQuery(e.target.value)}
+            style={{ maxWidth: 320 }}
+          />
+          {past.length === 0 && <p className="muted">Nothing closed out yet.</p>}
+          <div className="prep-list">
+            {past.map((iv) => (
+              <div className="prep-card is-open" key={iv.id}>
+                <div className="prep-card-head" style={{ cursor: "default" }}>
+                  <span>
+                    <span className="upcoming-when">{formatWhen(iv.scheduled_at)}</span>
+                    <div className="upcoming-co">
+                      <Link to={`/company/${iv.organization_id}`}>{iv.organization_name}</Link>
+                      {iv.role_title && <span className="muted"> — {iv.role_title}</span>}
+                    </div>
+                    <div className="muted small">
+                      {iv.interview_type && <span className="pill">{iv.interview_type.replace(/_/g, " ")}</span>}
+                      {iv.category === "networking" && <span className="pill">networking</span>}
+                      <span className={`pill pill-${iv.status === "no_show" ? "withdrawn" : iv.status === "cancelled" ? "closed" : "accepted"}`}>
+                        {iv.status === "no_show" ? "no-show" : iv.status}
+                      </span>
+                      {iv.rating != null && <span> {"★".repeat(iv.rating)}</span>}
+                      {iv.advance_decision && (
+                        <span className={`pill ${DECISION_PILL[iv.advance_decision] ?? ""}`}>{iv.advance_decision}</span>
+                      )}
+                    </div>
+                  </span>
+                </div>
+                <div className="prep-card-body">
+                  {iv.feedback && <p className="small">{iv.feedback}</p>}
+                  {iv.decision_notes && <p className="muted small">Decision: {iv.decision_notes}</p>}
+                  {!iv.feedback && !iv.decision_notes && iv.notes && <p className="muted small">{iv.notes}</p>}
+                  {iv.category !== "networking" && (
+                    <p className="small"><Link to={`/interview-prep/${iv.id}`}>Prep session →</Link></p>
+                  )}
+                  <InterviewOutcome interview={iv} onChanged={patchInterview} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {sub === "prep" && (
         <section>
           <input
@@ -325,20 +488,9 @@ export default function Interviews() {
                             </div>
                           )}
 
-                          {session && session.stories.length > 0 && (
-                            <>
-                              <h4 className="prep-stories-h">Stories queued, matched to what this loop probes for</h4>
-                              <ul className="clean prep-story-list">
-                                {session.stories.map((story, i) => (
-                                  <li key={i} className="prep-story-row">
-                                    {story.title}
-                                    {story.competency && <span className="competency-pill pill">{story.competency}</span>}
-                                  </li>
-                                ))}
-                              </ul>
-                            </>
-                          )}
-
+                          {/* The full story cards render on the prep page — this
+                              sub-tab is an index (count + link), not a second,
+                              lower-fidelity renderer of the same stories (T1.7). */}
                           <div className="prep-full-link">
                             <span className="muted small">
                               {session ? `${session.stories.length} stories queued for this round` : "No prep synthesized yet"}
@@ -395,23 +547,12 @@ export default function Interviews() {
               </>
             )}
             {libraryEntries.map(({ session, story }, i) => (
-              <div className="library-card" key={i}>
-                <div className="library-card-head">
-                  <div className="library-card-title">{story.title}</div>
-                  <div className="muted small">from {session.organization_name} prep</div>
-                </div>
-                {story.situation || story.task || story.action || story.result ? (
-                  <dl className="library-star">
-                    {story.situation && <><dt>Situation</dt><dd>{story.situation}</dd></>}
-                    {story.task && <><dt>Task</dt><dd>{story.task}</dd></>}
-                    {story.action && <><dt>Action</dt><dd>{story.action}</dd></>}
-                    {story.result && <><dt>Result</dt><dd>{story.result}</dd></>}
-                  </dl>
-                ) : (
-                  <p>{story.story}</p>
-                )}
-                {story.best_for && <div className="library-card-foot">Best for: {story.best_for}</div>}
-              </div>
+              <StoryCard
+                key={i}
+                story={story}
+                source={`from ${session.organization_name} prep`}
+                showCompetency={false}
+              />
             ))}
           </div>
         </section>

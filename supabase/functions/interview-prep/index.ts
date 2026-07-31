@@ -241,7 +241,7 @@ type Session = {
 type PrepContext = {
   success: boolean;
   error?: string;
-  interview: { interview_type: string | null; scheduled_at: string | null };
+  interview: { interview_type: string | null; scheduled_at: string | null; notes?: string | null };
   role: { title: string; organization_name: string };
   company_intel: { growth_stage: string | null };
   fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null } | null;
@@ -259,6 +259,12 @@ function contextSeed(ctx: PrepContext): string {
   if (ctx.fit?.summary) parts.push(`Candidate fit summary: ${ctx.fit.summary}`);
   if (ctx.fit?.spikes?.length) parts.push(`Candidate strengths: ${ctx.fit.spikes.join("; ")}`);
   if (ctx.fit?.gaps?.length) parts.push(`Candidate gaps: ${ctx.fit.gaps.join("; ")}`);
+  // Scheduling-time context (D5): interviews.notes is where "Competencies: …,
+  // Interviewer: …" lands when the round is booked — distinct from the intake
+  // box, and skipped when the intake was seeded from it verbatim.
+  if (ctx.interview.notes && ctx.interview.notes !== ctx.session?.intake_notes) {
+    parts.push(`Notes captured when the round was scheduled:\n${ctx.interview.notes}`);
+  }
   if (ctx.session?.intake_notes) parts.push(`What the candidate says this interview covers:\n${ctx.session.intake_notes}`);
   return parts.join("\n");
 }

@@ -495,6 +495,19 @@ export interface ActionQueue {
     title: string;
     organization_name: string;
   }>;
+  // Debriefed rounds parked on advance_decision='hold' whose application is
+  // still live — a go/no-go owed (T1.2). Optional: absent until migration 022
+  // is applied to the database.
+  interview_decisions?: Array<{
+    interview_id: string;
+    interview_type: string | null;
+    scheduled_at: string | null;
+    application_id: string;
+    application_status: ApplicationStatus;
+    decision_notes: string | null;
+    title: string;
+    organization_name: string;
+  }>;
   networking: Array<{
     contact_id: string;
     name: string;
@@ -531,6 +544,10 @@ export interface FunnelMetrics {
 // stage (reached-based, same population as pass_through.<stage>.total_ever).
 export interface StageRoleEntry {
   application_id: string;
+  // The application's CURRENT status (T1.5) — the stage key it's listed under
+  // is reached-based, so without this "still here" and "moved on" look alike.
+  // Optional: absent until migration 022 is applied to the database.
+  status?: ApplicationStatus;
   job_posting_id: string;
   title: string;
   organization_name: string;
@@ -728,7 +745,9 @@ export interface InterviewPrepSessionRow {
 export interface InterviewPrepSession {
   success: boolean;
   error?: string;
-  interview: { id: string; interview_type: string | null; scheduled_at: string | null; status: string };
+  // notes = the round's scheduling-time context (D5); optional until
+  // migration 022 is applied.
+  interview: { id: string; interview_type: string | null; scheduled_at: string | null; status: string; notes?: string | null };
   role: { application_id: string; job_posting_id: string; title: string; organization_id: string; organization_name: string };
   company_intel: { growth_stage: string | null };
   fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null } | null;
@@ -760,6 +779,34 @@ export interface StoryCheatSheet {
   success: boolean;
   error?: string;
   sessions: CheatSheetSession[];
+}
+
+// ── duplicate interview review (find_duplicate_interviews; T1.1) ─────────────
+// One copy inside a collision group. Ordered best-keeper-first by the SQL
+// (has synthesis > has prep > oldest).
+export interface DuplicateInterviewCopy {
+  id: string;
+  status: InterviewStatus;
+  category: InterviewCategory;
+  created_at: string;
+  notes: string | null;
+  rating: number | null;
+  feedback: string | null;
+  advance_decision: AdvanceDecision | null;
+  has_event: boolean;
+  has_prep: boolean;
+  has_synthesis: boolean;
+}
+
+export interface DuplicateInterviewGroup {
+  application_id: string | null;
+  organization_id: string | null;
+  scheduled_at: string;
+  interview_type: string | null;
+  title: string | null;
+  organization_name: string | null;
+  count: number;
+  interviews: DuplicateInterviewCopy[];
 }
 
 // One rejected/withdrawn application for the Pipeline "Rejected" area. Computed

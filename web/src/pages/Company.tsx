@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchCompany } from "../lib/api";
 import ProspectsPanel from "../components/ProspectsPanel";
+import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
 import type { CompanyData } from "../lib/types";
 
 // Company page: the employer, my connections there, and every role I have queued
@@ -57,6 +58,15 @@ export default function Company() {
               {c.tags?.includes("prospect") && <span className="pill">prospect</span>}
             </div>
           ))}
+          {/* Standalone call against this org — no application needed
+              (migration 020; shows on the Interviews tab's Upcoming grid). */}
+          <div style={{ marginTop: "0.8rem" }}>
+            <ScheduleInterviewForm
+              organizationId={org.id}
+              defaultCategory="networking"
+              onScheduled={() => fetchCompany(org.id).then(setData).catch((e) => setError(e.message))}
+            />
+          </div>
         </section>
 
         <section className="card">

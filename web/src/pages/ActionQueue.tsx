@@ -71,6 +71,29 @@ export default function ActionQueue() {
         </section>
       )}
 
+      {/* Debriefed rounds parked on 'hold' — the go/no-go you deferred (T1.2).
+          Clears when the application moves or the round is re-debriefed. */}
+      {q && (q.interview_decisions?.length ?? 0) > 0 && (
+        <section className="card">
+          <h2>Decide: move forward? <span className="count">{q.interview_decisions!.length}</span></h2>
+          <p className="muted small">These rounds were debriefed as “hold” and the application is still live.</p>
+          <ul className="clean">
+            {q.interview_decisions!.map((d) => (
+              <li key={d.interview_id}>
+                <Link to={`/role/${d.application_id}`}>{d.title}</Link>
+                <span className="muted"> @ {d.organization_name}</span>
+                <span className="muted">
+                  {" — "}{d.interview_type ? `${d.interview_type.replace(/_/g, " ")} · ` : ""}
+                  {d.scheduled_at ? new Date(d.scheduled_at).toLocaleDateString() : "undated"}
+                  {" · app "}{d.application_status}
+                </span>
+                {d.decision_notes && <span className="muted small"> · “{d.decision_notes}”</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* Applications waiting on a response past the follow-up threshold. */}
       {q && q.role_followups.length > 0 && (
         <section className="card">

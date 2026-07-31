@@ -98,6 +98,18 @@ When I paste a job-description link (or describe a role):
     Rounds whose date has passed but were never closed out collect in
     Interviews → **"Needs debrief"**, with a "Mark all completed" sweep; until
     they're closed they keep counting as `interviews_pending` on the Dashboard.
+    Finished rounds live in Interviews → **"Past"** (amend a debrief or Reopen
+    there); from chat, `list_interviews({ status?, category?, only_past? })` is
+    the read that covers past rounds — `get_upcoming_interviews` only sees
+    what's still on the books. **The go/no-go now acts**: a debrief recording
+    `rejected` / `withdraw` cascades the application to that terminal status
+    (live apps only), and completed rounds left on `hold` surface in
+    `get_action_queue.interview_decisions` as a decision owed.
+  - **Duplicate rounds:** `find_duplicate_interviews()` groups collisions on
+    the natural key; `merge_interviews({ p_keep_id, p_merge_ids })` collapses a
+    reviewed group into one keeper (prep sessions, tasks, and calendar events
+    follow; never a blind delete). Same flow in the UI under Interviews →
+    Past → "Duplicate rounds".
 - **Close out a filled role:** `close_role({ job_posting_id, reason })` —
   `reason` ∈ `filled` (default) | `expired` | `removed` |
   `no_longer_interested` | `duplicate` | `other`. "Filled" is a property of the *posting*, so

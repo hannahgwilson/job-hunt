@@ -260,10 +260,14 @@ export default function Dashboard() {
             </h2>
             <button className="ghost sm" onClick={() => setSelectedStage(null)}>Close</button>
           </div>
+          <p className="muted small">
+            Every role that <em>ever</em> reached this stage — the Status column is where each one is <em>today</em>.
+          </p>
           <table className="stage-table">
             <thead>
               <tr>
                 <th>Role</th>
+                <th>Status</th>
                 <th className="num">Interviews done</th>
                 <th className="num">Interviews pending</th>
                 <th>Furthest round</th>
@@ -273,11 +277,17 @@ export default function Dashboard() {
             </thead>
             <tbody>
               {(stageRoles?.roles?.[selectedStage] ?? []).map((r) => (
-                <tr key={r.application_id}>
+                // Terminal rows are history, not action items — fade them so the
+                // still-live entries carry the row's visual weight (T1.5).
+                <tr
+                  key={r.application_id}
+                  className={r.status && ["rejected", "withdrawn", "closed"].includes(r.status) ? "row-terminal" : ""}
+                >
                   <td>
                     <Link to={`/role/${r.application_id}`}>{r.title}</Link>
                     <span className="muted"> @ {r.organization_name}</span>
                   </td>
+                  <td>{r.status ? <span className={`pill pill-${r.status}`}>{r.status}</span> : <span className="muted">—</span>}</td>
                   <td className="num">{r.interviews_completed}</td>
                   <td className="num">{r.interviews_pending}</td>
                   <td>{r.furthest_round ?? <span className="muted">—</span>}</td>
@@ -286,7 +296,7 @@ export default function Dashboard() {
                 </tr>
               ))}
               {(stageRoles?.roles?.[selectedStage] ?? []).length === 0 && (
-                <tr><td colSpan={6} className="muted">None.</td></tr>
+                <tr><td colSpan={7} className="muted">None.</td></tr>
               )}
             </tbody>
           </table>

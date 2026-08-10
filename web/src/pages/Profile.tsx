@@ -5,6 +5,7 @@ import ResumeScoringPanel from "../components/ResumeScoringPanel";
 import ResumeFeedbackPanel from "../components/ResumeFeedbackPanel";
 import CareerProfilePanel from "../components/CareerProfilePanel";
 import BulletLibraryPanel from "../components/BulletLibraryPanel";
+import StorybankPanel from "../components/StorybankPanel";
 
 // Resume management: multiple named variants (e.g. a senior-IC resume and a
 // manager resume). The default variant is what get_resume()/the MCP read; the
@@ -249,6 +250,8 @@ export default function Profile() {
       <BulletLibraryPanel />
 
       <CareerProfilePanel />
+
+      <StorybankPanel />
     </div>
   );
 }

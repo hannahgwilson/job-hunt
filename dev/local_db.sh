@@ -20,7 +20,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 export LC_ALL=C   # PG18 on macOS refuses to start without this
 export PGOPTIONS='-c client_min_messages=warning'   # idempotency NOTICEs are noise here
-PATH="/opt/homebrew/opt/libpq/bin:/opt/homebrew/bin:$PATH"
+# postgresql@18 FIRST: libpq ships initdb/pg_ctl but no `postgres` server
+# binary, and pg_ctl only looks beside itself for it — with libpq ahead, a
+# cold start dies on "program postgres ... not found in the same directory".
+PATH="/opt/homebrew/opt/postgresql@18/bin:/opt/homebrew/opt/libpq/bin:/opt/homebrew/bin:$PATH"
 PSQL=(psql -h 127.0.0.1 -p "$PGPORT" -U postgres -v ON_ERROR_STOP=1)
 
 case "${1:-build}" in
@@ -49,6 +52,18 @@ echo "→ migrations (verify pass — must be clean)"
 for m in "$REPO"/migrations/*.sql; do
   run "$m" || { echo "✗ $(basename "$m") failed on top of functions.sql"; exit 1; }
 done
+
+# SECURITY DEFINER bypasses RLS, so p_user_id is the only thing scoping those
+# reads — and it's caller-supplied. Every one of them must call assert_self()
+# (see functions.sql). Asked of the BUILT database, after the verify pass, so a
+# migration that redefines a function without the guard is caught too.
+echo "→ security check (every SECURITY DEFINER function calls assert_self)"
+unguarded=$("${PSQL[@]}" -d "$DB" -tAc "
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname)
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.prosecdef
+    AND p.prosrc NOT LIKE '%assert_self%';")
+[ -z "$unguarded" ] || { echo "✗ SECURITY DEFINER without assert_self(p_user_id): $unguarded"; exit 1; }
 
 if [ "${1:-build}" != "--no-seed" ]; then
   echo "→ demo seed"

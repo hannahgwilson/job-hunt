@@ -5,6 +5,8 @@ import {
 } from "../lib/api";
 import InterviewPrepChat, { ratingPillClass } from "../components/InterviewPrepChat";
 import StoryCard, { storyMarkdown } from "../components/StoryCard";
+import RubricScores from "../components/RubricScores";
+import { ConcernsSheet, QuestionsSheet, HypeSheet } from "../components/CoachSheets";
 import type { InterviewPrepSession } from "../lib/types";
 
 export default function InterviewPrepPage() {
@@ -255,6 +257,10 @@ export default function InterviewPrepPage() {
                     <p className="small"><strong>Improve:</strong> {session.synthesis.overall_feedback.areas_to_improve.join(" · ")}</p>
                   )}
                   <p className="small"><strong>Readiness:</strong> {session.synthesis.overall_feedback.readiness}</p>
+                  {/* Only present on syntheses generated after the coaching layer. */}
+                  {session.synthesis.overall_feedback.scores && (
+                    <RubricScores scores={session.synthesis.overall_feedback.scores} />
+                  )}
                 </div>
               )}
               <h3>Stories to tell</h3>
@@ -278,6 +284,19 @@ export default function InterviewPrepPage() {
             </>
           )}
         </section>
+      )}
+
+      {/* The three sheets ported from the interview-coach skill. They need the
+          intake to exist (they read the round's context) but deliberately NOT
+          the research or a rehearsal — concerns and questions are useful the
+          moment a round is on the calendar, and hype is what you open in the
+          parking lot whether or not you got around to practising. */}
+      {session && (
+        <>
+          <ConcernsSheet interviewId={interviewId!} />
+          <QuestionsSheet interviewId={interviewId!} />
+          <HypeSheet interviewId={interviewId!} />
+        </>
       )}
     </div>
   );

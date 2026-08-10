@@ -864,6 +864,254 @@ server.tool(
 );
 
 // ───────────────────────────────────────────────────────────────────────
+// The coaching layer (migration 024) — candidate-scoped state that outlives
+// any one interview: profile, storybank, score history, question bank.
+//
+// The per-round prep flow above reads and writes this automatically. These
+// tools are the conversational half, and the reason the layer lives in
+// Postgres rather than a markdown file: the dashboard and the agent operate
+// the same state, so they can't drift. Profile setup and storybank work are
+// genuinely better in conversation than in a form — which is the same
+// argument CLAUDE.md makes for role intake.
+// ───────────────────────────────────────────────────────────────────────
+server.tool(
+  "get_coaching_profile",
+  "Read my interview-coaching profile: target roles, seniority band, timeline, feedback directness (1-5), interview history, career transition, and resume analysis. Returns profile=null if I haven't set one up — that's not an error, but most coaching gets noticeably better once it exists.",
+  {},
+  async () => {
+    const { data, error } = await supabase.rpc("get_coaching_profile", { p_user_id: userId });
+    if (error) throw new Error(`get_coaching_profile failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "save_coaching_profile",
+  "Create or update my coaching profile. Only the fields you pass change — everything else is left alone, so this doubles as a partial edit. Seniority band matters most: every answer score is calibrated against it, so a profile without one produces miscalibrated feedback.",
+  {
+    track: z.enum(["quick_prep", "full_system"]).optional().describe("quick_prep = one interview soon; full_system = a real search over weeks"),
+    target_roles: z.array(z.string()).optional(),
+    seniority_band: z.string().optional().describe("e.g. 'senior', 'staff', 'director' — scores are calibrated to this"),
+    directness: z.number().min(1).max(5).optional().describe("Feedback directness. 5 activates the Challenge Protocol; the diagnosis is identical at every level, only delivery changes"),
+    timeline: z.string().optional().describe("e.g. 'first onsite in 2 weeks'"),
+    timeline_date: z.string().optional().describe("YYYY-MM-DD when a specific date is known"),
+    biggest_concern: z.string().optional(),
+    interview_history: z.enum(["first_time", "active_not_advancing", "experienced_rusty"]).optional()
+      .describe("Shapes the whole coaching path — a first-timer needs fundamentals, someone stalling needs diagnosis"),
+    career_transition: z.string().optional().describe("e.g. 'IC to management', 'B2C to B2B' — when set, this becomes the primary concern in prep"),
+    transition_status: z.enum(["not_developed", "in_progress", "strong"]).optional(),
+    resume_analysis: z.record(z.string(), z.unknown()).optional().describe("{ positioning_strengths[], likely_concerns[], narrative_gaps[], story_seeds[] }"),
+    active_strategy: z.record(z.string(), z.unknown()).optional().describe("{ focus, bottleneck_dimension, notes }"),
+    drill_stage: z.number().min(1).max(5).optional(),
+    coaching_notes: z.array(z.string()).optional().describe("Things a good coach would remember — 'freezes in panels', 'prefers concrete examples'"),
+  },
+  async (a) => {
+    const { data, error } = await supabase.rpc("save_coaching_profile", {
+      p_track: a.track ?? null,
+      p_target_roles: a.target_roles ?? null,
+      p_seniority_band: a.seniority_band ?? null,
+      p_directness: a.directness ?? null,
+      p_timeline: a.timeline ?? null,
+      p_timeline_date: a.timeline_date ?? null,
+      p_biggest_concern: a.biggest_concern ?? null,
+      p_interview_history: a.interview_history ?? null,
+      p_career_transition: a.career_transition ?? null,
+      p_transition_status: a.transition_status ?? null,
+      p_resume_analysis: a.resume_analysis ?? null,
+      p_active_strategy: a.active_strategy ?? null,
+      p_drill_stage: a.drill_stage ?? null,
+      p_coaching_notes: a.coaching_notes ?? null,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`save_coaching_profile failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "list_stories",
+  "List my storybank — durable STAR stories with a strength score (1-5) and an earned secret, ordered strongest first. Filter by competency to answer 'what do I tell when they ask about conflict?'. Distinct from get_story_cheat_sheet, which is a per-employer rollup of generated prep sheets; this is the actual inventory.",
+  {
+    competency: z.string().optional().describe("Filter to one competency, e.g. 'conflict', 'influence'"),
+  },
+  async ({ competency }) => {
+    const { data, error } = await supabase.rpc("list_stories", {
+      p_competency: competency ?? null,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`list_stories failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "upsert_story",
+  "Add a story to my storybank, or improve one that's already there. Title is the key: reuse an existing title to enrich that story in place rather than creating a near-duplicate. Fields you omit are left untouched, so you can add an earned secret later without restating the whole STAR.",
+  {
+    title: z.string().describe("Reuse the exact existing title to update; a new title creates a new story"),
+    competency: z.string().optional().describe("The one competency this story is the primary answer for"),
+    situation: z.string().optional(),
+    task: z.string().optional(),
+    action: z.string().optional(),
+    result: z.string().optional().describe("The concrete outcome — a number, a decision reversed, a system shipped"),
+    earned_secret: z.string().optional()
+      .describe("The insight only I could have from living this — the non-obvious thing, not the tidy lesson. This is what separates my story from any qualified candidate's"),
+    strength: z.number().min(1).max(5).optional().describe("How ready it is to tell as-is; thin stories are 1-2"),
+    best_for: z.string().optional().describe("Secondary competencies this also answers"),
+    tags: z.array(z.string()).optional(),
+  },
+  async (a) => {
+    const { data, error } = await supabase.rpc("upsert_story", {
+      p_title: a.title,
+      p_competency: a.competency ?? null,
+      p_situation: a.situation ?? null,
+      p_task: a.task ?? null,
+      p_action: a.action ?? null,
+      p_result: a.result ?? null,
+      p_earned_secret: a.earned_secret ?? null,
+      p_strength: a.strength ?? null,
+      p_best_for: a.best_for ?? null,
+      p_tags: a.tags ?? null,
+      p_source: "mcp",
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`upsert_story failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "mark_story_used",
+  "Record that I actually told a story in a round. Feeds story rotation — a story told in every loop goes stale, and prep uses last-used to suggest a different one.",
+  {
+    story_id: z.string().describe("The coaching_stories.id from list_stories"),
+  },
+  async ({ story_id }) => {
+    const { data, error } = await supabase.rpc("mark_story_used", { p_story_id: story_id, p_user_id: userId });
+    if (error) throw new Error(`mark_story_used failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "get_score_history",
+  "My answer scores across every rehearsal and analyzed round, on the five-dimension rubric (substance, structure, relevance, credibility, differentiation), with per-dimension averages. Also returns calibration_gap: positive means I rate my own answers above the coach's score, which is itself the thing to fix.",
+  {
+    limit: z.number().optional().describe("How many recent scored answers to include (default 30)"),
+  },
+  async ({ limit }) => {
+    const { data, error } = await supabase.rpc("get_score_history", {
+      p_limit: limit ?? 30,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`get_score_history failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "record_coaching_score",
+  "Score one answer on the five-dimension rubric — use this when debriefing a REAL interview, since the mock-interview flow records its own scores automatically. Calibrate 1-5 against my seniority band. Differentiation is the one to be honest about: a complete, well-structured answer any qualified candidate could have given is a 2 there, and scoring it a 4 hides the actual problem.",
+  {
+    source: z.enum(["mock", "practice", "analyze", "real"]),
+    interview_id: z.string().optional().describe("Ties the score to a round, when there is one"),
+    round_label: z.string().optional().describe("e.g. 'behavioral round 2'"),
+    substance: z.number().min(1).max(5).optional().describe("Evidence quality and depth"),
+    structure: z.number().min(1).max(5).optional().describe("Narrative clarity — STAR completeness lands here"),
+    relevance: z.number().min(1).max(5).optional().describe("Did it answer the question actually asked"),
+    credibility: z.number().min(1).max(5).optional().describe("Believability; is my own contribution clear"),
+    differentiation: z.number().min(1).max(5).optional().describe("Could any qualified candidate have given this same answer"),
+    self_score: z.number().min(1).max(5).optional().describe("How I rated it myself, before hearing the assessment — drives the calibration gap"),
+    root_cause: z.string().optional().describe("Why the weakest dimension scored low — the cause, not a restatement"),
+    question: z.string().optional(),
+    competency: z.string().optional(),
+    notes: z.string().optional(),
+  },
+  async (a) => {
+    const { data, error } = await supabase.rpc("record_coaching_score", {
+      p_source: a.source,
+      p_interview_id: a.interview_id ?? null,
+      p_round_label: a.round_label ?? null,
+      p_substance: a.substance ?? null,
+      p_structure: a.structure ?? null,
+      p_relevance: a.relevance ?? null,
+      p_credibility: a.credibility ?? null,
+      p_differentiation: a.differentiation ?? null,
+      p_self_score: a.self_score ?? null,
+      p_root_cause: a.root_cause ?? null,
+      p_question: a.question ?? null,
+      p_competency: a.competency ?? null,
+      p_notes: a.notes ?? null,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`record_coaching_score failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "record_interview_question",
+  "Log a question I was actually asked. The mock interviewer draws on this bank, so recording real questions makes later rehearsals ask what this company actually asks. Pass how it went to make the weak spots findable.",
+  {
+    question: z.string(),
+    interview_id: z.string().optional().describe("The round it was asked in; the org is resolved from it automatically"),
+    organization_id: z.string().optional().describe("Only needed when there's no interview_id"),
+    competency: z.string().optional(),
+    question_type: z.string().optional().describe("behavioral | technical | case | culture"),
+    went: z.enum(["strong", "solid", "needs_work", "weak"]).optional(),
+    source: z.enum(["mock", "real", "debrief", "predicted"]).optional().describe("Defaults to 'real' here — mock questions are logged automatically"),
+  },
+  async (a) => {
+    const { data, error } = await supabase.rpc("record_interview_question", {
+      p_question: a.question,
+      p_interview_id: a.interview_id ?? null,
+      p_organization_id: a.organization_id ?? null,
+      p_competency: a.competency ?? null,
+      p_question_type: a.question_type ?? null,
+      p_went: a.went ?? null,
+      p_source: a.source ?? "real",
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`record_interview_question failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "get_question_bank",
+  "Questions I've been asked before, newest first — optionally narrowed to one company. Useful before a repeat round with the same employer, or to spot the competency that keeps coming up.",
+  {
+    organization_id: z.string().optional(),
+    limit: z.number().optional().describe("Default 40"),
+  },
+  async ({ organization_id, limit }) => {
+    const { data, error } = await supabase.rpc("get_question_bank", {
+      p_organization_id: organization_id ?? null,
+      p_limit: limit ?? 40,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`get_question_bank failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "get_coaching_context",
+  "Everything the coach knows about me in one call: profile, storybank, weak competencies, score averages with the calibration gap, and the question bank. Pass an interview_id to narrow the question bank to that company. Read this before giving me any substantive interview coaching — it's what the app's own prep stages read.",
+  {
+    interview_id: z.string().optional().describe("Narrows the question bank to that round's company"),
+  },
+  async ({ interview_id }) => {
+    const { data, error } = await supabase.rpc("get_coaching_context", {
+      p_interview_id: interview_id ?? null,
+      p_user_id: userId,
+    });
+    if (error) throw new Error(`get_coaching_context failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────────
 // get_funnel_metrics
 // ───────────────────────────────────────────────────────────────────────
 server.tool(

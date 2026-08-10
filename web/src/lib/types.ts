@@ -692,6 +692,22 @@ export interface InterviewPrepStarBreakdown {
   result: string;
 }
 
+// The interview-coach rubric (migration 024). Scored 1-5 per dimension against
+// the profile's seniority band. STAR hasn't gone away — it's the evidence
+// behind `structure` — but `differentiation` is the dimension the app had no
+// equivalent for: could any other qualified candidate have given this answer?
+export interface CoachingScores {
+  substance: number;
+  structure: number;
+  relevance: number;
+  credibility: number;
+  differentiation: number;
+}
+
+export const RUBRIC_DIMENSIONS: Array<keyof CoachingScores> = [
+  "substance", "structure", "relevance", "credibility", "differentiation",
+];
+
 export interface InterviewPrepFeedback {
   rating: "strong" | "solid" | "needs_work" | "weak";
   star: InterviewPrepStarBreakdown;
@@ -699,6 +715,13 @@ export interface InterviewPrepFeedback {
   what_worked: string[];
   what_to_improve: string[];
   suggested_rewrite?: string;
+  // Present only on feedback generated after the coaching layer shipped —
+  // transcripts recorded before it carry rating + STAR alone, so every
+  // consumer must treat these as optional rather than backfilling.
+  scores?: CoachingScores;
+  bottleneck?: keyof CoachingScores;
+  root_cause?: string;
+  differentiation_note?: string;
 }
 
 // Workshop mode — critiquing a draft before it's sent. Ephemeral: nothing is
@@ -723,6 +746,10 @@ export interface InterviewPrepStory {
   result?: string;
   story?: string;           // legacy single-blob shape, pre-STAR-split
   best_for?: string;
+  // Added with the coaching layer — synthesis now writes these through to the
+  // durable storybank (coaching_stories), so they're absent on older sessions.
+  earned_secret?: string;
+  strength?: number;
 }
 
 export interface InterviewPrepCompetency {
@@ -737,6 +764,7 @@ export interface InterviewPrepOverallFeedback {
   strengths: string[];
   areas_to_improve: string[];
   readiness: string;
+  scores?: CoachingScores;   // absent on syntheses generated before the coaching layer
 }
 
 export interface InterviewPrepSynthesis {
@@ -840,4 +868,173 @@ export interface RejectedApplication {
   days_in_pipeline: number | null;    // applied → rejected
   fit_score: number | null;           // posting.experience_alignment (0..1)
   interviews: number;                 // interviews logged before the no
+}
+
+// ── the coaching layer (migration 024) ────────────────────────────────────────
+// Candidate-scoped state that outlives any one interview. The per-round prep
+// flow reads it into every AI stage and writes results back; these types are
+// what the dashboard sees. See docs/interview-coach-integration.md.
+
+export interface CoachingProfile {
+  id: string;
+  user_id: string;
+  track: "quick_prep" | "full_system" | null;
+  target_roles: string[] | null;
+  seniority_band: string | null;
+  /** 1-5. Only delivery changes across levels — the diagnosis is identical. */
+  directness: number;
+  timeline: string | null;
+  timeline_date: string | null;
+  biggest_concern: string | null;
+  interview_history: "first_time" | "active_not_advancing" | "experienced_rusty" | null;
+  career_transition: string | null;
+  transition_status: "not_developed" | "in_progress" | "strong" | null;
+  resume_analysis: Record<string, unknown> | null;
+  active_strategy: Record<string, unknown> | null;
+  drill_stage: number;
+  coaching_notes: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CoachingProfileResult {
+  success: boolean;
+  error?: string;
+  profile: CoachingProfile | null;
+}
+
+/** A durable storybank entry — distinct from the per-session InterviewPrepStory. */
+export interface CoachingStory {
+  id: string;
+  title: string;
+  competency: string | null;
+  situation: string | null;
+  task: string | null;
+  action: string | null;
+  result: string | null;
+  /** The insight only this candidate could have. Null here is the finding, not a blank field. */
+  earned_secret: string | null;
+  strength: number | null;
+  best_for: string | null;
+  tags: string[] | null;
+  source: "manual" | "synthesis" | "mock" | "mcp";
+  source_interview_id: string | null;
+  last_used_at: string | null;
+  use_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StorybankResult {
+  success: boolean;
+  error?: string;
+  stories: CoachingStory[];
+}
+
+export interface CoachingScoreRow {
+  id: string;
+  interview_id: string | null;
+  source: "mock" | "practice" | "analyze" | "real";
+  round_label: string | null;
+  substance: number | null;
+  structure: number | null;
+  relevance: number | null;
+  credibility: number | null;
+  differentiation: number | null;
+  self_score: number | null;
+  root_cause: string | null;
+  question: string | null;
+  competency: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface ScoreHistory {
+  success: boolean;
+  error?: string;
+  count: number;
+  averages: Partial<Record<keyof CoachingScores, number | null>> | null;
+  /** Positive = the candidate rates themselves above the coach. That gap is itself coachable. */
+  calibration_gap: number | null;
+  scores: CoachingScoreRow[];
+}
+
+// ── the ported command stages, persisted as coaching_artifacts ────────────────
+export interface ConcernsContent {
+  concerns: Array<{
+    concern: string;
+    severity: "dealbreaker" | "significant" | "minor";
+    why_they_will_raise_it: string;
+    counter: string;
+    story_to_use?: string;
+    confidence: "high" | "medium" | "low";
+  }>;
+  biggest_risk: string;
+}
+
+export interface QuestionsContent {
+  questions: Array<{
+    question: string;
+    ask_who?: string;
+    why_it_lands: string;
+    what_the_answer_tells_you: string;
+  }>;
+  avoid: string[];
+}
+
+export interface HypeContent {
+  hype_reel: string[];
+  three_concerns: Array<{ concern: string; counter: string }>;
+  three_questions: string[];
+  focus_cue: string;
+  warmup?: string[];
+  recovery_script?: string;
+  pre_mortem?: Array<{ failure_mode: string; prevention_cue: string }>;
+}
+
+export interface ProgressContent {
+  trajectory: string;
+  dimension_trend: Array<{
+    dimension: keyof CoachingScores;
+    direction: "improving" | "flat" | "declining" | "insufficient_data";
+    note?: string;
+  }>;
+  bottleneck: string;
+  calibration_note?: string;
+  storybank_health?: string;
+  recommended_next: string;
+  hard_truth?: string;
+}
+
+export interface DecodeContent {
+  competencies: Array<{
+    name: string;
+    priority: number;
+    evidence_in_jd: string;
+    candidate_coverage: "strong_story" | "weak_story" | "no_story" | "unknown";
+    covering_story?: string;
+  }>;
+  signals: string[];
+  coverage_gaps: string[];
+  verify_with_recruiter?: string[];
+}
+
+export type CoachingArtifactKind = "concerns" | "questions_to_ask" | "hype" | "progress" | "decode";
+
+export type CoachingArtifactContent =
+  | ConcernsContent | QuestionsContent | HypeContent | ProgressContent | DecodeContent;
+
+export interface CoachingArtifact<T = CoachingArtifactContent> {
+  id: string;
+  interview_id: string | null;
+  kind: CoachingArtifactKind;
+  content: T;
+  model: string | null;
+  generated_at: string;
+}
+
+export interface CoachingArtifactResult<T = CoachingArtifactContent> {
+  success: boolean;
+  error?: string;
+  artifact: CoachingArtifact<T> | null;
 }

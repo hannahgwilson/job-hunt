@@ -123,7 +123,9 @@ When I paste a job-description link (or describe a role):
     application looking live in the funnel. **The go/no-go now acts**: a debrief recording
     `rejected` / `withdraw` cascades the application to that terminal status
     (live apps only), and completed rounds left on `hold` surface in
-    `get_action_queue.interview_decisions` as a decision owed.
+    `get_action_queue.interview_decisions` as a decision owed. A debrief is also
+    the moment to feed the coaching layer — the questions I was actually asked
+    and how the answers scored (**Play 5**).
   - **Duplicate rounds:** `find_duplicate_interviews()` groups collisions on
     the natural key; `merge_interviews({ p_keep_id, p_merge_ids })` collapses a
     reviewed group into one keeper (prep sessions, tasks, and calendar events
@@ -227,6 +229,53 @@ Five weighted components (weights sum to 1.0):
   `resolve_priority_weights`), then re-apply `functions.sql`. The YAML is the
   source of truth for the defaults.
 
+## Play 5 — Interview prep and coaching
+
+Prep has **two scopes**, and the distinction is the whole point:
+
+| Scope | Lives in | Lifetime |
+|---|---|---|
+| **Round** | `interview_prep_sessions` | one interview: intake → research → mock → synthesis |
+| **Candidate** | the `coaching_*` tables (migration 024) | the whole search: profile, storybank, score history, question bank |
+
+The round-scoped flow runs on the tracking-hub **Interview Prep** page
+(`/interview-prep/:id`) — from chat you can open a session with
+`start_interview_prep({ interview_id, intake_notes })` and read it back with
+`get_interview_prep`, but the AI stages themselves are UI-driven. The
+candidate layer is the half that's genuinely better in conversation, and it's
+fully MCP-exposed. Design notes:
+[`docs/interview-coach-integration.md`](docs/interview-coach-integration.md).
+
+1. **Read before coaching.** `get_coaching_context({ interview_id? })` returns
+   everything in one call — profile, storybank, weak competencies, score
+   averages with the calibration gap, question bank. **Call it before giving any
+   substantive interview coaching**; it's the same state the app's own prep
+   stages read, so advice from chat and advice from the page agree.
+2. **The profile is the calibration.** `get_coaching_profile` /
+   `save_coaching_profile` (partial — only the fields you pass change). The
+   `seniority_band` matters most: every answer score is calibrated against it,
+   so an unset band produces miscalibrated feedback. `directness` (1–5) governs
+   delivery only — the diagnosis is identical at every level.
+3. **The storybank is durable.** `list_stories({ competency? })`,
+   `upsert_story({ title, ... })` — **title is the key**, so reuse an exact
+   title to enrich a story in place instead of creating a near-duplicate;
+   omitted fields are left untouched. `mark_story_used({ story_id })` after a
+   story gets told, which feeds rotation. Don't confuse this with
+   `get_story_cheat_sheet`, which is a read-only rollup *derived* from past
+   syntheses and regenerated each time.
+4. **Score real rounds.** The mock-interview flow records its own scores; when
+   debriefing a **real** interview, `record_coaching_score({ source: 'real',
+   ... })` on the five dimensions — substance, structure (STAR lives here),
+   relevance, credibility, **differentiation** — 1–5. Be honest about
+   differentiation: a complete, well-structured answer any qualified candidate
+   could have given is a **2** there, and scoring it a 4 hides the real problem.
+   Capture `self_score` before giving the assessment — the gap between the two
+   is what `get_score_history` reports as `calibration_gap`.
+5. **Log what was actually asked.** `record_interview_question({ question,
+   interview_id?, went? })`. The mock interviewer draws on this bank, so real
+   questions make later rehearsals ask what this company actually asks;
+   `get_question_bank({ organization_id? })` before a repeat round.
+
 ## Notes for the assistant
 
 - Prefer `intake_role` over manually calling `org_find_or_create` then a posting
@@ -237,3 +286,8 @@ Five weighted components (weights sum to 1.0):
 - Never put secrets, the Supabase project ref, or real personal contact details
   into committed files — this repo is public. Real data lives only in the
   database; these plays describe *how* to write it, not *what* the data is.
+- **Every `SECURITY DEFINER` function must call `assert_self(p_user_id)`** as its
+  first statement (migration 025). Definer bypasses RLS, so without the guard the
+  caller-supplied `p_user_id` is the only thing scoping the read and the anon key
+  can pass someone else's uuid. `dev/local_db.sh` fails the build if one is
+  missing it — if you add or redefine a definer function, add the guard.

@@ -1,6 +1,6 @@
 # Interview coach — folding the coaching skill into the prep flow
 
-Status: **design + build** · Owner: Hannah · 2026-08-10
+Status: **shipped** · Owner: Hannah · 2026-08-10
 
 Integrates [`interview-coach-skill`](https://github.com/noamseg/interview-coach-skill)
 (a Claude Code skill: `SKILL.md` + ~675KB of `references/`) into this app's
@@ -89,6 +89,18 @@ New stages, ported from skill commands:
 | `decode` | `decode` | JD → competency extraction and coverage against the storybank |
 
 `progress` is candidate-scoped (no `interview_id`); the rest are per-round.
+
+Where each one is reachable today:
+
+| Stage | Surface |
+|---|---|
+| `concerns`, `questions`, `hype` | Interview Prep page, below the round flow (`CoachSheets.tsx`) |
+| `progress` | Resumes page, in the storybank panel |
+| `decode` | edge function + `decodeJd()` client only — **no UI entry point yet** |
+
+The candidate layer itself is fully MCP-exposed (profile, storybank, scores,
+question bank, and `get_coaching_context` as the one-call read) — see **Play 5**
+in [`CLAUDE.md`](../CLAUDE.md).
 
 ## Reference bundling
 

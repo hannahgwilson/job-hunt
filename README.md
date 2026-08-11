@@ -44,7 +44,7 @@ is force-ranked, so "what do I work next" is the top card. **Sliders on the
 Pipeline page** let you re-weight the search; the change persists per-user and
 re-ranks the queue immediately — for both the dashboard and the agent.
 
-**Judge with AI** — six server-side Claude functions fill the subjective work:
+**Judge with AI** — seven server-side Claude functions fill the subjective work:
 - `judge-fit` — decides whether the JD is an **IC or a manager role**, then scores
   each résumé variant against the skills that track demands (spikes / gaps /
   tweaks), and flags a track mismatch (an IC résumé aimed at a manager role);
@@ -55,7 +55,21 @@ re-ranks the queue immediately — for both the dashboard and the agent.
   draft a one-page résumé tailored to a specific JD;
 - `intake-from-url` — fetches a pasted job-posting link server-side and extracts
   the intake fields, prefilling the **Add a role** form for review (walled pages
-  fall back to hand entry).
+  fall back to hand entry);
+- `interview-prep` — runs the per-round prep flow (intake → research → mock
+  interview → synthesis) and the coaching sheets below.
+
+**Rehearse, and get better across rounds** — prep used to be scoped to one
+interview, so the ninth rehearsal knew nothing about the previous eight. A
+**coaching layer** ([`docs/interview-coach-integration.md`](docs/interview-coach-integration.md))
+adds candidate-scoped state that outlives any round: a durable **storybank**
+(STAR + the *earned secret* — the insight only you could have), a **question
+bank** of what each company actually asked, and a **score history**. Answers are
+graded on five dimensions — Substance · Structure (STAR lives here) · Relevance ·
+Credibility · **Differentiation** — 1–5 against your seniority band, so a trend
+exists. Ported from the
+[`interview-coach-skill`](https://github.com/noamseg/interview-coach-skill),
+whose guidance is compiled into a committed bundle by `dev/build_coach_bundle.mjs`.
 
 **Build résumés** — a **bullet library** of reusable, tagged, orderable lines; the
 generator picks the best of them per JD into an editable one-pager. Synthesis
@@ -77,7 +91,7 @@ CLI**; an **Anthropic API key** (for the AI functions); and **Node 18+**.
 # 1. Database — in the Supabase SQL editor, run in order:
 #      schema.sql      (tables, triggers, RLS)
 #      functions.sql   (the shared logic layer — reads + transactional writes)
-#    Upgrading an existing DB? Apply migrations/ in numeric order (001 → 013)
+#    Upgrading an existing DB? Apply migrations/ in numeric order (001 → 025)
 #    first, then re-run functions.sql (every function is CREATE OR REPLACE).
 
 # 2. Agent (MCP) — lives at supabase/functions/job-hunt-mcp/ (index.ts + deno.json),
@@ -86,10 +100,11 @@ CLI**; an **Anthropic API key** (for the AI functions); and **Node 18+**.
 supabase functions deploy job-hunt-mcp --no-verify-jwt
 #    Add it to Claude as a connector with ?key=<MCP_ACCESS_KEY>.
 
-# 3. AI functions — set the secret once, then deploy all five:
+# 3. AI functions — set the secret once, then deploy all seven:
 supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   # JUDGE_MODEL optional
 supabase functions deploy judge-fit judge-career judge-growth \
-                          synthesize-feedback assemble-resume
+                          synthesize-feedback assemble-resume \
+                          intake-from-url interview-prep
 
 # 4. Dashboard
 cd web
@@ -154,12 +169,20 @@ This is a single-tenant app: **everything is keyed to your Supabase Auth user, a
 an external person can't see your information.** The guarantees, verifiable in
 [`schema.sql`](schema.sql):
 
-- **Row-Level Security on every table.** All 13 tables have RLS enabled with a
+- **Row-Level Security on every table.** All 19 tables have RLS enabled with a
   `USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id)` policy — a query
   can only ever touch rows owned by the caller.
-- **RLS actually applies to the app's queries.** Every SQL function is
-  `SECURITY INVOKER` (no `SECURITY DEFINER` bypass), so the dashboard's `rpc(...)`
-  calls run under the caller's policies, not the definer's.
+- **RLS actually applies to the app's queries.** Most SQL functions are
+  `SECURITY INVOKER`, so the dashboard's `rpc(...)` calls run under the caller's
+  policies, not the definer's. The reads that *must* be `SECURITY DEFINER` (they
+  join across the shared `organizations` / `contacts` dimensions) are pinned
+  instead: every one opens with `assert_self(p_user_id)`, which allows the
+  service-role path and rejects an `anon` / `authenticated` caller passing anyone
+  else's uuid — and `EXECUTE` on that set is revoked from `PUBLIC`. Without the
+  guard, `p_user_id` is a caller-supplied argument with a *default* of
+  `auth.uid()`, not a constraint. See
+  [`migrations/025_rpc_user_scope_guard.sql`](migrations/025_rpc_user_scope_guard.sql);
+  `dev/local_db.sh` fails the build if any definer function is missing it.
 - **The browser can't read anything on its own.** The SPA ships only the public
   **anon** key, which has no `auth.uid()` until you sign in (magic link only) — and
   RLS yields zero rows without a matching `user_id`. No table grants to `anon` /
@@ -180,7 +203,7 @@ sees nothing.
 ```
 schema.sql            Tables, triggers, RLS
 functions.sql         The shared logic layer (reads + write RPCs)
-migrations/           Ordered deltas (001–022); re-run functions.sql after
+migrations/           Ordered deltas (001–025); re-run functions.sql after
 supabase/functions/   job-hunt-mcp (the agent surface) + the AI functions:
                       judge-fit, judge-career, judge-growth,
                       synthesize-feedback, assemble-resume, intake-from-url,
@@ -188,6 +211,8 @@ supabase/functions/   job-hunt-mcp (the agent surface) + the AI functions:
 semantic/             YAML metric specs → the SQL that implements them
 resume/               resume.example.md — the expected long-form shape
 web/                  The tracking-hub SPA (Vite + React)
+dev/                  local_db.sh (build the schema locally) + build_coach_bundle.mjs
+docs/                 Design notes for the bigger features
 CLAUDE.md             How to drive the search from Claude (the agent plays)
 ```
 
@@ -198,6 +223,9 @@ CLAUDE.md             How to drive the search from Claude (the agent plays)
 - [`web/README.md`](web/README.md) — the dashboard: pages, RPCs, and the judges.
 - [`semantic/`](semantic/) — the metric definitions (`priority_score`,
   `conversion_rate`, `time_in_stage`).
+- [`docs/interview-coach-integration.md`](docs/interview-coach-integration.md) —
+  the coaching layer: the two scopes, the five-dimension rubric, and what was
+  deliberately left unported.
 
 ## Notes
 

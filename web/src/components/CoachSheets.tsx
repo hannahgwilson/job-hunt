@@ -1,23 +1,25 @@
 import { useEffect, useState } from "react";
 import {
-  fetchCoachingArtifact, generateConcerns, generateQuestionsToAsk, generateHype,
+  fetchCoachingArtifact, generateConcerns, generateQuestionsToAsk, generateHype, decodeJd,
 } from "../lib/api";
 import type {
   CoachingArtifactKind, CoachingArtifactResult,
-  ConcernsContent, QuestionsContent, HypeContent,
+  ConcernsContent, QuestionsContent, HypeContent, DecodeContent,
 } from "../lib/types";
 
 /**
- * The three per-round sheets ported from the interview-coach skill's commands
- * (docs/interview-coach-integration.md): concerns, questions to ask, and the
- * pre-interview hype sheet.
+ * The per-round sheets ported from the interview-coach skill's commands
+ * (docs/interview-coach-integration.md): concerns, questions to ask, the
+ * pre-interview hype sheet, and the JD decode.
  *
- * All three are generated on demand and persisted as coaching_artifacts, so a
+ * All of them are generated on demand and persisted as coaching_artifacts, so a
  * sheet generated last week is still here today without re-running the model —
  * these get read right before walking in, not right after generating.
  *
  * They share a shape (load saved -> generate -> render), so the fetch/generate
  * plumbing lives once in useSheet and each section only owns its rendering.
+ * decode is the one that takes an input (the JD text), which is why useSheet's
+ * generate is a thunk rather than taking the interview id alone.
  */
 function useSheet<T>(
   kind: CoachingArtifactKind,
@@ -55,7 +57,7 @@ function useSheet<T>(
 }
 
 function SheetShell({
-  title, hint, busy, generatedAt, error, hasContent, onRun, children,
+  title, hint, busy, generatedAt, error, hasContent, onRun, canRun = true, children,
 }: {
   title: string;
   hint: string;
@@ -64,13 +66,15 @@ function SheetShell({
   error: string | null;
   hasContent: boolean;
   onRun: () => void;
+  /** Sheets that need an input (decode) gate the button until it's supplied. */
+  canRun?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <section className="card">
       <div className="section-head">
         <h2>{title}</h2>
-        <button className="ghost sm" onClick={onRun} disabled={busy}>
+        <button className="ghost sm" onClick={onRun} disabled={busy || !canRun}>
           {busy ? "Working…" : hasContent ? "Regenerate" : "Generate"}
         </button>
       </div>
@@ -144,6 +148,97 @@ export function QuestionsSheet({ interviewId }: { interviewId: string }) {
               <h3>Skip this round</h3>
               <ul className="clean">
                 {content.avoid.map((a, i) => <li key={i} className="muted small">{a}</li>)}
+              </ul>
+            </>
+          )}
+        </>
+      )}
+    </SheetShell>
+  );
+}
+
+const COVERAGE_CLASS: Record<string, string> = {
+  strong_story: "pill-accepted",
+  weak_story: "pill-warn",
+  no_story: "pill-rejected",
+  unknown: "",
+};
+
+const COVERAGE_LABEL: Record<string, string> = {
+  strong_story: "strong story",
+  weak_story: "weak story",
+  no_story: "no story",
+  unknown: "unknown",
+};
+
+export function DecodeSheet({ interviewId }: { interviewId: string }) {
+  const [jdText, setJdText] = useState("");
+  const { content, generatedAt, busy, error, run } = useSheet<DecodeContent>(
+    "decode", interviewId, (id) => decodeJd(id, jdText),
+  );
+
+  return (
+    <SheetShell
+      title="Decode the job description"
+      hint="Paste the JD and this pulls out the competencies they'll actually probe for, then checks each one against your storybank."
+      busy={busy} generatedAt={generatedAt} error={error} hasContent={!!content}
+      onRun={run} canRun={jdText.trim().length > 0}
+    >
+      <textarea
+        rows={5}
+        className="prep-jd-input"
+        placeholder="Paste the job description here…"
+        value={jdText}
+        onChange={(e) => setJdText(e.target.value)}
+      />
+      {/* The JD text isn't persisted with the artifact, so after a reload the
+          saved decode is showing but the box is empty — which reads as a
+          "Regenerate" button that's greyed out for no reason. Say why. */}
+      {content && !jdText.trim() && (
+        <p className="muted small">Paste the JD again to regenerate.</p>
+      )}
+      {content && (
+        <>
+          <h3>Competencies they'll probe</h3>
+          <ul className="clean">
+            {content.competencies.map((c, i) => (
+              <li key={i} className="prep-question">
+                <div className="prep-msg-head">
+                  <span className={`pill ${COVERAGE_CLASS[c.candidate_coverage] ?? ""}`}>
+                    {COVERAGE_LABEL[c.candidate_coverage] ?? c.candidate_coverage}
+                  </span>
+                  <span className="muted small">priority {c.priority}</span>
+                </div>
+                <p className="small"><strong>{c.name}</strong></p>
+                <p className="muted small">In the JD: {c.evidence_in_jd}</p>
+                {c.covering_story && <p className="muted small">Story: {c.covering_story}</p>}
+              </li>
+            ))}
+          </ul>
+
+          {content.coverage_gaps.length > 0 && (
+            <>
+              <h3>Gaps to close before this round</h3>
+              <ul className="clean">
+                {content.coverage_gaps.map((g, i) => <li key={i} className="small">· {g}</li>)}
+              </ul>
+            </>
+          )}
+
+          {content.signals.length > 0 && (
+            <>
+              <h3>What the wording signals</h3>
+              <ul className="clean">
+                {content.signals.map((s, i) => <li key={i} className="muted small">· {s}</li>)}
+              </ul>
+            </>
+          )}
+
+          {content.verify_with_recruiter && content.verify_with_recruiter.length > 0 && (
+            <>
+              <h3>Verify with the recruiter</h3>
+              <ul className="clean">
+                {content.verify_with_recruiter.map((v, i) => <li key={i} className="muted small">· {v}</li>)}
               </ul>
             </>
           )}

@@ -613,7 +613,10 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
 .rubric-row.bottleneck .rubric-pip.filled { background: var(--warn); border-color: var(--warn); }
 .rubric-bottleneck { margin-top: 0.2rem; }
 
-/* Questions-to-ask sheet — each question carries its own rationale block. */
+/* Questions-to-ask + decode sheets — each row carries its own rationale block. */
 .prep-question { padding: 0.4rem 0; border-top: 1px solid var(--border); }
 .prep-question:first-child { border-top: none; }
 .prep-question p { margin: 0.15rem 0 0; }
+
+/* Decode is the one sheet that takes an input: the JD text to read. */
+.prep-jd-input { margin: 0.5rem 0; font-family: inherit; resize: vertical; }

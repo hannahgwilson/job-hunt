@@ -6,7 +6,7 @@ import {
 import InterviewPrepChat, { ratingPillClass } from "../components/InterviewPrepChat";
 import StoryCard, { storyMarkdown } from "../components/StoryCard";
 import RubricScores from "../components/RubricScores";
-import { ConcernsSheet, QuestionsSheet, HypeSheet } from "../components/CoachSheets";
+import { ConcernsSheet, QuestionsSheet, HypeSheet, DecodeSheet } from "../components/CoachSheets";
 import type { InterviewPrepSession } from "../lib/types";
 
 export default function InterviewPrepPage() {
@@ -286,13 +286,18 @@ export default function InterviewPrepPage() {
         </section>
       )}
 
-      {/* The three sheets ported from the interview-coach skill. They need the
+      {/* The sheets ported from the interview-coach skill. They need the
           intake to exist (they read the round's context) but deliberately NOT
           the research or a rehearsal — concerns and questions are useful the
           moment a round is on the calendar, and hype is what you open in the
-          parking lot whether or not you got around to practising. */}
+          parking lot whether or not you got around to practising.
+
+          decode comes first because it's the one you run earliest: it tells you
+          which competencies to go build stories for, which is upstream of
+          rehearsing them. It's also the only one that needs an input. */}
       {session && (
         <>
+          <DecodeSheet interviewId={interviewId!} />
           <ConcernsSheet interviewId={interviewId!} />
           <QuestionsSheet interviewId={interviewId!} />
           <HypeSheet interviewId={interviewId!} />

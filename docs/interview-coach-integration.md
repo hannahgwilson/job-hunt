@@ -94,9 +94,15 @@ Where each one is reachable today:
 
 | Stage | Surface |
 |---|---|
-| `concerns`, `questions`, `hype` | Interview Prep page, below the round flow (`CoachSheets.tsx`) |
+| `decode`, `concerns`, `questions`, `hype` | Interview Prep page, below the round flow (`CoachSheets.tsx`) |
 | `progress` | Resumes page, in the storybank panel |
-| `decode` | edge function + `decodeJd()` client only — **no UI entry point yet** |
+
+`decode` is ordered first of the four: it tells you which competencies to go
+build stories for, which is upstream of rehearsing them. It's also the only sheet
+that takes an input — the JD text — so its Generate button stays disabled until
+something is pasted. The JD isn't persisted with the artifact, so a saved decode
+renders after a reload with an empty box and a note explaining that regenerating
+needs the JD again.
 
 The candidate layer itself is fully MCP-exposed (profile, storybank, scores,
 question bank, and `get_coaching_context` as the one-call read) — see **Play 5**

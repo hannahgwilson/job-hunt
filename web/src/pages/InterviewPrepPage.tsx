@@ -9,6 +9,13 @@ import RubricScores from "../components/RubricScores";
 import { ConcernsSheet, QuestionsSheet, HypeSheet, DecodeSheet } from "../components/CoachSheets";
 import type { InterviewPrepSession } from "../lib/types";
 
+// Synthesis is persisted model output, so a row written by an older schema (or
+// a response a field short) can be missing any of these lists. Same reason
+// CoachSheets reads its content through a guard.
+function arr<T>(v: T[] | null | undefined): T[] {
+  return Array.isArray(v) ? v : [];
+}
+
 export default function InterviewPrepPage() {
   const { interviewId } = useParams<{ interviewId: string }>();
   const [prep, setPrep] = useState<InterviewPrepSession | null>(null);
@@ -67,19 +74,19 @@ export default function InterviewPrepPage() {
       ...(of ? [
         `## Overall (${of.rating})`,
         of.summary,
-        ...(of.strengths.length ? [`**Strengths:** ${of.strengths.join("; ")}`] : []),
-        ...(of.areas_to_improve.length ? [`**Improve:** ${of.areas_to_improve.join("; ")}`] : []),
+        ...(arr(of.strengths).length ? [`**Strengths:** ${arr(of.strengths).join("; ")}`] : []),
+        ...(arr(of.areas_to_improve).length ? [`**Improve:** ${arr(of.areas_to_improve).join("; ")}`] : []),
         `**Readiness:** ${of.readiness}`,
         "",
       ] : []),
       "## Stories to tell",
-      ...s.stories.map(storyMarkdown),
+      ...arr(s.stories).map(storyMarkdown),
       "",
       "## Competencies to focus on",
-      ...s.competencies.map((x) => `- **${x.name}**${x.why_it_matters ? ` — ${x.why_it_matters}` : ""}${x.evidence ? ` (evidence: ${x.evidence})` : ""}`),
+      ...arr(s.competencies).map((x) => `- **${x.name}**${x.why_it_matters ? ` — ${x.why_it_matters}` : ""}${x.evidence ? ` (evidence: ${x.evidence})` : ""}`),
       "",
       "## Questions to ask",
-      ...s.questions_to_ask.map((q) => `- ${q}`),
+      ...arr(s.questions_to_ask).map((q) => `- ${q}`),
     ].join("\n");
     navigator.clipboard.writeText(md);
   }
@@ -250,11 +257,11 @@ export default function InterviewPrepPage() {
                     </span>
                   </div>
                   <p className="small">{session.synthesis.overall_feedback.summary}</p>
-                  {session.synthesis.overall_feedback.strengths.length > 0 && (
-                    <p className="small"><strong>Strengths:</strong> {session.synthesis.overall_feedback.strengths.join(" · ")}</p>
+                  {arr(session.synthesis.overall_feedback.strengths).length > 0 && (
+                    <p className="small"><strong>Strengths:</strong> {arr(session.synthesis.overall_feedback.strengths).join(" · ")}</p>
                   )}
-                  {session.synthesis.overall_feedback.areas_to_improve.length > 0 && (
-                    <p className="small"><strong>Improve:</strong> {session.synthesis.overall_feedback.areas_to_improve.join(" · ")}</p>
+                  {arr(session.synthesis.overall_feedback.areas_to_improve).length > 0 && (
+                    <p className="small"><strong>Improve:</strong> {arr(session.synthesis.overall_feedback.areas_to_improve).join(" · ")}</p>
                   )}
                   <p className="small"><strong>Readiness:</strong> {session.synthesis.overall_feedback.readiness}</p>
                   {/* Only present on syntheses generated after the coaching layer. */}
@@ -264,12 +271,12 @@ export default function InterviewPrepPage() {
                 </div>
               )}
               <h3>Stories to tell</h3>
-              {session.synthesis.stories.map((s, i) => (
+              {arr(session.synthesis.stories).map((s, i) => (
                 <StoryCard key={i} story={s} />
               ))}
               <h3>Competencies to focus on</h3>
               <ul className="clean">
-                {session.synthesis.competencies.map((c, i) => (
+                {arr(session.synthesis.competencies).map((c, i) => (
                   <li key={i}>
                     <strong>{c.name}</strong>
                     {c.why_it_matters && <> — {c.why_it_matters}</>}
@@ -279,7 +286,7 @@ export default function InterviewPrepPage() {
               </ul>
               <h3>Questions to ask</h3>
               <ul className="clean">
-                {session.synthesis.questions_to_ask.map((q, i) => <li key={i}>{q}</li>)}
+                {arr(session.synthesis.questions_to_ask).map((q, i) => <li key={i}>{q}</li>)}
               </ul>
             </>
           )}

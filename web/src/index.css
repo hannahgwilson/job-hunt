@@ -620,3 +620,13 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
 
 /* Decode is the one sheet that takes an input: the JD text to read. */
 .prep-jd-input { margin: 0.5rem 0; font-family: inherit; resize: vertical; }
+
+/* Error boundary: the throw's message, kept readable and wrapped. */
+.error-boundary-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}

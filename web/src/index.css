@@ -630,3 +630,42 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+
+/* ── Story library (the durable storybank) ────────────────────────────────── */
+/* The consolidation proposal reads as a stack of story cards so a cluster looks
+   like what it will become once saved — not like a diff to approve. */
+.consolidation { margin-top: 0.9rem; }
+.cluster-card { border-left: 3px solid var(--accent); }
+.cluster-card.is-done { opacity: 0.55; border-left-color: var(--border); }
+.cluster-card.is-skipped { opacity: 0.4; border-left-color: var(--border); }
+.cluster-card.is-applying { opacity: 0.75; }
+/* Merge picking: a ticked story has to be obvious at a glance, because the
+   action collapses several rows into one. */
+.story-card.is-picked { border-color: var(--accent); background: var(--accent-tint); }
+/* "One number short" is a different state from "weak story", so it doesn't read
+   as muted commentary. */
+.story-sharpen { color: var(--warn); }
+
+/* ── Outcome reconciliation ───────────────────────────────────────────────── */
+.reconcile { margin-top: 0.9rem; }
+.reconcile h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 1.1rem 0 0.5rem; }
+.reconcile-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.8rem 0.95rem;
+  margin-bottom: 0.7rem;
+  display: grid;
+  gap: 0.55rem;
+}
+/* A contradiction is actively skewing the numbers above; a blank is only
+   missing from them. The left edge carries that difference. */
+.reconcile-row.is-contradicted { border-left: 3px solid var(--warn); }
+.reconcile-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; font-weight: 600; }
+.reconcile-why { margin: 0; }
+.reconcile-feedback { margin: 0; padding-left: 0.7rem; border-left: 2px solid var(--border); color: var(--muted); }
+.reconcile-controls { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: flex-end; }
+.reconcile-controls label { display: grid; gap: 0.25rem; }
+.reconcile-note { max-width: 460px; }
+@media (max-width: 720px) {
+  .reconcile-controls { gap: 0.6rem; }
+}

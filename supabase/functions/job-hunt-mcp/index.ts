@@ -348,6 +348,8 @@ server.tool(
     growth_stage: growthStageEnum.optional()
       .describe("The company's stage: seed / early / growth / late / public / unknown. Feeds the priority score."),
     organization_tags: z.array(z.string()).optional().describe("Tags applied only if the org is created (default ['employer-target'])"),
+    jd_text: z.string().optional()
+      .describe("The posting's full text, as it reads on the page — not your summary of it. Stored on the posting so the JD decode (competencies they'll probe, checked against my storybank) can run on the role page without me pasting it back in. Pass it whenever you actually fetched the posting."),
   },
   async (args) => {
     const { data, error } = await supabase.rpc("intake_role", {
@@ -370,6 +372,7 @@ server.tool(
       p_growth_stage: args.growth_stage ?? null,
       p_org_tags: args.organization_tags ?? ["employer-target"],
       p_user_id: userId,
+      p_jd_text: args.jd_text ?? null,
     });
     if (error) throw new Error(`intake_role failed: ${error.message}`);
     return ok(data as Record<string, unknown>);
@@ -776,6 +779,33 @@ server.tool(
 // backlog), then amend with log_interview_notes.
 // ───────────────────────────────────────────────────────────────────────
 server.tool(
+  "get_outcome_reconciliation",
+  "Rounds whose recorded verdict disagrees with what actually happened to the application. `advance_decision` gets written optimistically in the moment and nothing ever goes back to correct it, so pass rates read far higher than reality. Two kinds: `contradicted` (the app is rejected/withdrawn/closed but its FURTHEST round still says advance — this actively skews every rate) and `undecided` (a completed round on hold or with no verdict — it sits outside every rate). Each row carries a `suggested_decision` inferred from the application's own outcome, or null when the app is still live. Never apply these blindly: a round can have gone well and the loop still die for budget or headcount reasons. Fix a row with log_interview_notes; use mark_outcome_reviewed when the record is already right.",
+  {},
+  async () => {
+    const { data, error } = await supabase.rpc("get_outcome_reconciliation", { p_user_id: userId });
+    if (error) throw new Error(`get_outcome_reconciliation failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "mark_outcome_reviewed",
+  "Record that I checked a flagged round and its verdict is correct as-is — the round genuinely went well and the loop ended for reasons that weren't about it (budget pulled, req closed, internal promotion). Drops it out of get_outcome_reconciliation without writing a loss that didn't happen. The note is appended to the round's decision notes, because in six months 'advance on a rejected app' reads as a mistake again unless the reason is written down. If the verdict later changes, the review is retired automatically.",
+  {
+    interview_id: z.string(),
+    note: z.string().optional().describe("Why the loop ended here despite the round going well"),
+  },
+  async ({ interview_id, note }) => {
+    const { data, error } = await supabase.rpc("mark_outcome_reviewed", {
+      p_interview_id: interview_id, p_note: note ?? null, p_user_id: userId,
+    });
+    if (error) throw new Error(`mark_outcome_reviewed failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
   "list_interviews",
   "List interview rounds and networking calls, PAST ones included — unlike get_upcoming_interviews. Filter by status (completed | cancelled | no_show | scheduled), category, or organization; only_past limits to rounds whose date has passed (or was never set). Use with log_interview_notes to debrief or clean up old rounds.",
   {
@@ -959,6 +989,12 @@ server.tool(
     strength: z.number().min(1).max(5).optional().describe("How ready it is to tell as-is; thin stories are 1-2"),
     best_for: z.string().optional().describe("Secondary competencies this also answers"),
     tags: z.array(z.string()).optional(),
+    company: z.string().optional()
+      .describe("The employer it happened at, e.g. 'Oscar' or 'Garner' — how I actually tell two similar stories apart"),
+    sharpen: z.string().optional()
+      .describe("The one thing to fix before telling it, usually a missing number. Different from a low strength: strength says the story is weak, sharpen says it's strong and one number short"),
+    aliases: z.array(z.string()).optional()
+      .describe("Earlier titles this story was filed under. They stop being separate entries and a later write under one of them updates THIS story instead of resurrecting the duplicate"),
   },
   async (a) => {
     const { data, error } = await supabase.rpc("upsert_story", {
@@ -974,8 +1010,51 @@ server.tool(
       p_tags: a.tags ?? null,
       p_source: "mcp",
       p_user_id: userId,
+      p_company: a.company ?? null,
+      p_sharpen: a.sharpen ?? null,
+      p_aliases: a.aliases ?? null,
     });
     if (error) throw new Error(`upsert_story failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "set_story_anchors",
+  "Declare the stories I keep coming back to, by title. Anchors are what keep my library filed under MY names: consolidation folds every variant of a story into its anchor and never merges an anchor away. A title with nothing written against it is kept on purpose — it's the clearest record of a story I tell out loud but have never written down. Call this when I list my go-to stories.",
+  {
+    titles: z.array(z.string()).describe("One title per story, in my own words — e.g. 'Steerage dashboard at Oscar'"),
+  },
+  async ({ titles }) => {
+    const { data, error } = await supabase.rpc("set_story_anchors", { p_titles: titles, p_user_id: userId });
+    if (error) throw new Error(`set_story_anchors failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "merge_stories",
+  "Fold duplicate storybank entries into one keeper. Additive: a merged story's field only lands where the keeper's is empty, so this can never blank a better sentence the keeper already had, and the best strength score and highest use count win. The merged titles become aliases on the keeper, which is what stops a later prep synthesis re-creating them. Review before calling — merging is how a story loses the one telling that had the number in it.",
+  {
+    keep_id: z.string().describe("coaching_stories.id of the story to keep. Prefer an anchor."),
+    merge_ids: z.array(z.string()).describe("The ids to fold in and delete"),
+  },
+  async ({ keep_id, merge_ids }) => {
+    const { data, error } = await supabase.rpc("merge_stories", {
+      p_keep_id: keep_id, p_merge_ids: merge_ids, p_user_id: userId,
+    });
+    if (error) throw new Error(`merge_stories failed: ${error.message}`);
+    return ok(data as Record<string, unknown>);
+  },
+);
+
+server.tool(
+  "get_story_consolidation_input",
+  "Every scrap of story material I have in one read: my anchors, the storybank, and every story synthesized across all my past prep sessions with its provenance. Use this to consolidate the library in conversation — cluster the tellings by the UNDERLYING event (each prep session invented its own title for the same story), pick the best situation/task/action/result across the variants, carry over any number that appears in ANY telling, then write each cluster with upsert_story passing the variant titles as aliases.",
+  {},
+  async () => {
+    const { data, error } = await supabase.rpc("get_story_consolidation_input", { p_user_id: userId });
+    if (error) throw new Error(`get_story_consolidation_input failed: ${error.message}`);
     return ok(data as Record<string, unknown>);
   },
 );

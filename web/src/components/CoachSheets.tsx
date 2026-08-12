@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  fetchCoachingArtifact, generateConcerns, generateQuestionsToAsk, generateHype, decodeJd,
+  fetchCoachingArtifact, generateConcerns, generateQuestionsToAsk, generateHype, decodeRole,
 } from "../lib/api";
 import type {
   CoachingArtifactKind, CoachingArtifactResult,
@@ -28,13 +28,16 @@ function arr<T>(v: T[] | null | undefined): T[] {
  *
  * They share a shape (load saved -> generate -> render), so the fetch/generate
  * plumbing lives once in useSheet and each section only owns its rendering.
- * decode is the one that takes an input (the JD text), which is why useSheet's
- * generate is a thunk rather than taking the interview id alone.
+ *
+ * Two scopes, because decode isn't per-round: `interview` for the three sheets
+ * that depend on who's in the room, `posting` for the JD decode, which is a
+ * property of the ROLE and is generated once at intake (migration 026).
  */
 function useSheet<T>(
   kind: CoachingArtifactKind,
-  interviewId: string,
-  generate: (id: string) => Promise<CoachingArtifactResult<T>>,
+  scopeId: string,
+  generate: () => Promise<CoachingArtifactResult<T>>,
+  scope: "interview" | "posting" = "interview",
 ) {
   const [content, setContent] = useState<T | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
@@ -43,7 +46,13 @@ function useSheet<T>(
 
   useEffect(() => {
     let live = true;
-    fetchCoachingArtifact<T>(kind, interviewId)
+    setContent(null);
+    setGeneratedAt(null);
+    fetchCoachingArtifact<T>(
+      kind,
+      scope === "interview" ? scopeId : undefined,
+      scope === "posting" ? scopeId : undefined,
+    )
       .then((r) => {
         if (!live) return;
         setContent((r.artifact?.content as T) ?? null);
@@ -51,12 +60,12 @@ function useSheet<T>(
       })
       .catch((e) => live && setError((e as Error).message));
     return () => { live = false; };
-  }, [kind, interviewId]);
+  }, [kind, scopeId, scope]);
 
   async function run() {
     setBusy(true); setError(null);
     try {
-      const r = await generate(interviewId);
+      const r = await generate();
       setContent((r.artifact?.content as T) ?? null);
       setGeneratedAt(r.artifact?.generated_at ?? null);
     } catch (e) { setError((e as Error).message); }
@@ -105,7 +114,7 @@ const SEVERITY_CLASS: Record<string, string> = {
 };
 
 export function ConcernsSheet({ interviewId }: { interviewId: string }) {
-  const { content, generatedAt, busy, error, run } = useSheet<ConcernsContent>("concerns", interviewId, generateConcerns);
+  const { content, generatedAt, busy, error, run } = useSheet<ConcernsContent>("concerns", interviewId, () => generateConcerns(interviewId));
   return (
     <SheetShell
       title="Concerns they'll raise"
@@ -136,7 +145,7 @@ export function ConcernsSheet({ interviewId }: { interviewId: string }) {
 }
 
 export function QuestionsSheet({ interviewId }: { interviewId: string }) {
-  const { content, generatedAt, busy, error, run } = useSheet<QuestionsContent>("questions_to_ask", interviewId, generateQuestionsToAsk);
+  const { content, generatedAt, busy, error, run } = useSheet<QuestionsContent>("questions_to_ask", interviewId, () => generateQuestionsToAsk(interviewId));
   return (
     <SheetShell
       title="Questions to ask"
@@ -185,31 +194,55 @@ const COVERAGE_LABEL: Record<string, string> = {
   unknown: "unknown",
 };
 
-export function DecodeSheet({ interviewId }: { interviewId: string }) {
+/**
+ * The JD decode — competencies this role will actually probe for, each checked
+ * against the storybank.
+ *
+ * Scoped to the POSTING, and generated once, at intake (migration 026). It used
+ * to be per-interview-round, which meant nine identical model calls and nine
+ * manual JD pastes for a nine-round loop. Every round at a company now reads the
+ * same decode, so this component renders on the role page AND on each round's
+ * prep page without re-running anything.
+ *
+ * `hasStoredJd` is whether intake captured the posting body. When it did, the
+ * button just works. When it didn't (walled pages — LinkedIn, most ATSes), the
+ * paste box appears, and the pasted text is stored on the posting so a later
+ * regenerate doesn't ask again.
+ */
+export function DecodeSheet({
+  jobPostingId,
+  hasStoredJd,
+}: {
+  jobPostingId: string;
+  hasStoredJd: boolean;
+}) {
   const [jdText, setJdText] = useState("");
   const { content, generatedAt, busy, error, run } = useSheet<DecodeContent>(
-    "decode", interviewId, (id) => decodeJd(id, jdText),
+    "decode", jobPostingId, () => decodeRole(jobPostingId, jdText.trim() || undefined), "posting",
   );
+  // The paste box is a fallback, not the normal path — it only shows when
+  // there's no stored JD to run against.
+  const needsPaste = !hasStoredJd;
 
   return (
     <SheetShell
       title="Decode the job description"
-      hint="Paste the JD and this pulls out the competencies they'll actually probe for, then checks each one against your storybank."
+      hint={
+        needsPaste
+          ? "No JD stored for this role — that page couldn't be fetched at intake. Paste it once and it's kept for future runs."
+          : "The competencies they'll actually probe for, each checked against your storybank. Runs once per role."
+      }
       busy={busy} generatedAt={generatedAt} error={error} hasContent={!!content}
-      onRun={run} canRun={jdText.trim().length > 0}
+      onRun={run} canRun={!needsPaste || jdText.trim().length > 0}
     >
-      <textarea
-        rows={5}
-        className="prep-jd-input"
-        placeholder="Paste the job description here…"
-        value={jdText}
-        onChange={(e) => setJdText(e.target.value)}
-      />
-      {/* The JD text isn't persisted with the artifact, so after a reload the
-          saved decode is showing but the box is empty — which reads as a
-          "Regenerate" button that's greyed out for no reason. Say why. */}
-      {content && !jdText.trim() && (
-        <p className="muted small">Paste the JD again to regenerate.</p>
+      {needsPaste && (
+        <textarea
+          rows={5}
+          className="prep-jd-input"
+          placeholder="Paste the job description here…"
+          value={jdText}
+          onChange={(e) => setJdText(e.target.value)}
+        />
       )}
       {content && (
         <>
@@ -263,7 +296,7 @@ export function DecodeSheet({ interviewId }: { interviewId: string }) {
 }
 
 export function HypeSheet({ interviewId }: { interviewId: string }) {
-  const { content, generatedAt, busy, error, run } = useSheet<HypeContent>("hype", interviewId, generateHype);
+  const { content, generatedAt, busy, error, run } = useSheet<HypeContent>("hype", interviewId, () => generateHype(interviewId));
 
   function copyMarkdown() {
     if (!content) return;

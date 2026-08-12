@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { extractRoleFromUrl, intakeRole, runJudge, submitApplication } from "../lib/api";
+import { decodeRole, extractRoleFromUrl, intakeRole, runJudge, submitApplication } from "../lib/api";
 import type { CareerTrajectory, GrowthStage } from "../lib/types";
 
 export default function AddRole({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
@@ -18,6 +18,10 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
   // read-only: requirements feed the fit judge, not a hand-edited field.
   const [requirements, setRequirements] = useState<string[]>([]);
   const [intakeNotes, setIntakeNotes] = useState("");
+  // The raw posting body the fetch pulled down. Not shown as a field — it's a
+  // wall of text — but stored on the posting so the JD decode has an input at
+  // intake and on every later re-run.
+  const [jdText, setJdText] = useState("");
   const [fetching, setFetching] = useState(false);
   const [fetchNote, setFetchNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,7 +36,7 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
     setError(null);
     setFetchNote(null);
     try {
-      const r = await extractRoleFromUrl(url);
+      const { role: r, jdText: fetched } = await extractRoleFromUrl(url);
       if (r.organization_name) setOrg(r.organization_name);
       if (r.title) setTitle(r.title);
       if (r.location) setLocation(r.location);
@@ -41,7 +45,11 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
       if (r.salary_max != null) setSalaryMax(String(r.salary_max));
       if (r.requirements?.length) setRequirements(r.requirements);
       if (r.notes) setIntakeNotes(r.notes);
-      setFetchNote("Fields filled from the posting — check them (especially salary) before saving.");
+      if (fetched) setJdText(fetched);
+      setFetchNote(
+        "Fields filled from the posting — check them (especially salary) before saving." +
+          (fetched ? " The full JD was captured too, so the decode runs on save." : ""),
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -65,6 +73,7 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
         salary_max: salaryMax === "" ? undefined : Number(salaryMax),
         requirements: requirements.length ? requirements : undefined,
         notes: intakeNotes || undefined,
+        jd_text: jdText || undefined,
         career_trajectory: (career || undefined) as CareerTrajectory | undefined,
         growth_stage: (growth || undefined) as GrowthStage | undefined,
         experience_alignment:
@@ -78,6 +87,16 @@ export default function AddRole({ onClose, onDone }: { onClose: () => void; onDo
       // resume exists yet the judge no-ops — the fit page button stays available.
       if (posting_id && fitNum === undefined) {
         runJudge(posting_id).catch(() => { /* no resumes / transient — judge on demand later */ });
+      }
+      // Decode the JD once, here. It's the "which competencies do I need stories
+      // for?" read, and it's most useful before anything is scheduled — which is
+      // why it moved off the per-round prep page (migration 026). Same
+      // fire-and-forget shape as the fit judge: intake must not block on a model
+      // call, and the artifact is keyed to the posting so this can only ever
+      // produce one decode per role. Needs the JD body — a walled page leaves
+      // jdText empty and the role page offers a paste box instead.
+      if (posting_id && jdText) {
+        decodeRole(posting_id).catch(() => { /* transient — the role page can re-run it */ });
       }
       onDone();
     } catch (e) {

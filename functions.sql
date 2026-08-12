@@ -761,6 +761,9 @@ $$;
 -- career_trajectory, growth_stage) so a role can be scored the moment it's intaked.
 -- They're optional — leave them null and set_priority_signals can fill them later.
 DROP FUNCTION IF EXISTS intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, text[], uuid);
+-- p_jd_text (026) is a trailing DEFAULT param, which OVERLOADS rather than
+-- replaces — leaving the old signature in place makes every call ambiguous.
+DROP FUNCTION IF EXISTS intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, numeric, text, text, text[], uuid);
 CREATE OR REPLACE FUNCTION intake_role(
     p_org_name text,
     p_title text,
@@ -780,7 +783,11 @@ CREATE OR REPLACE FUNCTION intake_role(
     p_career_trajectory text DEFAULT NULL,
     p_growth_stage text DEFAULT NULL,
     p_org_tags text[] DEFAULT ARRAY['employer-target'],
-    p_user_id uuid DEFAULT auth.uid()
+    p_user_id uuid DEFAULT auth.uid(),
+    -- The posting body, when the caller has it (intake-from-url fetches the
+    -- page anyway). Kept so the JD decode can run at intake and be re-run later
+    -- without asking for the text again — see get_decode_context.
+    p_jd_text text DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -815,7 +822,7 @@ BEGIN
         salary_min, salary_max, salary_currency,
         requirements, nice_to_haves, location, remote_policy,
         source, posted_date, closing_date, notes,
-        experience_alignment, career_trajectory, growth_stage
+        experience_alignment, career_trajectory, growth_stage, jd_text
     )
     VALUES (
         p_user_id, v_org_id, p_title, p_url,
@@ -823,7 +830,8 @@ BEGIN
         coalesce(p_requirements, '{}'), coalesce(p_nice_to_haves, '{}'),
         p_location, p_remote_policy,
         p_source, p_posted_date, p_closing_date, p_notes,
-        p_experience_alignment, p_career_trajectory, p_growth_stage
+        p_experience_alignment, p_career_trajectory, p_growth_stage,
+        nullif(btrim(p_jd_text), '')
     )
     RETURNING * INTO v_posting;
 
@@ -1074,7 +1082,14 @@ BEGIN
         rating           = COALESCE(p_rating, rating),
         feedback         = COALESCE(p_feedback, feedback),
         advance_decision = COALESCE(p_advance_decision, advance_decision),
-        decision_notes   = COALESCE(p_decision_notes, decision_notes)
+        decision_notes   = COALESCE(p_decision_notes, decision_notes),
+        -- A prior "reviewed, it's fine" only vouches for the verdict it was
+        -- given. Changing the verdict retires it, so reconciliation can judge
+        -- the new one on its merits (migration 026).
+        outcome_reviewed_at = CASE
+            WHEN p_advance_decision IS NOT NULL
+                 AND p_advance_decision IS DISTINCT FROM advance_decision
+            THEN NULL ELSE outcome_reviewed_at END
     WHERE id = p_interview_id
       AND user_id = p_user_id
     RETURNING * INTO v_interview;
@@ -1623,6 +1638,10 @@ AS $$
                        jp.salary_min, jp.salary_max, jp.requirements, jp.nice_to_haves,
                        jp.experience_alignment, jp.career_trajectory, jp.growth_stage,
                        jp.role_type, jp.closed_at, jp.closed_reason,
+                       -- The flag, not the body (migration 026): the role page
+                       -- needs to know whether the JD decode can run without a
+                       -- paste, and jd_text runs to tens of KB.
+                       jp.has_jd_text,
                        o.id AS organization_id, o.name AS organization_name
                 FROM job_postings jp
                 JOIN organizations o ON o.id = jp.organization_id
@@ -2432,7 +2451,7 @@ GRANT EXECUTE ON FUNCTION resolve_priority_weights(uuid)                       T
 GRANT EXECUTE ON FUNCTION get_priority_weights(uuid)                           TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_priority_weights(numeric, numeric, numeric, numeric, numeric, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_prioritized_roles(uuid, int, int, jsonb, int, int) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, numeric, text, text, text[], uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION intake_role(text, text, text, int, int, text, text[], text[], text, text, text, date, date, text, numeric, text, text, text[], uuid, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION submit_application(uuid, uuid, text, date, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION advance_application(uuid, text, date, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION set_priority_signals(uuid, numeric, text, text, uuid) TO authenticated, service_role;
@@ -2858,7 +2877,10 @@ BEGIN
                i.interviewer_contact_id,
                a.id AS application_id, a.job_posting_id, jp.title AS role_title,
                jp.organization_id, jp.growth_stage, o.name AS organization_name,
-               o.growth_signals, o.growth_rationale
+               o.growth_signals, o.growth_rationale,
+               -- The flag, not the body: the prep page only needs to know
+               -- whether the JD decode can run without a paste (migration 026).
+               jp.has_jd_text
         FROM interviews i
         JOIN applications a  ON a.id = i.application_id
         JOIN job_postings jp ON jp.id = a.job_posting_id
@@ -2881,7 +2903,8 @@ BEGIN
                     'application_id', iv.application_id,
                     'job_posting_id', iv.job_posting_id, 'title', iv.role_title,
                     'organization_id', iv.organization_id,
-                    'organization_name', iv.organization_name),
+                    'organization_name', iv.organization_name,
+                    'has_jd_text', iv.has_jd_text),
                 'company_intel', jsonb_build_object(
                     'growth_stage', iv.growth_stage,
                     'growth_signals', iv.growth_signals,
@@ -3295,6 +3318,15 @@ $$;
 -- upsert_story — title is the natural key, so re-running synthesis enriches
 -- the existing story instead of minting a near-duplicate. NULL leaves a field
 -- alone; an existing earned_secret or hand-tuned strength survives a re-run.
+--
+-- Since migration 026 the title match is ALIAS-AWARE: a story records the
+-- variant titles folded into it, and a write under one of those titles updates
+-- the story that absorbed it rather than resurrecting the variant. Without
+-- that, every consolidation run would be undone by the next synthesis writing
+-- its own title back.
+-- Signature grew in 026 (company/sharpen/is_anchor/aliases); drop the old one
+-- or the trailing defaults overload it into ambiguity.
+DROP FUNCTION IF EXISTS upsert_story(text, text, text, text, text, text, text, smallint, text, text[], text, uuid, uuid);
 CREATE OR REPLACE FUNCTION upsert_story(
     p_title text,
     p_competency text DEFAULT NULL,
@@ -3308,13 +3340,20 @@ CREATE OR REPLACE FUNCTION upsert_story(
     p_tags text[] DEFAULT NULL,
     p_source text DEFAULT 'manual',
     p_source_interview_id uuid DEFAULT NULL,
-    p_user_id uuid DEFAULT auth.uid()
+    p_user_id uuid DEFAULT auth.uid(),
+    p_company text DEFAULT NULL,
+    p_sharpen text DEFAULT NULL,
+    p_is_anchor boolean DEFAULT NULL,
+    -- Variant titles this write folds in. Merged into the stored set, never
+    -- replacing it: consolidation run two must not forget run one's merges.
+    p_aliases text[] DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_story coaching_stories;
+    v_target uuid;
 BEGIN
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'upsert_story: no user_id';
@@ -3323,13 +3362,48 @@ BEGIN
         RAISE EXCEPTION 'upsert_story: title is required';
     END IF;
 
+    -- Alias hit: this title was already absorbed by a keeper. Update the keeper
+    -- under ITS title and leave the alias set alone.
+    SELECT id INTO v_target
+    FROM coaching_stories
+    WHERE user_id = p_user_id
+      AND title <> btrim(p_title)
+      AND btrim(p_title) = ANY (aliases)
+    LIMIT 1;
+
+    IF v_target IS NOT NULL THEN
+        UPDATE coaching_stories SET
+            competency          = COALESCE(p_competency, competency),
+            situation           = COALESCE(p_situation, situation),
+            task                = COALESCE(p_task, task),
+            action              = COALESCE(p_action, action),
+            result              = COALESCE(p_result, result),
+            earned_secret       = COALESCE(p_earned_secret, earned_secret),
+            -- An anchor's hand-set strength is the candidate's own read; a
+            -- later synthesis doesn't get to overwrite it.
+            strength            = CASE WHEN is_anchor THEN COALESCE(strength, p_strength)
+                                       ELSE COALESCE(p_strength, strength) END,
+            best_for            = COALESCE(p_best_for, best_for),
+            tags                = COALESCE(p_tags, tags),
+            company             = COALESCE(p_company, company),
+            sharpen             = COALESCE(p_sharpen, sharpen),
+            source_interview_id = COALESCE(p_source_interview_id, source_interview_id)
+        WHERE id = v_target
+        RETURNING * INTO v_story;
+
+        RETURN jsonb_build_object('success', true, 'story', to_jsonb(v_story), 'matched_alias', true);
+    END IF;
+
     INSERT INTO coaching_stories (
         user_id, title, competency, situation, task, action, result,
-        earned_secret, strength, best_for, tags, source, source_interview_id)
+        earned_secret, strength, best_for, tags, source, source_interview_id,
+        company, sharpen, is_anchor, aliases)
     VALUES (
         p_user_id, btrim(p_title), p_competency, p_situation, p_task, p_action,
         p_result, p_earned_secret, p_strength, p_best_for, p_tags,
-        COALESCE(p_source, 'manual'), p_source_interview_id)
+        COALESCE(p_source, 'manual'), p_source_interview_id,
+        p_company, p_sharpen, COALESCE(p_is_anchor, false),
+        COALESCE(p_aliases, '{}'))
     ON CONFLICT (user_id, title) DO UPDATE SET
         competency          = COALESCE(EXCLUDED.competency, coaching_stories.competency),
         situation           = COALESCE(EXCLUDED.situation, coaching_stories.situation),
@@ -3337,13 +3411,160 @@ BEGIN
         action              = COALESCE(EXCLUDED.action, coaching_stories.action),
         result              = COALESCE(EXCLUDED.result, coaching_stories.result),
         earned_secret       = COALESCE(EXCLUDED.earned_secret, coaching_stories.earned_secret),
-        strength            = COALESCE(EXCLUDED.strength, coaching_stories.strength),
+        strength            = CASE WHEN coaching_stories.is_anchor
+                                     THEN COALESCE(coaching_stories.strength, EXCLUDED.strength)
+                                   ELSE COALESCE(EXCLUDED.strength, coaching_stories.strength) END,
         best_for            = COALESCE(EXCLUDED.best_for, coaching_stories.best_for),
         tags                = COALESCE(EXCLUDED.tags, coaching_stories.tags),
+        company             = COALESCE(EXCLUDED.company, coaching_stories.company),
+        sharpen             = COALESCE(EXCLUDED.sharpen, coaching_stories.sharpen),
+        -- Anchor status is sticky once set: a synthesis writing to an anchor
+        -- title must not demote it back to an ordinary story.
+        is_anchor           = coaching_stories.is_anchor OR EXCLUDED.is_anchor,
+        -- Union, and never absorb your own title.
+        aliases             = ARRAY(
+                                  SELECT DISTINCT a
+                                  FROM unnest(coaching_stories.aliases || EXCLUDED.aliases) AS a
+                                  WHERE a <> coaching_stories.title
+                              ),
         source_interview_id = COALESCE(EXCLUDED.source_interview_id, coaching_stories.source_interview_id)
     RETURNING * INTO v_story;
 
     RETURN jsonb_build_object('success', true, 'story', to_jsonb(v_story));
+END;
+$$;
+
+-- merge_stories — fold reviewed duplicates into one keeper. The consolidation
+-- flow proposes; this is what executes an accepted proposal.
+--
+-- Deliberately additive on the keeper: a merged story's field only lands where
+-- the keeper's is empty, so accepting a merge can never blank a better version
+-- of a sentence the keeper already had. The merged titles become aliases, which
+-- is what stops a later synthesis re-creating them (see upsert_story).
+CREATE OR REPLACE FUNCTION merge_stories(
+    p_keep_id uuid,
+    p_merge_ids uuid[],
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_keeper coaching_stories;
+    v_absorbed text[];
+    v_uses integer;
+    v_last timestamptz;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'merge_stories: no user_id';
+    END IF;
+
+    SELECT * INTO v_keeper FROM coaching_stories
+    WHERE id = p_keep_id AND user_id = p_user_id;
+    IF v_keeper.id IS NULL THEN
+        RAISE EXCEPTION 'merge_stories: keeper % not found or not owned', p_keep_id;
+    END IF;
+
+    -- Titles + aliases of everything being folded in, so a variant that was
+    -- itself a merge keeper doesn't lose the names it had already absorbed.
+    SELECT COALESCE(array_agg(DISTINCT t), '{}')
+    INTO v_absorbed
+    FROM (
+        SELECT title AS t FROM coaching_stories
+        WHERE user_id = p_user_id AND id = ANY (p_merge_ids) AND id <> p_keep_id
+        UNION
+        SELECT unnest(aliases) FROM coaching_stories
+        WHERE user_id = p_user_id AND id = ANY (p_merge_ids) AND id <> p_keep_id
+    ) x;
+
+    -- Telling any variant counts as telling the story; the rotation signal
+    -- would otherwise reset to "never told" the moment duplicates collapse.
+    SELECT COALESCE(sum(use_count), 0), max(last_used_at)
+    INTO v_uses, v_last
+    FROM coaching_stories
+    WHERE user_id = p_user_id AND id = ANY (p_merge_ids) AND id <> p_keep_id;
+
+    UPDATE coaching_stories k SET
+        competency    = COALESCE(k.competency, m.competency),
+        situation     = COALESCE(k.situation, m.situation),
+        task          = COALESCE(k.task, m.task),
+        action        = COALESCE(k.action, m.action),
+        result        = COALESCE(k.result, m.result),
+        earned_secret = COALESCE(k.earned_secret, m.earned_secret),
+        best_for      = COALESCE(k.best_for, m.best_for),
+        company       = COALESCE(k.company, m.company),
+        sharpen       = COALESCE(k.sharpen, m.sharpen),
+        -- Best-of, not keeper-wins: if a variant was scored higher, that's the
+        -- score for the merged story. 0 is the "nobody scored it" sentinel and
+        -- goes back to NULL.
+        strength      = NULLIF(GREATEST(COALESCE(k.strength, 0), COALESCE(m.strength, 0)), 0)::smallint,
+        use_count     = k.use_count + COALESCE(v_uses, 0),
+        last_used_at  = GREATEST(k.last_used_at, v_last),
+        aliases       = ARRAY(
+                            SELECT DISTINCT a FROM unnest(k.aliases || v_absorbed) AS a
+                            WHERE a <> k.title
+                        )
+    FROM (
+        SELECT max(competency) AS competency, max(situation) AS situation,
+               max(task) AS task, max(action) AS action, max(result) AS result,
+               max(earned_secret) AS earned_secret, max(best_for) AS best_for,
+               max(company) AS company, max(sharpen) AS sharpen,
+               max(strength) AS strength
+        FROM coaching_stories
+        WHERE user_id = p_user_id AND id = ANY (p_merge_ids) AND id <> p_keep_id
+    ) m
+    WHERE k.id = p_keep_id
+    RETURNING k.* INTO v_keeper;
+
+    DELETE FROM coaching_stories
+    WHERE user_id = p_user_id AND id = ANY (p_merge_ids) AND id <> p_keep_id;
+
+    RETURN jsonb_build_object(
+        'success', true, 'story', to_jsonb(v_keeper), 'absorbed', to_jsonb(v_absorbed));
+END;
+$$;
+
+-- set_story_anchors — declare the stories you keep coming back to.
+--
+-- An anchor is a title the candidate named themselves. Consolidation merges
+-- variants INTO anchors and never merges an anchor away, so the library ends up
+-- filed under the candidate's own names instead of whichever title a model
+-- invented on the last run. Anchors that don't exist yet are created as empty
+-- shells — a titled gap in the library is more useful than a missing row,
+-- because it tells consolidation what to go looking for.
+CREATE OR REPLACE FUNCTION set_story_anchors(
+    p_titles text[],
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_title text;
+    v_set int := 0;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'set_story_anchors: no user_id';
+    END IF;
+
+    FOREACH v_title IN ARRAY COALESCE(p_titles, '{}')
+    LOOP
+        CONTINUE WHEN COALESCE(btrim(v_title), '') = '';
+        -- Alias-aware, same reason as upsert_story: naming an anchor whose
+        -- title was already absorbed should promote the keeper, not resurrect
+        -- the variant as a second row.
+        UPDATE coaching_stories SET is_anchor = true
+        WHERE user_id = p_user_id AND btrim(v_title) = ANY (aliases);
+
+        IF NOT FOUND THEN
+            INSERT INTO coaching_stories (user_id, title, source, is_anchor)
+            VALUES (p_user_id, btrim(v_title), 'manual', true)
+            ON CONFLICT (user_id, title) DO UPDATE SET is_anchor = true;
+        END IF;
+        v_set := v_set + 1;
+    END LOOP;
+
+    RETURN jsonb_build_object('success', true, 'anchors', v_set);
 END;
 $$;
 
@@ -3554,12 +3775,19 @@ $$;
 
 -- save_coaching_artifact / get_coaching_artifact — the ported command stages
 -- (concerns, questions_to_ask, hype, progress, decode) all persist through here.
+--
+-- Three scopes since migration 026, and a row has exactly one:
+--   p_interview_id     per-round      concerns, questions_to_ask, hype
+--   p_job_posting_id   per-role       decode
+--   neither            per-candidate  progress
+DROP FUNCTION IF EXISTS save_coaching_artifact(text, jsonb, uuid, text, uuid);
 CREATE OR REPLACE FUNCTION save_coaching_artifact(
     p_kind text,
     p_content jsonb,
     p_interview_id uuid DEFAULT NULL,
     p_model text DEFAULT NULL,
-    p_user_id uuid DEFAULT auth.uid()
+    p_user_id uuid DEFAULT auth.uid(),
+    p_job_posting_id uuid DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -3570,10 +3798,15 @@ BEGIN
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'save_coaching_artifact: no user_id';
     END IF;
+    IF p_interview_id IS NOT NULL AND p_job_posting_id IS NOT NULL THEN
+        RAISE EXCEPTION 'save_coaching_artifact: an artifact is scoped to a round OR a posting, not both';
+    END IF;
 
-    INSERT INTO coaching_artifacts (user_id, interview_id, kind, content, model)
-    VALUES (p_user_id, p_interview_id, p_kind, p_content, p_model)
-    ON CONFLICT (user_id, kind, COALESCE(interview_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    INSERT INTO coaching_artifacts (user_id, interview_id, job_posting_id, kind, content, model)
+    VALUES (p_user_id, p_interview_id, p_job_posting_id, p_kind, p_content, p_model)
+    ON CONFLICT (user_id, kind,
+                 COALESCE(interview_id,   '00000000-0000-0000-0000-000000000000'::uuid),
+                 COALESCE(job_posting_id, '00000000-0000-0000-0000-000000000000'::uuid))
     DO UPDATE SET
         content = EXCLUDED.content,
         model = EXCLUDED.model,
@@ -3584,10 +3817,12 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS get_coaching_artifact(text, uuid, uuid);
 CREATE OR REPLACE FUNCTION get_coaching_artifact(
     p_kind text,
     p_interview_id uuid DEFAULT NULL,
-    p_user_id uuid DEFAULT auth.uid()
+    p_user_id uuid DEFAULT auth.uid(),
+    p_job_posting_id uuid DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -3604,7 +3839,367 @@ BEGIN
             SELECT to_jsonb(a) FROM coaching_artifacts a
             WHERE a.user_id = p_user_id AND a.kind = p_kind
               AND COALESCE(a.interview_id, '00000000-0000-0000-0000-000000000000'::uuid)
-                  = COALESCE(p_interview_id, '00000000-0000-0000-0000-000000000000'::uuid)))
+                  = COALESCE(p_interview_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              AND COALESCE(a.job_posting_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE(p_job_posting_id, '00000000-0000-0000-0000-000000000000'::uuid)))
+    );
+END;
+$$;
+
+-- get_decode_context — everything the decode stage needs, keyed to the POSTING.
+--
+-- decode used to route through get_interview_prep_session, which meant it
+-- couldn't run until a round was on the calendar and a prep session had been
+-- started. A job description is readable the moment the role is intaked, which
+-- is when it's actually useful — it tells you which stories to go build, and
+-- that's upstream of scheduling anything. Hence a posting-scoped read.
+--
+-- `jd_text` is the stored posting body (migration 026). NULL means intake never
+-- captured it — the caller falls back to a pasted JD, and the role page shows a
+-- paste box instead of a Generate button.
+CREATE OR REPLACE FUNCTION get_decode_context(
+    p_job_posting_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v jsonb;
+BEGIN
+    PERFORM assert_self(p_user_id);
+
+    SELECT jsonb_build_object(
+        'success', true,
+        'posting', jsonb_build_object(
+            'id', jp.id,
+            'title', jp.title,
+            'url', jp.url,
+            'organization_id', jp.organization_id,
+            'organization_name', o.name,
+            'location', jp.location,
+            'remote_policy', jp.remote_policy,
+            'requirements', COALESCE(jp.requirements, '{}'),
+            'nice_to_haves', COALESCE(jp.nice_to_haves, '{}'),
+            'notes', jp.notes,
+            'jd_text', jp.jd_text,
+            'role_type', jp.role_type,
+            'experience_alignment', jp.experience_alignment,
+            'closed_at', jp.closed_at
+        ),
+        'company_intel', jsonb_build_object(
+            'growth_stage', jp.growth_stage,
+            'growth_signals', o.growth_signals
+        ),
+        -- The stored fit eval, when judge-fit has run. decode's job is coverage
+        -- against the storybank, but the spikes/gaps read is the same JD seen
+        -- from the résumé side and it keeps the two from contradicting.
+        'fit', (
+            SELECT jsonb_build_object(
+                'alignment', rf.alignment, 'summary', rf.summary,
+                'spikes', rf.spikes, 'gaps', rf.gaps, 'resume_label', r.label)
+            FROM role_fit rf
+            JOIN resumes r ON r.id = rf.resume_id
+            WHERE rf.job_posting_id = jp.id
+            ORDER BY rf.alignment DESC NULLS LAST
+            LIMIT 1
+        )
+    )
+    INTO v
+    FROM job_postings jp
+    JOIN organizations o ON o.id = jp.organization_id
+    WHERE jp.id = p_job_posting_id AND jp.user_id = p_user_id;
+
+    IF v IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'posting not found');
+    END IF;
+    RETURN v;
+END;
+$$;
+
+-- set_posting_jd_text — keep the JD body decode read, so a re-run doesn't need
+-- the paste box again. Written by intake (via intake_role) or by hand.
+CREATE OR REPLACE FUNCTION set_posting_jd_text(
+    p_job_posting_id uuid,
+    p_jd_text text,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_posting job_postings;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'set_posting_jd_text: no user_id';
+    END IF;
+
+    UPDATE job_postings
+    SET jd_text = NULLIF(btrim(p_jd_text), '')
+    WHERE id = p_job_posting_id AND user_id = p_user_id
+    RETURNING * INTO v_posting;
+
+    IF v_posting.id IS NULL THEN
+        RAISE EXCEPTION 'set_posting_jd_text: posting % not found or not owned', p_job_posting_id;
+    END IF;
+    RETURN jsonb_build_object('success', true, 'posting', to_jsonb(v_posting));
+END;
+$$;
+
+-- ============================================================================
+-- Story consolidation (migration 026)
+-- ============================================================================
+-- get_story_consolidation_input — every scrap of story material the candidate
+-- has, in one read, so the consolidation stage can cluster across ALL of it at
+-- once rather than a session at a time.
+--
+-- Two sources, and the asymmetry is the point:
+--   * coaching_stories — the durable library. Anchors first: these are the
+--     titles the candidate named, and consolidation merges INTO them.
+--   * interview_prep_sessions.synthesis->'stories' — where the material
+--     actually is. Each session invented its own title for the same underlying
+--     story, which is why "Steerage Metric Definition → Changed Product
+--     Experimentation" and "Steerage metric at Garner" are the same story and
+--     nothing in the schema knows it.
+--
+-- Deliberately NOT a rollup by employer (that's get_story_cheat_sheet). The
+-- clustering has to see every telling of one story side by side, so the flat
+-- list carries its provenance instead of being grouped by it.
+CREATE OR REPLACE FUNCTION get_story_consolidation_input(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN jsonb_build_object(
+        'success', true,
+        'anchors', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'id', s.id, 'title', s.title, 'competency', s.competency,
+                'company', s.company, 'strength', s.strength,
+                'has_star', (s.situation IS NOT NULL AND s.action IS NOT NULL),
+                'aliases', s.aliases
+            ) ORDER BY s.title), '[]'::jsonb)
+            FROM coaching_stories s
+            WHERE s.user_id = p_user_id AND s.is_anchor
+        ),
+        'banked', (
+            SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.is_anchor DESC, s.strength DESC NULLS LAST), '[]'::jsonb)
+            FROM coaching_stories s
+            WHERE s.user_id = p_user_id
+        ),
+        'synthesized', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'interview_id', i.id,
+                'interview_type', i.interview_type,
+                'scheduled_at', i.scheduled_at,
+                'organization_name', o.name,
+                'role_title', jp.title,
+                'synthesized_at', s.synthesized_at,
+                'story', st
+            ) ORDER BY s.synthesized_at DESC), '[]'::jsonb)
+            FROM interview_prep_sessions s
+            JOIN interviews i     ON i.id = s.interview_id
+            JOIN applications a   ON a.id = i.application_id
+            JOIN job_postings jp  ON jp.id = a.job_posting_id
+            JOIN organizations o  ON o.id = jp.organization_id
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.synthesis->'stories', '[]'::jsonb)) AS st
+            WHERE s.user_id = p_user_id
+              AND i.category = 'interview'
+              AND s.synthesis IS NOT NULL
+        )
+    );
+END;
+$$;
+
+-- ============================================================================
+-- Outcome reconciliation (T-outcomes)
+-- ============================================================================
+-- mark_outcome_reviewed — "I checked this round and the record is right."
+--
+-- The escape hatch that keeps reconciliation honest. A round can have gone well
+-- and the loop still die (budget pulled, req closed, internal promotion), in
+-- which case 'advance' on the round and 'rejected' on the application are both
+-- true. Without this the row would sit at the top of the reconcile list forever
+-- and the only way to clear it would be to record a loss that never happened.
+CREATE OR REPLACE FUNCTION mark_outcome_reviewed(
+    p_interview_id uuid,
+    p_note text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_interview interviews;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'mark_outcome_reviewed: no user_id';
+    END IF;
+
+    UPDATE interviews
+    SET outcome_reviewed_at = now(),
+        -- Why it was left alone is worth keeping: in six months "advance on a
+        -- rejected app" reads as a mistake again unless the reason is written
+        -- down. Appended, never overwriting an existing debrief note.
+        decision_notes = CASE
+            WHEN COALESCE(btrim(p_note), '') = '' THEN decision_notes
+            WHEN decision_notes IS NULL OR btrim(decision_notes) = '' THEN btrim(p_note)
+            ELSE decision_notes || ' · ' || btrim(p_note) END
+    WHERE id = p_interview_id AND user_id = p_user_id
+    RETURNING * INTO v_interview;
+
+    IF v_interview.id IS NULL THEN
+        RAISE EXCEPTION 'mark_outcome_reviewed: interview % not found or not owned', p_interview_id;
+    END IF;
+    RETURN jsonb_build_object('success', true, 'interview', to_jsonb(v_interview));
+END;
+$$;
+
+-- get_outcome_reconciliation — the rounds whose recorded verdict contradicts
+-- what actually happened to the application.
+--
+-- Why this exists: `advance_decision` gets set in the moment, optimistically —
+-- "they're moving me forward" is true when you write it and false three weeks
+-- later when the loop dies. Nothing ever went back and corrected it, so the
+-- pass rate reads far higher than reality (advance rounds pile up under
+-- applications that ended in a rejection) and the "where do I lose?" cut points
+-- at the wrong round.
+--
+-- Two kinds of disagreement, both surfaced, neither auto-applied — a round can
+-- genuinely have gone well and the loop still die for budget or headcount
+-- reasons, and asserting otherwise would put a false loss in the data:
+--
+--   contradicted — the app is terminal (rejected/withdrawn/closed) but this,
+--                  its furthest round, still says 'advance'. The suggestion is
+--                  the app's own terminal status.
+--   undecided    — a completed round carrying 'hold' or no decision at all.
+--                  It sits outside every rate until it's resolved. Where the
+--                  app has since gone terminal, that's the suggestion; where
+--                  the app is still live, there's no suggestion to make and the
+--                  round is simply flagged as owed.
+--
+-- Ranked worst-first: contradictions distort the metrics more than blanks do.
+CREATE OR REPLACE FUNCTION get_outcome_reconciliation(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_rows jsonb;
+BEGIN
+    PERFORM assert_self(p_user_id);
+
+    WITH rounds AS (
+        SELECT i.id, i.interview_type, i.scheduled_at, i.rating, i.feedback,
+               i.advance_decision, i.decision_notes,
+               a.id AS application_id, a.status AS app_status,
+               jp.id AS job_posting_id, jp.title AS role_title,
+               o.id AS organization_id, o.name AS organization_name,
+               -- Loop position, same ranking lib/rounds.ts uses. The furthest
+               -- round is the one whose verdict should match the outcome; an
+               -- 'advance' on an early round under a rejected app is just
+               -- history, not a contradiction.
+               COALESCE(CASE i.interview_type
+                   WHEN 'phone_screen'  THEN 1
+                   WHEN 'technical'     THEN 2
+                   WHEN 'behavioral'    THEN 2
+                   WHEN 'system_design' THEN 2
+                   WHEN 'hiring_manager' THEN 3
+                   WHEN 'team'          THEN 4
+                   WHEN 'final'         THEN 5
+                   ELSE 0 END, 0) AS round_rank
+        FROM interviews i
+        JOIN applications a  ON a.id = i.application_id
+        JOIN job_postings jp ON jp.id = a.job_posting_id
+        JOIN organizations o ON o.id = jp.organization_id
+        WHERE i.user_id = p_user_id
+          AND i.category = 'interview'
+          AND i.status = 'completed'
+          -- Already reviewed and left as-is: the loop died for reasons that
+          -- weren't this round, so the record is correct and re-flagging it
+          -- would only pressure the user into writing a loss that didn't
+          -- happen. complete_interview clears the stamp if the decision
+          -- actually changes, so a later edit re-enters the flow.
+          AND i.outcome_reviewed_at IS NULL
+    ),
+    ranked AS (
+        SELECT r.*,
+               row_number() OVER (
+                   PARTITION BY r.application_id
+                   ORDER BY r.round_rank DESC, r.scheduled_at DESC NULLS LAST
+               ) = 1 AS is_furthest
+        FROM rounds r
+    ),
+    flagged AS (
+        SELECT ranked.*,
+            CASE
+                WHEN app_status IN ('rejected', 'withdrawn', 'closed')
+                     AND advance_decision = 'advance'
+                     AND is_furthest
+                THEN 'contradicted'
+                WHEN advance_decision IS NULL OR advance_decision = 'hold'
+                THEN 'undecided'
+            END AS issue,
+            CASE
+                WHEN app_status = 'rejected'  THEN 'rejected'
+                WHEN app_status = 'withdrawn' THEN 'withdraw'
+                -- 'closed' means the ROLE went away, not that they passed on
+                -- her. Withdraw is the honest verdict — it wasn't a decision
+                -- about the candidate, so it must stay out of the loss column.
+                WHEN app_status = 'closed'    THEN 'withdraw'
+            END AS suggested_decision
+        FROM ranked
+    )
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'interview_id', id,
+        'interview_type', interview_type,
+        'scheduled_at', scheduled_at,
+        'rating', rating,
+        'feedback', feedback,
+        'advance_decision', advance_decision,
+        'decision_notes', decision_notes,
+        'application_id', application_id,
+        'app_status', app_status,
+        'job_posting_id', job_posting_id,
+        'role_title', role_title,
+        'organization_id', organization_id,
+        'organization_name', organization_name,
+        'is_furthest_round', is_furthest,
+        'issue', issue,
+        'suggested_decision', suggested_decision
+    ) ORDER BY
+        -- contradictions first, then rounds with a suggestion to accept, then
+        -- the merely-blank ones; newest within each tier.
+        CASE issue WHEN 'contradicted' THEN 0 ELSE 1 END,
+        CASE WHEN suggested_decision IS NULL THEN 1 ELSE 0 END,
+        scheduled_at DESC NULLS LAST
+    ), '[]'::jsonb)
+    INTO v_rows
+    FROM flagged
+    WHERE issue IS NOT NULL;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'rows', v_rows,
+        'contradicted', (SELECT count(*) FROM jsonb_array_elements(v_rows) e
+                         WHERE e->>'issue' = 'contradicted'),
+        'undecided',    (SELECT count(*) FROM jsonb_array_elements(v_rows) e
+                         WHERE e->>'issue' = 'undecided'),
+        'actionable',   (SELECT count(*) FROM jsonb_array_elements(v_rows) e
+                         WHERE e->>'suggested_decision' IS NOT NULL)
     );
 END;
 $$;
@@ -3673,15 +4268,22 @@ $$;
 GRANT EXECUTE ON FUNCTION get_coaching_profile(uuid)                                          TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION save_coaching_profile(text, text[], text, smallint, text, date, text, text, text, text, jsonb, jsonb, smallint, jsonb, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION list_stories(text, uuid)                                            TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION upsert_story(text, text, text, text, text, text, text, smallint, text, text[], text, uuid, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION upsert_story(text, text, text, text, text, text, text, smallint, text, text[], text, uuid, uuid, text, text, boolean, text[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION delete_story(uuid, uuid)                                            TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION mark_story_used(uuid, uuid)                                         TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION record_coaching_score(text, uuid, text, smallint, smallint, smallint, smallint, smallint, smallint, text, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_score_history(integer, uuid)                                    TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION record_interview_question(text, uuid, uuid, text, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_question_bank(uuid, integer, uuid)                              TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION save_coaching_artifact(text, jsonb, uuid, text, uuid)               TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION get_coaching_artifact(text, uuid, uuid)                             TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_coaching_artifact(text, jsonb, uuid, text, uuid, uuid)         TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_coaching_artifact(text, uuid, uuid, uuid)                       TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION merge_stories(uuid, uuid[], uuid)                                   TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION set_story_anchors(text[], uuid)                                     TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_story_consolidation_input(uuid)                                 TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_decode_context(uuid, uuid)                                      TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION set_posting_jd_text(uuid, text, uuid)                               TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_outcome_reconciliation(uuid)                                    TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION mark_outcome_reviewed(uuid, text, uuid)                              TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION get_coaching_context(uuid, uuid)                                    TO authenticated, service_role;
 
 
@@ -3707,5 +4309,8 @@ REVOKE EXECUTE ON FUNCTION get_coaching_profile(uuid)                    FROM PU
 REVOKE EXECUTE ON FUNCTION list_stories(text, uuid)                      FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION get_score_history(integer, uuid)              FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION get_question_bank(uuid, integer, uuid)        FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION get_coaching_artifact(text, uuid, uuid)       FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_coaching_artifact(text, uuid, uuid, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_story_consolidation_input(uuid)            FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_decode_context(uuid, uuid)                 FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_outcome_reconciliation(uuid)               FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION get_coaching_context(uuid, uuid)              FROM PUBLIC;

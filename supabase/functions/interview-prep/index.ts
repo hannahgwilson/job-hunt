@@ -34,7 +34,16 @@
  *   questions   — questions to ask, tailored to who's in the room.
  *   hype        — pre-interview 3x3 and pre-mortem.
  *   progress    — trend review across rounds (candidate-scoped, no interview_id).
- *   decode      — JD competency extraction and storybank coverage.
+ *   decode      — JD competency extraction and storybank coverage. Scoped to the
+ *                 POSTING (job_posting_id), not the round: a job description
+ *                 belongs to the role, so this runs once at intake instead of
+ *                 once per round with a manual JD paste each time.
+ *   consolidate_stories
+ *               — folds every telling of a story across all prep syntheses into
+ *                 one library entry, best-of per STAR component. Candidate-
+ *                 scoped, and the only stage that PROPOSES rather than
+ *                 persists — a bad merge loses the one telling that had the
+ *                 number in it, so the client applies what's accepted.
  *
  * Coach guidance comes from ./coach-bundle.ts, compiled from the skill repo by
  * dev/build_coach_bundle.mjs. It's the stable half of every system prompt and
@@ -431,6 +440,94 @@ const PROGRESS_TOOL = {
   },
 };
 
+const CONSOLIDATE_TOOL = {
+  name: "report_consolidation",
+  description:
+    "Cluster every telling of the candidate's stories into one entry per underlying story, pick the best version of " +
+    "each STAR component across the variants, and say what's still missing. One cluster per real story — not per " +
+    "title you were given.",
+  input_schema: {
+    type: "object",
+    properties: {
+      clusters: {
+        type: "array",
+        description:
+          "One entry per underlying story. A story told four times across four prep sessions is ONE cluster with " +
+          "four variant titles, not four clusters.",
+        items: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description:
+                "The anchor title if this story matches one of the candidate's anchors — reuse it EXACTLY, " +
+                "character for character. Only invent a title for a story that matches no anchor.",
+            },
+            matches_anchor: {
+              type: "boolean",
+              description: "True when `title` is one of the anchor titles supplied in the context.",
+            },
+            company: { type: "string", description: "The employer the story happened at, e.g. 'Oscar' or 'Garner'." },
+            competency: {
+              type: "string",
+              description: "The single competency this is the strongest answer for — how it gets found under pressure.",
+            },
+            best_for: { type: "string", description: "Secondary competencies / question types it also answers." },
+            variant_titles: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Every title this story has previously been filed under, copied EXACTLY as given. These become " +
+                "aliases, so a typo here resurrects a duplicate later.",
+            },
+            situation: { type: "string", description: "The best situation across the variants — stakes visible, no preamble." },
+            task: { type: "string", description: "What the candidate specifically owned. Not what the team owned." },
+            action: { type: "string", description: "The best action across the variants — the actual mechanism, decisions and tradeoffs included." },
+            result: { type: "string", description: "The best result across the variants. Quantified if ANY variant quantified it — carry the number over." },
+            earned_secret: {
+              type: "string",
+              description:
+                "The insight only this candidate could have, from having lived it. Omit rather than invent: an " +
+                "absent secret is the finding, and a manufactured one fails the moment it's probed.",
+            },
+            strength: {
+              type: "integer",
+              minimum: 1,
+              maximum: 5,
+              description:
+                "How strong the CONSOLIDATED story is: 5 = quantified, differentiated, ready to tell. 3 = complete " +
+                "but interchangeable. Do not inflate because several variants exist — four vague tellings is still vague.",
+            },
+            sharpen: {
+              type: "string",
+              description:
+                "The one thing to fix before telling it. Usually a missing number. Omit only if it's genuinely ready.",
+            },
+            source_note: {
+              type: "string",
+              description: "Where the material came from, e.g. 'merged from 3 Cityblock/EvolutionIQ syntheses'.",
+            },
+          },
+          required: ["title", "matches_anchor", "competency", "variant_titles", "strength"],
+        },
+      },
+      unmatched_anchors: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Anchor titles with no material anywhere in the input. These are the stories the candidate says they tell " +
+          "but has never written down — the highest-value gap in the library.",
+      },
+      coverage_notes: {
+        type: "array",
+        items: { type: "string" },
+        description: "What the consolidated library is thin on: competencies with no strong story, over-reliance on one employer, stale material.",
+      },
+    },
+    required: ["clusters"],
+  },
+};
+
 const DECODE_TOOL = {
   name: "report_decode",
   description:
@@ -499,6 +596,27 @@ type PrepContext = {
   session: Session | null;
 };
 
+/** get_decode_context — the posting-scoped read behind `decode`. */
+type DecodeContext = {
+  success: boolean;
+  error?: string;
+  posting: {
+    id: string;
+    title: string;
+    organization_name: string;
+    location: string | null;
+    remote_policy: string | null;
+    requirements: string[] | null;
+    nice_to_haves: string[] | null;
+    notes: string | null;
+    /** The stored posting body. Null when intake never captured it. */
+    jd_text: string | null;
+    role_type: string | null;
+  };
+  company_intel: { growth_stage: string | null } | null;
+  fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null } | null;
+};
+
 type CoachStory = {
   id: string;
   title: string;
@@ -557,6 +675,32 @@ function contextSeed(ctx: PrepContext): string {
     parts.push(`Notes captured when the round was scheduled:\n${ctx.interview.notes}`);
   }
   if (ctx.session?.intake_notes) parts.push(`What the candidate says this interview covers:\n${ctx.session.intake_notes}`);
+  return parts.join("\n");
+}
+
+/**
+ * The posting-scoped seed, for the stages that run before any round exists.
+ *
+ * decode used to build its prompt from PrepContext, which meant it couldn't run
+ * until a round was scheduled and a prep session started. A job description is
+ * decodable the moment the role is intaked — which is when it's useful, because
+ * it tells you which stories to go build.
+ */
+function postingSeed(ctx: DecodeContext): string {
+  const p = ctx.posting;
+  const parts: string[] = [`Role: ${p.title} @ ${p.organization_name}`];
+  if (p.location || p.remote_policy) {
+    parts.push(`Location: ${[p.location, p.remote_policy].filter(Boolean).join(" · ")}`);
+  }
+  if (p.role_type) parts.push(`Role track (judged from the JD): ${p.role_type}`);
+  if (ctx.company_intel?.growth_stage) parts.push(`Company stage: ${ctx.company_intel.growth_stage}`);
+  // The résumé-side read of the same JD. Included so decode's coverage verdict
+  // and the fit panel's spikes/gaps don't contradict each other on one screen.
+  if (ctx.fit?.summary) parts.push(`Candidate fit summary: ${ctx.fit.summary}`);
+  if (ctx.fit?.spikes?.length) parts.push(`Candidate strengths: ${ctx.fit.spikes.join("; ")}`);
+  if (ctx.fit?.gaps?.length) parts.push(`Candidate gaps: ${ctx.fit.gaps.join("; ")}`);
+  if (p.requirements?.length) parts.push(`Requirements captured at intake: ${p.requirements.join("; ")}`);
+  if (p.notes) parts.push(`Intake notes:\n${p.notes}`);
   return parts.join("\n");
 }
 
@@ -745,9 +889,13 @@ async function critiqueAnswer(
 }
 
 /**
- * The five ported command stages all have the same shape: one forced-tool call
- * over the prep + coaching context, persisted as a coaching_artifact. Only the
- * persona, tool, and fragment set differ.
+ * The ported command stages: one forced-tool call over the prep + coaching
+ * context, persisted as a coaching_artifact. Only the persona, tool, and
+ * fragment set differ.
+ *
+ * `decode` and `progress` keep their entries here for the persona/tool/budget
+ * but are dispatched separately — they're scoped to a posting and to the
+ * candidate respectively, so neither goes through the per-round prep session.
  */
 // `kind` is the coaching_artifacts value and is NOT always the stage name:
 // the stage keeps the skill's command name (`questions`) while the stored kind
@@ -837,14 +985,20 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceKey);
 
-    const { interview_id, stage, action, message, draft_answer, jd_text } = await req.json();
+    const { interview_id, stage, action, message, draft_answer, jd_text, job_posting_id } = await req.json();
     if (!stage) return json({ success: false, error: "stage required" }, 400);
 
-    // `progress` is candidate-scoped — it reviews the whole search, not one
-    // round — so it's the one stage that runs without an interview_id.
-    const needsInterview = stage !== "progress";
+    // Three scopes, and only the per-round one needs an interview_id:
+    //   per-candidate  progress, consolidate_stories  — reviews the whole search
+    //   per-role       decode                         — a JD belongs to a posting
+    //   per-round      everything else
+    const SCOPELESS = ["progress", "consolidate_stories"];
+    const needsInterview = !SCOPELESS.includes(stage) && stage !== "decode";
     if (needsInterview && !interview_id) {
       return json({ success: false, error: "interview_id required" }, 400);
+    }
+    if (stage === "decode" && !job_posting_id) {
+      return json({ success: false, error: "decode needs a job_posting_id — it's scoped to the role, not the round" }, 400);
     }
 
     // The coaching layer is loaded for every stage; it's the whole point.
@@ -888,6 +1042,197 @@ Deno.serve(async (req) => {
       });
       if (saveErr) throw saveErr;
       return json(saved);
+    }
+
+    // ---- decode: per-ROLE, so it runs at intake, before any round exists ----
+    // Once per job by construction: the artifact is keyed on the posting
+    // (migration 026), so a second call overwrites rather than adding a row —
+    // and the caller checks for an existing one before spending the tokens.
+    if (stage === "decode") {
+      const cfg = ARTIFACT_STAGES.decode;
+      const { data: dctx, error: dErr } = await admin.rpc("get_decode_context", {
+        p_job_posting_id: job_posting_id,
+        p_user_id: userId,
+      });
+      if (dErr) throw dErr;
+      const decodeCtx = dctx as DecodeContext;
+      if (!decodeCtx?.success) return json({ success: false, error: decodeCtx?.error ?? "posting not found" }, 404);
+
+      // Prefer the JD the caller passed (a fresh paste is more current than a
+      // stored one), then the body intake captured. Requirements alone are too
+      // thin: decode's whole job is reading the wording, and a bullet list
+      // compressed at intake has already lost it.
+      const body = (typeof jd_text === "string" && jd_text.trim()) || decodeCtx.posting.jd_text;
+      if (!body) {
+        return json({
+          success: false,
+          error: "no job description stored for this role — paste it once and it's kept for future re-runs",
+        }, 400);
+      }
+
+      // A pasted JD is worth keeping: it's what makes the NEXT decode (and the
+      // regenerate button) work without asking again. Best-effort — a failed
+      // save shouldn't cost the decode the user just paid for.
+      if (typeof jd_text === "string" && jd_text.trim() && jd_text.trim() !== decodeCtx.posting.jd_text) {
+        try {
+          await admin.rpc("set_posting_jd_text", {
+            p_job_posting_id: job_posting_id,
+            p_jd_text: jd_text,
+            p_user_id: userId,
+          });
+        } catch (e) {
+          console.error("set_posting_jd_text failed (decode still ran):", (e as Error).message);
+        }
+      }
+
+      const extra = isLevelFive(coach) ? ["challenge_lenses"] : [];
+      const data = await callClaude(apiKey, {
+        model: MODEL,
+        max_tokens: cfg.maxTokens,
+        system: systemBlocks(
+          `${cfg.persona}\n\n${coachGuidance("decode", extra)}`,
+          `${postingSeed(decodeCtx)}\n\n=== COACHING CONTEXT ===\n${coachSeed(coach)}${directnessNote(coach)}`,
+        ),
+        tools: [cfg.tool],
+        tool_choice: { type: "tool", name: cfg.toolName },
+        messages: [{ role: "user", content: `=== JOB DESCRIPTION ===\n${body}\n\nCall ${cfg.toolName}.` }],
+      });
+      const toolUse = findToolUse(data, cfg.toolName);
+      if (!toolUse) return json({ success: false, error: "decode did not return a result — try again" }, 502);
+
+      const { data: saved, error: saveErr } = await admin.rpc("save_coaching_artifact", {
+        p_kind: "decode",
+        p_content: toolUse.input,
+        p_interview_id: null,
+        p_job_posting_id: job_posting_id,
+        p_model: MODEL,
+        p_user_id: userId,
+      });
+      if (saveErr) throw saveErr;
+      return json(saved);
+    }
+
+    // ---- consolidate_stories: candidate-scoped, and the only stage that -----
+    // proposes rather than persists.
+    //
+    // Merging stories destroys material — the wrong merge loses the one telling
+    // that had the number in it. So this returns clusters for review and the
+    // client applies the accepted ones through upsert_story / merge_stories.
+    // Every other stage can afford to write directly because a bad artifact is
+    // just regenerated.
+    if (stage === "consolidate_stories") {
+      const { data: input, error: inErr } = await admin.rpc("get_story_consolidation_input", {
+        p_user_id: userId,
+      });
+      if (inErr) throw inErr;
+      const material = input as {
+        anchors: Array<{ title: string; company?: string; competency?: string; has_star?: boolean }>;
+        banked: Array<Record<string, unknown>>;
+        synthesized: Array<{ organization_name: string; role_title: string; interview_type: string | null; synthesized_at: string; story: Record<string, unknown> }>;
+      };
+
+      const tellings = material.synthesized ?? [];
+      const banked = material.banked ?? [];
+      if (tellings.length === 0 && banked.length === 0) {
+        return json({
+          success: false,
+          error: "nothing to consolidate — no synthesized prep sheets and an empty storybank. Run a prep synthesis first, or add stories in conversation.",
+        }, 400);
+      }
+
+      // Anchors go in FIRST and are labelled as the candidate's own names. The
+      // model reuses them verbatim; everything else is material to be filed
+      // under them. That's what stops the library drifting back to
+      // model-invented titles on every run.
+      const anchorBlock = material.anchors?.length
+        ? `=== THE CANDIDATE'S ANCHOR STORIES (${material.anchors.length}) ===\n` +
+          "These are the stories they say they keep coming back to. Reuse these titles EXACTLY. File every variant " +
+          "you find under the anchor it belongs to, and never merge an anchor into something else.\n" +
+          material.anchors
+            .map((a) => `- "${a.title}"${a.company ? ` [${a.company}]` : ""}${a.competency ? ` — ${a.competency}` : ""}${a.has_star ? "" : " (no STAR written yet)"}`)
+            .join("\n")
+        : "=== ANCHOR STORIES ===\n(none declared — cluster on the material alone and title each cluster the way the candidate would refer to it: what happened, where.)";
+
+      const tellingsBlock = tellings.length
+        ? tellings
+            .map((t, i) => {
+              const s = t.story as Record<string, unknown>;
+              return (
+                `--- telling ${i + 1} · ${t.organization_name} ${t.role_title ? `(${t.role_title})` : ""} ` +
+                `${t.interview_type ?? ""} · synthesized ${(t.synthesized_at ?? "").slice(0, 10)}\n` +
+                `title: ${s.title ?? "(untitled)"}\n` +
+                `competency: ${s.competency ?? "-"}\n` +
+                `situation: ${s.situation ?? "-"}\n` +
+                `task: ${s.task ?? "-"}\n` +
+                `action: ${s.action ?? "-"}\n` +
+                `result: ${s.result ?? "-"}\n` +
+                (s.best_for ? `best_for: ${s.best_for}\n` : "") +
+                (s.story ? `narrative: ${s.story}\n` : "")
+              );
+            })
+            .join("\n")
+        : "(no synthesized prep sheets)";
+
+      const bankedBlock = banked.length
+        ? banked
+            .map((s) => {
+              const star = [s.situation, s.task, s.action, s.result].filter(Boolean).join(" / ");
+              return (
+                `- "${s.title}"${s.is_anchor ? " [ANCHOR]" : ""}${s.company ? ` [${s.company}]` : ""} ` +
+                `[${s.competency ?? "uncategorized"}] strength ${s.strength ?? "?"}/5` +
+                (star ? `\n  ${star}` : "\n  (no STAR written)") +
+                (s.earned_secret ? `\n  earned secret: ${s.earned_secret}` : "") +
+                (Array.isArray(s.aliases) && s.aliases.length ? `\n  already absorbed: ${(s.aliases as string[]).join(" | ")}` : "")
+              );
+            })
+            .join("\n")
+        : "(storybank is empty)";
+
+      const data = await callClaude(apiKey, {
+        model: MODEL,
+        max_tokens: 8000,
+        system: systemBlocks(
+          "You consolidate a candidate's scattered interview stories into one clean library.\n\n" +
+            "The same story has been told many times across many prep sessions, and each session invented its own " +
+            "title for it. Your job is to recognise those as ONE story and assemble the best single version: the " +
+            "sharpest situation, the task as the candidate actually owned it, the action with its real mechanism, " +
+            "and the most quantified result available across every telling. If one telling has the number and three " +
+            "don't, the number carries over — that is the single most valuable thing this pass does.\n\n" +
+            "Rules that matter more than tidiness:\n" +
+            "- Cluster on the UNDERLYING EVENT, not on wording. Two tellings of the same Garner steerage work are one " +
+            "cluster even if the titles share no words. Two different hard-people-calls at two different companies " +
+            "are two clusters even if both are tagged 'conflict'.\n" +
+            "- Never invent content. If no telling quantified the result, say so in `sharpen` rather than supplying a " +
+            "plausible figure — a fabricated number is the one failure mode that destroys credibility in the room.\n" +
+            "- Copy `variant_titles` character for character from the input. They become aliases; a paraphrase there " +
+            "silently resurrects the duplicate on the next run.\n" +
+            "- Be honest in `strength`. Four vague tellings consolidate into one vague story, not a strong one.\n\n" +
+            "Call report_consolidation.\n\n" +
+            coachGuidance("stories"),
+          `=== COACHING CONTEXT ===\n${coachSeed(coach)}${directnessNote(coach)}`,
+        ),
+        tools: [CONSOLIDATE_TOOL],
+        tool_choice: { type: "tool", name: "report_consolidation" },
+        messages: [
+          {
+            role: "user",
+            content:
+              `${anchorBlock}\n\n=== ALREADY IN THE STORYBANK ===\n${bankedBlock}\n\n` +
+              `=== EVERY TELLING FOUND ACROSS ${tellings.length} PREP SYNTHES${tellings.length === 1 ? "IS" : "ES"} ===\n${tellingsBlock}\n\n` +
+              "Consolidate all of it and call report_consolidation.",
+          },
+        ],
+      });
+      const toolUse = findToolUse(data, "report_consolidation");
+      if (!toolUse) return json({ success: false, error: "consolidation did not return a proposal — try again" }, 502);
+
+      // Nothing persisted: the client shows this for review and applies what
+      // the candidate accepts.
+      return json({
+        success: true,
+        proposal: toolUse.input,
+        input_counts: { tellings: tellings.length, banked: banked.length, anchors: material.anchors?.length ?? 0 },
+      });
     }
 
     // ---- everything else needs the prep session ----------------------------
@@ -1174,15 +1519,14 @@ Deno.serve(async (req) => {
       return json(fresh);
     }
 
-    // ---- the ported command stages: concerns / questions / hype / decode ----
+    // ---- the per-round command stages: concerns / questions / hype ----------
+    // decode used to live here. It doesn't any more: it's keyed to the posting
+    // and handled above, because a JD is a property of the role and decoding it
+    // once per round was the same model call repeated N times.
     if (stage in ARTIFACT_STAGES) {
       const key = stage as keyof typeof ARTIFACT_STAGES;
       const cfg = ARTIFACT_STAGES[key];
       const extra = isLevelFive(coach) ? ["challenge_lenses"] : [];
-
-      if (key === "decode" && !jd_text) {
-        return json({ success: false, error: "decode needs jd_text — paste the job description" }, 400);
-      }
 
       const data = await callClaude(apiKey, {
         model: MODEL,
@@ -1193,15 +1537,7 @@ Deno.serve(async (req) => {
         ),
         tools: [cfg.tool],
         tool_choice: { type: "tool", name: cfg.toolName },
-        messages: [
-          {
-            role: "user",
-            content:
-              key === "decode"
-                ? `=== JOB DESCRIPTION ===\n${jd_text}\n\nCall ${cfg.toolName}.`
-                : `Call ${cfg.toolName} for this interview.`,
-          },
-        ],
+        messages: [{ role: "user", content: `Call ${cfg.toolName} for this interview.` }],
       });
       const toolUse = findToolUse(data, cfg.toolName);
       if (!toolUse) return json({ success: false, error: `${key} did not return a result — try again` }, 502);
@@ -1210,6 +1546,7 @@ Deno.serve(async (req) => {
         p_kind: cfg.kind,
         p_content: toolUse.input,
         p_interview_id: interview_id,
+        p_job_posting_id: null,
         p_model: MODEL,
         p_user_id: userId,
       });

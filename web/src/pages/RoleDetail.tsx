@@ -10,6 +10,7 @@ import AddToChecklist from "../components/AddToChecklist";
 import InterviewPrep from "../components/InterviewPrep";
 import InterviewOutcome from "../components/InterviewOutcome";
 import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
+import { DecodeSheet } from "../components/CoachSheets";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import type { Application, Interview, StatusHistoryRow } from "../lib/types";
 
@@ -100,6 +101,13 @@ export default function RoleDetail() {
 
       {posting?.id && (
         <TailoredResumePanel jobPostingId={posting.id} baseResumeId={fit.data?.recommended_resume_id} />
+      )}
+
+      {/* The JD decode lives here, on the ROLE, because that's what it's about
+          (migration 026). Intake generates it once; every round's prep page
+          reads this same artifact rather than re-decoding the same JD. */}
+      {posting?.id && (
+        <DecodeSheet jobPostingId={posting.id} hasStoredJd={posting.has_jd_text ?? false} />
       )}
 
       <div className="cols">

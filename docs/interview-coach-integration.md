@@ -59,13 +59,20 @@ Five tables, all RLS-isolated to `auth.uid()`, same boilerplate as
 | `coaching_stories` | many | Storybank + Story Details |
 | `coaching_scores` | many | Score History (5-dim, plus self-score for the calibration engine) |
 | `coaching_questions` | many | Interview Intelligence → Question Bank |
-| `coaching_artifacts` | 1 per (user, kind, interview) | the per-command outputs that had no home |
+| `coaching_artifacts` | 1 per (user, kind, scope) | the per-command outputs that had no home |
 
 `coaching_stories` is the important one. `get_story_cheat_sheet` already rolls
 stories up *derived* from `interview_prep_sessions.synthesis` — read-only, thrown
 away and regenerated each time. The storybank is durable: stories carry a
 strength score, an earned secret, a last-used timestamp, and survive the session
 that produced them.
+
+> **Revised by migration 026.** The two were allowed to coexist — "the cheat
+> sheet is a per-employer view, the storybank is the candidate's actual
+> inventory" — and in practice that meant the UI's Story library rendered the
+> cheat sheet while the inventory stayed empty. The storybank is now the library.
+> `coaching_stories` also gained `aliases`, `company`, `sharpen`, and
+> `is_anchor`; see `consolidate_stories` below for why each is needed.
 
 ## Stages
 
@@ -88,21 +95,60 @@ New stages, ported from skill commands:
 | `progress` | `progress` | trend review across rounds: dimension trajectory, calibration gap, bottleneck |
 | `decode` | `decode` | JD → competency extraction and coverage against the storybank |
 
-`progress` is candidate-scoped (no `interview_id`); the rest are per-round.
+Three scopes, not two (revised by migration 026):
+
+| Scope | Stages | Keyed on |
+|---|---|---|
+| per-round | `concerns`, `questions`, `hype` | `interview_id` |
+| **per-role** | `decode` | `job_posting_id` |
+| per-candidate | `progress`, `consolidate_stories` | neither |
 
 Where each one is reachable today:
 
 | Stage | Surface |
 |---|---|
-| `decode`, `concerns`, `questions`, `hype` | Interview Prep page, below the round flow (`CoachSheets.tsx`) |
+| `concerns`, `questions`, `hype` | Interview Prep page, below the round flow (`CoachSheets.tsx`) |
+| `decode` | Role page — both `/posting/:id` and `/role/:id` — and read-only at the top of each round's prep page |
 | `progress` | Resumes page, in the storybank panel |
+| `consolidate_stories` | Interviews → Story library (`StoryLibrary.tsx`) |
 
-`decode` is ordered first of the four: it tells you which competencies to go
-build stories for, which is upstream of rehearsing them. It's also the only sheet
-that takes an input — the JD text — so its Generate button stays disabled until
-something is pasted. The JD isn't persisted with the artifact, so a saved decode
-renders after a reload with an empty box and a note explaining that regenerating
-needs the JD again.
+### Why `decode` moved off the round
+
+It shipped per-round and that was wrong in a way that only showed up with real
+data: a nine-round Anaconda loop meant nine `decode` artifacts, nine identical
+model calls against the same job description, and nine manual JD pastes — because
+the JD text wasn't persisted either, so every regenerate asked for it again.
+
+A job description is a property of the **posting**. So:
+
+- `coaching_artifacts` grew a `job_posting_id` scope, with a CHECK that a row
+  carries exactly one scope and a COALESCE-over-both unique index. Existing
+  per-round decodes were re-pointed at their posting, newest-wins.
+- `job_postings.jd_text` keeps the posting body. `intake-from-url` already
+  fetched the page and threw the text away; it now returns it, `intake_role`
+  stores it, and `get_decode_context` reads it. A generated `has_jd_text` flag
+  lets the UI decide whether it needs a paste box without pulling tens of KB down.
+- Decode runs **once, at intake**, fire-and-forget beside the fit judge. The
+  paste box only appears for walled pages (LinkedIn, most ATSes) where the fetch
+  failed, and a pasted JD is stored so it's asked for exactly once.
+- The stage no longer routes through `get_interview_prep_session`, so it doesn't
+  need a round on the calendar or a started prep session. That matters: decode
+  tells you which competencies to go build stories for, which is upstream of
+  scheduling anything.
+
+### `consolidate_stories`
+
+The one stage that **proposes rather than persists**. Every other stage writes
+directly, because a bad artifact is just regenerated — but consolidation merges
+stories, and if four tellings exist and only one carried the dollar figure, the
+wrong merge loses that number permanently. It returns clusters; the client
+applies what's accepted through `upsert_story` / `merge_stories`.
+
+It also fixes the reason the storybank was empty in practice: prep synthesis has
+written to it since this integration shipped, but every session that ran *before*
+that lived only in `interview_prep_sessions.synthesis`, under a title that
+session invented. Consolidation is the backfill, and `aliases` + anchors are what
+stop the drift recurring — see **Play 5** in [`CLAUDE.md`](../CLAUDE.md).
 
 The candidate layer itself is fully MCP-exposed (profile, storybank, scores,
 question bank, and `get_coaching_context` as the one-call read) — see **Play 5**

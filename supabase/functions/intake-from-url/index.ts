@@ -10,6 +10,11 @@
  * score. Walled/JS-rendered postings (LinkedIn, many ATSes) fail fetch; the
  * response says so and the hand-typed form remains the fallback.
  *
+ * Also returns `jd_text`: the posting body web_fetch pulled down, which this
+ * used to discard. intake_role stores it, and that's what lets the JD decode run
+ * at intake and be regenerated later without asking the user to paste the same
+ * text back in (migration 026).
+ *
  * Mirrors judge-growth's auth + call shape (the web_search precedent).
  * Secrets: ANTHROPIC_API_KEY (required), JUDGE_MODEL (optional).
  */
@@ -56,6 +61,40 @@ const ROLE_TOOL = {
     },
   },
 };
+
+/**
+ * The posting body web_fetch already pulled down, out of the tool-result block.
+ *
+ * This used to be thrown away, and the cost of that showed up two features
+ * later: the JD decode had to ask the user to paste the same text back in, once
+ * per interview round. Extracting it here means intake captures it once and
+ * every later re-run reads it from the posting.
+ *
+ * Not asked of the model as a field: it would paraphrase, and decode's whole
+ * job is reading the exact wording. Defensive about shape because the block
+ * layout is the API's, not ours — a miss returns null and the paste box remains
+ * the fallback, which is strictly better than throwing away the intake.
+ */
+function extractFetchedText(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  const texts: string[] = [];
+  for (const block of content) {
+    const b = block as { type?: string; content?: unknown };
+    if (b?.type !== "web_fetch_tool_result") continue;
+    // web_fetch_tool_result.content is a document block whose source carries the
+    // page text; an error result has no document at all.
+    const doc = (b.content as { content?: { text?: string }; source?: { data?: string; text?: string } } | undefined);
+    const text = doc?.content?.text ?? doc?.source?.text ?? doc?.source?.data;
+    if (typeof text === "string" && text.trim()) texts.push(text.trim());
+  }
+  if (texts.length === 0) return null;
+  // Longest wins: max_uses is 3, and a redirect or consent page fetched on the
+  // way is short next to the real posting.
+  const best = texts.sort((a, b) => b.length - a.length)[0];
+  // Cap it. A posting is a few KB; anything far past that is page furniture, and
+  // this lands in a text column that decode re-sends on every run.
+  return best.slice(0, 60_000);
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -132,7 +171,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    return json({ success: true, role: out });
+    return json({ success: true, role: out, jd_text: extractFetchedText(data.content) });
   } catch (e) {
     return json({ success: false, error: (e as Error).message }, 500);
   }

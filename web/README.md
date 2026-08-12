@@ -6,20 +6,26 @@ talks to Supabase **directly** via `supabase-js` — no MCP in the data path:
 - **Reads** are RLS-scoped selects + read RPCs (`get_action_queue`,
   `get_funnel_metrics`, `get_resume`, `list_resumes`, `get_role_fit`,
   `get_fit_coverage`, `get_resume_feedback`, `get_career_profile`,
-  `get_roles_analytics`).
+  `get_roles_analytics`, and the coaching layer's `get_coaching_profile`,
+  `list_stories`, `get_score_history`, `get_question_bank`,
+  `get_coaching_artifact`).
 - **Writes** are the transactional RPCs (`intake_role`, `submit_application`,
   `advance_application`, `set_priority_signals`, `upsert_resume_variant`,
-  `save_career_profile`, `save_prospect_contact`, `promote_prospect_contact`) —
-  the same functions the MCP wraps, so the app and the agent share one
-  implementation.
+  `save_career_profile`, `save_prospect_contact`, `promote_prospect_contact`,
+  `save_coaching_profile`, `upsert_story`, `mark_story_used`) — the same
+  functions the MCP wraps, so the app and the agent share one implementation.
 - **AI judges** are server-side Edge Functions (Anthropic key stays off the
   client): `judge-fit` scores resume variants vs a role, `judge-career` /
-  `judge-growth` fill the other two priority signals, and `synthesize-feedback`
-  rolls every judge's resume tweaks into ranked themes. The SPA invokes them with
+  `judge-growth` fill the other two priority signals, `synthesize-feedback`
+  rolls every judge's resume tweaks into ranked themes, and `interview-prep`
+  runs every prep and coaching stage. The SPA invokes them with
   `supabase.functions.invoke(...)`.
 
 The anon (publishable) key is safe in the client: Row Level Security scopes every
 query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
+The read RPCs that are `SECURITY DEFINER` don't rely on that default alone — they
+call `assert_self(p_user_id)`, so passing another user's uuid from the client is
+rejected rather than honoured (migration 025).
 
 ## Pages
 
@@ -28,11 +34,11 @@ query to the signed-in user, and the RPCs default `p_user_id` to `auth.uid()`.
 | `/` | Dashboard — high-level counts, status breakdown, next interviews |
 | `/pipeline` | **Roles to apply** (force-ranked, sortable table) + kanban by stage (Realtime), posting links, one-click advance, **+ Add a role** |
 | `/queue` | Action queue — follow-ups, interviews, **"Decide: move forward?"** (completed rounds debriefed as `hold` on live apps), networking (to-apply lives on the Pipeline) |
-| `/interviews` | All-up Interviews tab: **Upcoming** (interviews + networking calls, with "Needs debrief" + a sweep), **Past** (finished rounds — amend a debrief, Reopen, and the **duplicate-round review/merge** panel), **Prep** (per-round index), **Story library** (STAR cards by competency) |
-| `/interview-prep/:id` | Per-round AI prep: intake (pre-seeded from the round's scheduling notes) → research → mock interview → synthesized summary with full STAR story cards + copy-as-markdown |
+| `/interviews` | All-up Interviews tab: **Upcoming** (interviews + networking calls, with "Needs debrief" + a sweep), **Past** (finished rounds — amend a debrief, Reopen, and the **duplicate-round review/merge** panel), **Prep** (per-round index), **Story library** (STAR cards by competency, *derived* from past syntheses — the durable storybank lives on `/resume`) |
+| `/interview-prep/:id` | Per-round AI prep: intake (pre-seeded from the round's scheduling notes) → research → mock interview → synthesized summary with full STAR story cards + copy-as-markdown. Answers are scored on the five-dimension rubric (Substance · Structure · Relevance · Credibility · Differentiation); older syntheses carry no scores and render without them. Below the flow, four on-demand coaching sheets — **Decode the JD** (paste a JD → the competencies they'll probe, each checked against your storybank), **Concerns** (likely objections + counters), **Questions to ask**, **Hype** (the 3×3 + pre-mortem you read in the parking lot) — each needs only the intake, not a rehearsal |
 | `/funnel` | Conversion + median time-in-stage from `application_status_history` |
 | `/insights` | One-click **career + growth backfill** across all un-judged roles, plus a fit-vs-(career+growth) scatter — bubble size = comp, label = location |
-| `/resume` | Resume **variants** (senior-IC / manager / …), the **career profile** the career judge reads, AI fit scoring per role, and the **judge-feedback digest** — every role's tweaks synthesized into ranked, bucketed themes |
+| `/resume` | Resume **variants** (senior-IC / manager / …), the **career profile** the career judge reads, AI fit scoring per role, the **judge-feedback digest** — every role's tweaks synthesized into ranked, bucketed themes — and the **storybank**: durable STAR stories with a strength score and an earned secret, the score trend across rounds, and a **progress review** (dimension trajectory, calibration gap, bottleneck) |
 | `/role/:id` | Stage-history timeline + interviews with go/no-go decisions (a `rejected`/`withdraw` debrief cascades to the application), the full schedule form (type, category, duration, interviewer), plus the priority breakdown + AI judges for the role |
 | `/posting/:id` | Standalone role fit page — run the AI judges, compare resume variants |
 | `/company/:id` | Company view — org details, connections there (with LinkedIn profile links), roles queued, **prospect capture** for people you've found but haven't confirmed as a contact yet, and **+ Log a networking call** (a standalone round against the org, no application needed) |

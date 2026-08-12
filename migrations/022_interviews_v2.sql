@@ -23,6 +23,12 @@
 --         partial UNIQUE index schedule_interview's dedup predicate assumes.
 --   —     submit_application auto-completes the posting's open 'apply' task
 --         (recovered orphan commit 94bc031, guard widened per the backlog).
+--
+-- Retrofitted by 025: the two SECURITY DEFINER functions here (get_story_cheat_sheet,
+-- get_interview_prep_session) now call assert_self(p_user_id), which 025 creates.
+-- The forward reference is harmless — plpgsql doesn't resolve callees until the
+-- function runs — but on a from-scratch rebuild these two only work once 025 (or
+-- functions.sql, which carries the canonical copy) has been applied.
 -- ============================================================================
 
 
@@ -253,11 +259,14 @@ CREATE OR REPLACE FUNCTION get_story_cheat_sheet(
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
     SELECT jsonb_build_object(
         'success', true,
         'sessions', COALESCE(jsonb_agg(
@@ -285,7 +294,9 @@ AS $$
     JOIN organizations o  ON o.id = jp.organization_id
     WHERE s.user_id = p_user_id
       AND i.category = 'interview'
-      AND s.synthesis IS NOT NULL;
+      AND s.synthesis IS NOT NULL
+    );
+END;
 $$;
 
 
@@ -423,11 +434,14 @@ CREATE OR REPLACE FUNCTION get_interview_prep_session(
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
     WITH iv AS (
         SELECT i.id, i.interview_type, i.scheduled_at, i.status, i.notes,
                i.interviewer_contact_id,
@@ -487,7 +501,9 @@ AS $$
                     WHERE s.interview_id = p_interview_id AND s.user_id = p_user_id)
             )
             FROM iv)
-    END;
+    END
+    );
+END;
 $$;
 
 

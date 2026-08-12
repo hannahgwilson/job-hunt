@@ -13,14 +13,69 @@
 --     posting insert) instead of chained client-side inserts — that was the
 --     brittleness this layer removes.
 --
--- Security model: every function is SECURITY INVOKER (the default), so the
+-- Security model: MOST functions are SECURITY INVOKER (the default), so the
 -- base-table RLS policies apply. `p_user_id` defaults to `auth.uid()` for the
 -- SPA path; the MCP (service role, which bypasses RLS) passes DEFAULT_USER_ID
 -- explicitly. A SPA caller cannot write rows for another user because the
 -- RLS WITH CHECK (auth.uid() = user_id) on the base tables still applies.
 --
+-- The exceptions are the readers that must reach tables this repo does not own
+-- (`thoughts` has no owner column; `tasks`/`contacts` belong to other schemas),
+-- which are SECURITY DEFINER. RLS does NOT apply to those, so `p_user_id` is
+-- the ONLY thing scoping the read — and it is caller-supplied. Every one of
+-- them therefore opens with `PERFORM assert_self(p_user_id)`; see that
+-- function's comment for the rule. Adding a SECURITY DEFINER function without
+-- that guard re-opens a cross-user read of the whole table.
+--
 -- Re-runnable: all CREATE OR REPLACE. Apply after schema.sql.
 -- ============================================================================
+
+
+-- ============================================================================
+-- assert_self — the guard every SECURITY DEFINER function below must call.
+--
+-- SECURITY DEFINER bypasses RLS, so a definer function's `p_user_id` argument
+-- is load-bearing security, not ergonomics: whatever uuid the caller passes is
+-- the uuid whose rows come back. The browser can call any RPC it has EXECUTE
+-- on, with any arguments, so without this guard `rpc('get_coaching_profile',
+-- { p_user_id: <someone else> })` reads someone else's rows — from a logged-in
+-- session OR from the public anon key, with no session at all.
+--
+-- The rule: a request that arrives through PostgREST as `anon` or
+-- `authenticated` may only ever name its own auth.uid(). Everything else is
+-- already trusted with the whole database — the edge functions hold the
+-- service-role key (and have no auth.uid() to be pinned to, which is why the
+-- parameter has to stay), and a direct connection (psql, dev/local_db.sh, the
+-- Supabase SQL editor) is superuser anyway.
+--
+-- The signal is the `role` GUC, which PostgREST sets per request from the JWT's
+-- role claim (SET LOCAL ROLE). SECURITY DEFINER rewrites current_user but NOT
+-- that GUC, so it survives into the function body and is the one thing still
+-- able to say "this came from a browser." current_user cannot be used here: it
+-- is the function owner by the time the body runs.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION assert_self(p_user_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+STABLE
+SET search_path = public
+AS $$
+DECLARE
+    v_role text := current_setting('role', true);
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'not authorized: no user_id' USING ERRCODE = '42501';
+    END IF;
+
+    IF v_role IN ('anon', 'authenticated') AND p_user_id IS DISTINCT FROM auth.uid() THEN
+        RAISE EXCEPTION 'not authorized for another user' USING ERRCODE = '42501';
+    END IF;
+
+    RETURN p_user_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION assert_self(uuid) TO authenticated, service_role;
 
 
 -- ============================================================================
@@ -2474,11 +2529,14 @@ CREATE OR REPLACE FUNCTION get_suggestions(
     p_thought_limit int DEFAULT 12
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
     SELECT jsonb_build_object(
         'success', true,
         'open_brain', (
@@ -2551,7 +2609,9 @@ AS $$
                                     AND d.suggestion_key = 'posting:' || (role->>'id'))
             ) q
         )
+    )
     );
+END;
 $$;
 
 -- dismiss_suggestion — record a stable suggestion key so the inbox stops
@@ -2593,7 +2653,7 @@ DECLARE
     v_title  text;
     v_row    tasks;
 BEGIN
-    IF p_user_id IS NULL THEN RAISE EXCEPTION 'promote_suggestion: no user_id'; END IF;
+    PERFORM assert_self(p_user_id);
     v_prefix := split_part(p_suggestion_key, ':', 1);
     v_uuid   := split_part(p_suggestion_key, ':', 2)::uuid;
 
@@ -2686,11 +2746,14 @@ CREATE OR REPLACE FUNCTION get_interview_prep(
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
     WITH iv AS (
         SELECT i.id, i.interview_type, i.scheduled_at, i.status,
                i.interviewer_contact_id,
@@ -2750,7 +2813,9 @@ AS $$
                       AND t.kind = 'interview_prep')
             )
             FROM iv)
-    END;
+    END
+    );
+END;
 $$;
 
 GRANT EXECUTE ON FUNCTION get_job_checklist(uuid, boolean)              TO authenticated, service_role;
@@ -2780,11 +2845,14 @@ CREATE OR REPLACE FUNCTION get_interview_prep_session(
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
     WITH iv AS (
         SELECT i.id, i.interview_type, i.scheduled_at, i.status, i.notes,
                i.interviewer_contact_id,
@@ -2847,7 +2915,9 @@ AS $$
                     WHERE s.interview_id = p_interview_id AND s.user_id = p_user_id)
             )
             FROM iv)
-    END;
+    END
+    );
+END;
 $$;
 
 -- start_interview_prep — intake. Creates the session on first call; on later
@@ -2983,11 +3053,14 @@ CREATE OR REPLACE FUNCTION get_story_cheat_sheet(
     p_user_id uuid DEFAULT auth.uid()
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
     SELECT jsonb_build_object(
         'success', true,
         'sessions', COALESCE(jsonb_agg(
@@ -3016,7 +3089,9 @@ AS $$
     WHERE s.user_id = p_user_id
       -- formal rounds only — enforcing the invariant 020's header claims (D3)
       AND i.category = 'interview'
-      AND s.synthesis IS NOT NULL;
+      AND s.synthesis IS NOT NULL
+    );
+END;
 $$;
 
 GRANT EXECUTE ON FUNCTION get_story_cheat_sheet(uuid) TO authenticated, service_role;
@@ -3098,3 +3173,539 @@ $$;
 
 GRANT EXECUTE ON FUNCTION save_prospect_contact(uuid, text, text, text, text, uuid) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION promote_prospect_contact(uuid, uuid)                     TO authenticated, service_role;
+
+-- ============================================================================
+-- The coaching layer (migration 024)
+-- Candidate-scoped state that the per-interview prep flow reads from and writes
+-- back to. See docs/interview-coach-integration.md.
+--
+-- The important one is get_coaching_context() at the bottom: it assembles
+-- profile + storybank + score trend + question bank into a single payload the
+-- interview-prep edge function folds into every stage's prompt. Everything
+-- above it is the plain CRUD the page and MCP call directly.
+-- ============================================================================
+
+-- get_coaching_profile — the candidate's profile, or success=true with a null
+-- profile when they haven't set one up yet (not an error; every command still
+-- runs without it, just less well).
+CREATE OR REPLACE FUNCTION get_coaching_profile(
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
+    SELECT jsonb_build_object(
+        'success', true,
+        'profile', (SELECT to_jsonb(p) FROM coaching_profiles p WHERE p.user_id = p_user_id)
+    )
+    );
+END;
+$$;
+
+-- save_coaching_profile — create or partially update. NULL leaves a field
+-- untouched, so callers can send just the fields they learned (the same
+-- COALESCE-on-conflict shape as start_interview_prep).
+CREATE OR REPLACE FUNCTION save_coaching_profile(
+    p_track text DEFAULT NULL,
+    p_target_roles text[] DEFAULT NULL,
+    p_seniority_band text DEFAULT NULL,
+    p_directness smallint DEFAULT NULL,
+    p_timeline text DEFAULT NULL,
+    p_timeline_date date DEFAULT NULL,
+    p_biggest_concern text DEFAULT NULL,
+    p_interview_history text DEFAULT NULL,
+    p_career_transition text DEFAULT NULL,
+    p_transition_status text DEFAULT NULL,
+    p_resume_analysis jsonb DEFAULT NULL,
+    p_active_strategy jsonb DEFAULT NULL,
+    p_drill_stage smallint DEFAULT NULL,
+    p_coaching_notes jsonb DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_coaching_profile: no user_id';
+    END IF;
+
+    INSERT INTO coaching_profiles (
+        user_id, track, target_roles, seniority_band, directness, timeline,
+        timeline_date, biggest_concern, interview_history, career_transition,
+        transition_status, resume_analysis, active_strategy, drill_stage, coaching_notes)
+    VALUES (
+        p_user_id, p_track, p_target_roles, p_seniority_band,
+        COALESCE(p_directness, 5), p_timeline, p_timeline_date, p_biggest_concern,
+        p_interview_history, p_career_transition, p_transition_status,
+        p_resume_analysis, p_active_strategy, COALESCE(p_drill_stage, 1),
+        COALESCE(p_coaching_notes, '[]'::jsonb))
+    ON CONFLICT (user_id) DO UPDATE SET
+        track             = COALESCE(EXCLUDED.track, coaching_profiles.track),
+        target_roles      = COALESCE(EXCLUDED.target_roles, coaching_profiles.target_roles),
+        seniority_band    = COALESCE(EXCLUDED.seniority_band, coaching_profiles.seniority_band),
+        directness        = COALESCE(p_directness, coaching_profiles.directness),
+        timeline          = COALESCE(EXCLUDED.timeline, coaching_profiles.timeline),
+        timeline_date     = COALESCE(EXCLUDED.timeline_date, coaching_profiles.timeline_date),
+        biggest_concern   = COALESCE(EXCLUDED.biggest_concern, coaching_profiles.biggest_concern),
+        interview_history = COALESCE(EXCLUDED.interview_history, coaching_profiles.interview_history),
+        career_transition = COALESCE(EXCLUDED.career_transition, coaching_profiles.career_transition),
+        transition_status = COALESCE(EXCLUDED.transition_status, coaching_profiles.transition_status),
+        resume_analysis   = COALESCE(EXCLUDED.resume_analysis, coaching_profiles.resume_analysis),
+        active_strategy   = COALESCE(EXCLUDED.active_strategy, coaching_profiles.active_strategy),
+        drill_stage       = COALESCE(p_drill_stage, coaching_profiles.drill_stage),
+        coaching_notes    = COALESCE(p_coaching_notes, coaching_profiles.coaching_notes);
+
+    RETURN get_coaching_profile(p_user_id);
+END;
+$$;
+
+-- list_stories — the storybank, strongest first. Optional competency filter is
+-- how prep answers "what do I tell when they ask about conflict?"
+CREATE OR REPLACE FUNCTION list_stories(
+    p_competency text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
+    SELECT jsonb_build_object(
+        'success', true,
+        'stories', COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.strength DESC NULLS LAST, s.updated_at DESC), '[]'::jsonb)
+    )
+    FROM coaching_stories s
+    WHERE s.user_id = p_user_id
+      AND (p_competency IS NULL OR s.competency ILIKE p_competency)
+    );
+END;
+$$;
+
+-- upsert_story — title is the natural key, so re-running synthesis enriches
+-- the existing story instead of minting a near-duplicate. NULL leaves a field
+-- alone; an existing earned_secret or hand-tuned strength survives a re-run.
+CREATE OR REPLACE FUNCTION upsert_story(
+    p_title text,
+    p_competency text DEFAULT NULL,
+    p_situation text DEFAULT NULL,
+    p_task text DEFAULT NULL,
+    p_action text DEFAULT NULL,
+    p_result text DEFAULT NULL,
+    p_earned_secret text DEFAULT NULL,
+    p_strength smallint DEFAULT NULL,
+    p_best_for text DEFAULT NULL,
+    p_tags text[] DEFAULT NULL,
+    p_source text DEFAULT 'manual',
+    p_source_interview_id uuid DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_story coaching_stories;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'upsert_story: no user_id';
+    END IF;
+    IF p_title IS NULL OR btrim(p_title) = '' THEN
+        RAISE EXCEPTION 'upsert_story: title is required';
+    END IF;
+
+    INSERT INTO coaching_stories (
+        user_id, title, competency, situation, task, action, result,
+        earned_secret, strength, best_for, tags, source, source_interview_id)
+    VALUES (
+        p_user_id, btrim(p_title), p_competency, p_situation, p_task, p_action,
+        p_result, p_earned_secret, p_strength, p_best_for, p_tags,
+        COALESCE(p_source, 'manual'), p_source_interview_id)
+    ON CONFLICT (user_id, title) DO UPDATE SET
+        competency          = COALESCE(EXCLUDED.competency, coaching_stories.competency),
+        situation           = COALESCE(EXCLUDED.situation, coaching_stories.situation),
+        task                = COALESCE(EXCLUDED.task, coaching_stories.task),
+        action              = COALESCE(EXCLUDED.action, coaching_stories.action),
+        result              = COALESCE(EXCLUDED.result, coaching_stories.result),
+        earned_secret       = COALESCE(EXCLUDED.earned_secret, coaching_stories.earned_secret),
+        strength            = COALESCE(EXCLUDED.strength, coaching_stories.strength),
+        best_for            = COALESCE(EXCLUDED.best_for, coaching_stories.best_for),
+        tags                = COALESCE(EXCLUDED.tags, coaching_stories.tags),
+        source_interview_id = COALESCE(EXCLUDED.source_interview_id, coaching_stories.source_interview_id)
+    RETURNING * INTO v_story;
+
+    RETURN jsonb_build_object('success', true, 'story', to_jsonb(v_story));
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION delete_story(
+    p_story_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    DELETE FROM coaching_stories WHERE id = p_story_id AND user_id = p_user_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'delete_story: story % not found or not owned', p_story_id;
+    END IF;
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- mark_story_used — "I told this one in a real round." Feeds the skill's story
+-- rotation guidance: a story used in every loop goes stale, and last_used_at is
+-- how prep knows to suggest a different one.
+CREATE OR REPLACE FUNCTION mark_story_used(
+    p_story_id uuid,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_story coaching_stories;
+BEGIN
+    UPDATE coaching_stories
+    SET last_used_at = now(), use_count = use_count + 1
+    WHERE id = p_story_id AND user_id = p_user_id
+    RETURNING * INTO v_story;
+
+    IF v_story.id IS NULL THEN
+        RAISE EXCEPTION 'mark_story_used: story % not found or not owned', p_story_id;
+    END IF;
+    RETURN jsonb_build_object('success', true, 'story', to_jsonb(v_story));
+END;
+$$;
+
+-- record_coaching_score — one scored answer or round on the 5-dimension rubric.
+CREATE OR REPLACE FUNCTION record_coaching_score(
+    p_source text,
+    p_interview_id uuid DEFAULT NULL,
+    p_round_label text DEFAULT NULL,
+    p_substance smallint DEFAULT NULL,
+    p_structure smallint DEFAULT NULL,
+    p_relevance smallint DEFAULT NULL,
+    p_credibility smallint DEFAULT NULL,
+    p_differentiation smallint DEFAULT NULL,
+    p_self_score smallint DEFAULT NULL,
+    p_root_cause text DEFAULT NULL,
+    p_question text DEFAULT NULL,
+    p_competency text DEFAULT NULL,
+    p_notes text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_score coaching_scores;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'record_coaching_score: no user_id';
+    END IF;
+
+    INSERT INTO coaching_scores (
+        user_id, interview_id, source, round_label, substance, structure,
+        relevance, credibility, differentiation, self_score, root_cause,
+        question, competency, notes)
+    VALUES (
+        p_user_id, p_interview_id, p_source, p_round_label, p_substance,
+        p_structure, p_relevance, p_credibility, p_differentiation, p_self_score,
+        p_root_cause, p_question, p_competency, p_notes)
+    RETURNING * INTO v_score;
+
+    RETURN jsonb_build_object('success', true, 'score', to_jsonb(v_score));
+END;
+$$;
+
+-- get_score_history — newest first, with the per-dimension averages that make
+-- the bottleneck obvious without the caller doing arithmetic.
+CREATE OR REPLACE FUNCTION get_score_history(
+    p_limit integer DEFAULT 30,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
+    WITH recent AS (
+        SELECT * FROM coaching_scores
+        WHERE user_id = p_user_id
+        ORDER BY created_at DESC
+        LIMIT GREATEST(COALESCE(p_limit, 30), 1)
+    )
+    SELECT jsonb_build_object(
+        'success', true,
+        'count', (SELECT count(*) FROM recent),
+        'averages', (
+            SELECT jsonb_build_object(
+                'substance',       round(avg(substance)::numeric, 2),
+                'structure',       round(avg(structure)::numeric, 2),
+                'relevance',       round(avg(relevance)::numeric, 2),
+                'credibility',     round(avg(credibility)::numeric, 2),
+                'differentiation', round(avg(differentiation)::numeric, 2))
+            FROM recent),
+        -- The calibration gap: positive means the candidate rates themselves
+        -- above the coach (overconfidence), negative means they undersell.
+        'calibration_gap', (
+            SELECT round(avg(self_score - (
+                (COALESCE(substance,0) + COALESCE(structure,0) + COALESCE(relevance,0)
+                 + COALESCE(credibility,0) + COALESCE(differentiation,0))::numeric
+                / NULLIF((substance IS NOT NULL)::int + (structure IS NOT NULL)::int
+                    + (relevance IS NOT NULL)::int + (credibility IS NOT NULL)::int
+                    + (differentiation IS NOT NULL)::int, 0)
+            ))::numeric, 2)
+            FROM recent WHERE self_score IS NOT NULL),
+        'scores', (SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.created_at DESC), '[]'::jsonb) FROM recent r)
+    )
+    );
+END;
+$$;
+
+-- record_interview_question — one question into the bank. The mock interviewer
+-- reads this back so it asks what this company actually asks.
+CREATE OR REPLACE FUNCTION record_interview_question(
+    p_question text,
+    p_interview_id uuid DEFAULT NULL,
+    p_organization_id uuid DEFAULT NULL,
+    p_competency text DEFAULT NULL,
+    p_question_type text DEFAULT NULL,
+    p_went text DEFAULT NULL,
+    p_source text DEFAULT 'mock',
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row coaching_questions;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'record_interview_question: no user_id';
+    END IF;
+    IF p_question IS NULL OR btrim(p_question) = '' THEN
+        RAISE EXCEPTION 'record_interview_question: question is required';
+    END IF;
+
+    -- Resolve the org from the interview when the caller didn't pass one, so
+    -- company-pattern lookups work without the edge function doing joins.
+    INSERT INTO coaching_questions (
+        user_id, interview_id, organization_id, question, competency,
+        question_type, went, source, asked_at)
+    VALUES (
+        p_user_id, p_interview_id,
+        COALESCE(p_organization_id, (
+            SELECT jp.organization_id
+            FROM interviews i
+            JOIN applications a ON a.id = i.application_id
+            JOIN job_postings jp ON jp.id = a.job_posting_id
+            WHERE i.id = p_interview_id AND i.user_id = p_user_id)),
+        btrim(p_question), p_competency, p_question_type, p_went,
+        COALESCE(p_source, 'mock'), now())
+    RETURNING * INTO v_row;
+
+    RETURN jsonb_build_object('success', true, 'question', to_jsonb(v_row));
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_question_bank(
+    p_organization_id uuid DEFAULT NULL,
+    p_limit integer DEFAULT 40,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
+    SELECT jsonb_build_object(
+        'success', true,
+        'questions', COALESCE(jsonb_agg(to_jsonb(q) ORDER BY q.created_at DESC), '[]'::jsonb))
+    FROM (
+        SELECT * FROM coaching_questions
+        WHERE user_id = p_user_id
+          AND (p_organization_id IS NULL OR organization_id = p_organization_id)
+        ORDER BY created_at DESC
+        LIMIT GREATEST(COALESCE(p_limit, 40), 1)
+    ) q
+    );
+END;
+$$;
+
+-- save_coaching_artifact / get_coaching_artifact — the ported command stages
+-- (concerns, questions_to_ask, hype, progress, decode) all persist through here.
+CREATE OR REPLACE FUNCTION save_coaching_artifact(
+    p_kind text,
+    p_content jsonb,
+    p_interview_id uuid DEFAULT NULL,
+    p_model text DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_row coaching_artifacts;
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'save_coaching_artifact: no user_id';
+    END IF;
+
+    INSERT INTO coaching_artifacts (user_id, interview_id, kind, content, model)
+    VALUES (p_user_id, p_interview_id, p_kind, p_content, p_model)
+    ON CONFLICT (user_id, kind, COALESCE(interview_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    DO UPDATE SET
+        content = EXCLUDED.content,
+        model = EXCLUDED.model,
+        generated_at = now()
+    RETURNING * INTO v_row;
+
+    RETURN jsonb_build_object('success', true, 'artifact', to_jsonb(v_row));
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION get_coaching_artifact(
+    p_kind text,
+    p_interview_id uuid DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
+    SELECT jsonb_build_object(
+        'success', true,
+        'artifact', (
+            SELECT to_jsonb(a) FROM coaching_artifacts a
+            WHERE a.user_id = p_user_id AND a.kind = p_kind
+              AND COALESCE(a.interview_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = COALESCE(p_interview_id, '00000000-0000-0000-0000-000000000000'::uuid)))
+    );
+END;
+$$;
+
+-- get_coaching_context — the payload the interview-prep edge function folds
+-- into every stage's system prompt. One call, because the alternative is five
+-- round trips per AI stage.
+--
+-- p_interview_id is optional: pass it for per-round stages (the question bank
+-- narrows to that company), omit it for candidate-scoped ones like progress.
+CREATE OR REPLACE FUNCTION get_coaching_context(
+    p_interview_id uuid DEFAULT NULL,
+    p_user_id uuid DEFAULT auth.uid()
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    PERFORM assert_self(p_user_id);
+    RETURN (
+    WITH org AS (
+        SELECT jp.organization_id
+        FROM interviews i
+        JOIN applications a ON a.id = i.application_id
+        JOIN job_postings jp ON jp.id = a.job_posting_id
+        WHERE p_interview_id IS NOT NULL
+          AND i.id = p_interview_id AND i.user_id = p_user_id
+    )
+    SELECT jsonb_build_object(
+        'success', true,
+        'profile', (SELECT to_jsonb(p) FROM coaching_profiles p WHERE p.user_id = p_user_id),
+        -- Strongest stories first; the prompt only needs the top slice, not
+        -- the whole bank, or the storybank crowds out the actual task.
+        'stories', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                'id', s.id, 'title', s.title, 'competency', s.competency,
+                'situation', s.situation, 'task', s.task, 'action', s.action,
+                'result', s.result, 'earned_secret', s.earned_secret,
+                'strength', s.strength, 'best_for', s.best_for,
+                'last_used_at', s.last_used_at) ORDER BY s.strength DESC NULLS LAST), '[]'::jsonb)
+            FROM (
+                SELECT * FROM coaching_stories
+                WHERE user_id = p_user_id
+                ORDER BY strength DESC NULLS LAST, updated_at DESC
+                LIMIT 12
+            ) s),
+        'story_count', (SELECT count(*) FROM coaching_stories WHERE user_id = p_user_id),
+        -- Competencies with no story at all, or only a weak one — this is what
+        -- turns "you have 8 stories" into "you have no story for conflict".
+        'weak_competencies', (
+            SELECT COALESCE(jsonb_agg(competency), '[]'::jsonb)
+            FROM coaching_stories
+            WHERE user_id = p_user_id AND competency IS NOT NULL
+              AND COALESCE(strength, 0) <= 2),
+        'score_summary', get_score_history(12, p_user_id),
+        'question_bank', get_question_bank(
+            (SELECT organization_id FROM org), 25, p_user_id)
+    )
+    );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_coaching_profile(uuid)                                          TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_coaching_profile(text, text[], text, smallint, text, date, text, text, text, text, jsonb, jsonb, smallint, jsonb, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION list_stories(text, uuid)                                            TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION upsert_story(text, text, text, text, text, text, text, smallint, text, text[], text, uuid, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION delete_story(uuid, uuid)                                            TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION mark_story_used(uuid, uuid)                                         TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION record_coaching_score(text, uuid, text, smallint, smallint, smallint, smallint, smallint, smallint, text, text, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_score_history(integer, uuid)                                    TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION record_interview_question(text, uuid, uuid, text, text, text, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_question_bank(uuid, integer, uuid)                              TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION save_coaching_artifact(text, jsonb, uuid, text, uuid)               TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_coaching_artifact(text, uuid, uuid)                             TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION get_coaching_context(uuid, uuid)                                    TO authenticated, service_role;
+
+
+-- ============================================================================
+-- Defence in depth for the SECURITY DEFINER set.
+--
+-- Postgres grants EXECUTE on a new function to PUBLIC by default, so the
+-- explicit GRANTs above are additive — they never took anything away, and
+-- `anon` (the public API key, no session at all) has been able to call every
+-- one of these all along. assert_self already rejects anon, but nothing here
+-- is meant to be reachable without a session, so drop the default grant too
+-- and let the explicit GRANTs be the whole story.
+--
+-- Definer functions only: the SECURITY INVOKER ones are covered by RLS, which
+-- is the same answer whoever calls them.
+-- ============================================================================
+REVOKE EXECUTE ON FUNCTION get_suggestions(uuid, int, int, int)          FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION promote_suggestion(text, text, text, uuid)    FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_interview_prep(uuid, uuid)                FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_interview_prep_session(uuid, uuid)        FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_story_cheat_sheet(uuid)                   FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_coaching_profile(uuid)                    FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION list_stories(text, uuid)                      FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_score_history(integer, uuid)              FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_question_bank(uuid, integer, uuid)        FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_coaching_artifact(text, uuid, uuid)       FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION get_coaching_context(uuid, uuid)              FROM PUBLIC;

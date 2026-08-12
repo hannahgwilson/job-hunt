@@ -595,3 +595,28 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
   .library-shell { grid-template-columns: 1fr; }
   .library-rail { border-right: none; border-bottom: 1px solid var(--border); padding-right: 0; padding-bottom: 0.8rem; }
 }
+
+/* Five-dimension rubric scores (migration 024). Bars rather than numbers
+   because the useful read is the shape — one short bar among four tall ones is
+   the bottleneck, and that's what to work on. */
+.rubric-scores { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.5rem 0; }
+.rubric-scores.compact { gap: 0.15rem; margin: 0.35rem 0; }
+.rubric-row { display: flex; align-items: center; gap: 0.5rem; }
+.rubric-label { flex: 0 0 7.5rem; color: var(--muted); }
+.rubric-bar { display: inline-flex; gap: 2px; flex: 0 0 auto; }
+.rubric-pip { width: 14px; height: 8px; border-radius: 2px; background: var(--panel-2); border: 1px solid var(--border); }
+.rubric-scores.compact .rubric-pip { width: 10px; height: 6px; }
+.rubric-pip.filled { background: var(--accent); border-color: var(--accent); }
+.rubric-value { flex: 0 0 auto; }
+/* The bottleneck row is the point of the whole display — mark it. */
+.rubric-row.bottleneck .rubric-label { color: var(--warn); font-weight: 600; }
+.rubric-row.bottleneck .rubric-pip.filled { background: var(--warn); border-color: var(--warn); }
+.rubric-bottleneck { margin-top: 0.2rem; }
+
+/* Questions-to-ask + decode sheets — each row carries its own rationale block. */
+.prep-question { padding: 0.4rem 0; border-top: 1px solid var(--border); }
+.prep-question:first-child { border-top: none; }
+.prep-question p { margin: 0.15rem 0 0; }
+
+/* Decode is the one sheet that takes an input: the JD text to read. */
+.prep-jd-input { margin: 0.5rem 0; font-family: inherit; resize: vertical; }

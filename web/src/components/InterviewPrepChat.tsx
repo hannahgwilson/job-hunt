@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { sendInterviewPrepMessage, requestInterviewPrepFeedback, requestInterviewPrepDraftFeedback } from "../lib/api";
 import type { InterviewPrepMessage, InterviewPrepFeedback } from "../lib/types";
+import RubricScores from "./RubricScores";
 
 const KIND_LABEL: Record<string, string> = {
   interviewer: "Interviewer",
@@ -40,8 +41,15 @@ function FeedbackBody({ fb }: { fb: InterviewPrepFeedback }) {
   return (
     <>
       <StarRow fb={fb} />
+      {/* Scored feedback only exists on answers critiqued after the coaching
+          layer shipped — older transcript entries render exactly as before. */}
+      {fb.scores && <RubricScores scores={fb.scores} bottleneck={fb.bottleneck} compact />}
+      {fb.root_cause && <p className="small"><strong>Why:</strong> {fb.root_cause}</p>}
       {fb.what_worked.length > 0 && <p className="small"><strong>Worked:</strong> {fb.what_worked.join(" · ")}</p>}
       {fb.what_to_improve.length > 0 && <p className="small"><strong>Improve:</strong> {fb.what_to_improve.join(" · ")}</p>}
+      {fb.differentiation_note && (
+        <p className="muted small"><em>Only you could say:</em> {fb.differentiation_note}</p>
+      )}
       {fb.suggested_rewrite && <p className="muted small"><em>Try:</em> {fb.suggested_rewrite}</p>}
     </>
   );

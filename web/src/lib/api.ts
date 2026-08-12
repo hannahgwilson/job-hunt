@@ -15,6 +15,9 @@ import type {
   Task, JobChecklist, Suggestions, InterviewPrep, TaskPriority, TaskStatus,
   InterviewPrepSession, InterviewPrepDraftFeedback, StoryCheatSheet, InterviewListRow,
   InterviewStatus, InterviewCategory, AdvanceDecision, DuplicateInterviewGroup,
+  CoachingProfileResult, StorybankResult, CoachingStory, ScoreHistory,
+  CoachingArtifactResult, CoachingArtifactKind,
+  ConcernsContent, QuestionsContent, HypeContent, ProgressContent, DecodeContent,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -1067,4 +1070,143 @@ export async function fetchPostingSignals(): Promise<Record<string, PostingSigna
     out[p.id] = { experience_alignment: p.experience_alignment, growth_stage: p.growth_stage };
   }
   return out;
+}
+
+// ── the coaching layer (migration 024) ────────────────────────────────────────
+// Candidate-scoped state the per-round prep flow reads and writes. Plain RPC
+// reads/writes here; the AI stages that generate artifacts go through the
+// interview-prep edge function below. See docs/interview-coach-integration.md.
+
+export async function fetchCoachingProfile(): Promise<CoachingProfileResult> {
+  const { data, error } = await supabase.rpc("get_coaching_profile");
+  if (error) throw error;
+  return data as CoachingProfileResult;
+}
+
+/** Partial update — anything you don't pass is left untouched. */
+export async function saveCoachingProfile(patch: {
+  track?: string | null;
+  target_roles?: string[] | null;
+  seniority_band?: string | null;
+  directness?: number | null;
+  timeline?: string | null;
+  timeline_date?: string | null;
+  biggest_concern?: string | null;
+  interview_history?: string | null;
+  career_transition?: string | null;
+  transition_status?: string | null;
+  drill_stage?: number | null;
+  coaching_notes?: string[] | null;
+}): Promise<CoachingProfileResult> {
+  const { data, error } = await supabase.rpc("save_coaching_profile", {
+    p_track: patch.track ?? null,
+    p_target_roles: patch.target_roles ?? null,
+    p_seniority_band: patch.seniority_band ?? null,
+    p_directness: patch.directness ?? null,
+    p_timeline: patch.timeline ?? null,
+    p_timeline_date: patch.timeline_date ?? null,
+    p_biggest_concern: patch.biggest_concern ?? null,
+    p_interview_history: patch.interview_history ?? null,
+    p_career_transition: patch.career_transition ?? null,
+    p_transition_status: patch.transition_status ?? null,
+    p_drill_stage: patch.drill_stage ?? null,
+    p_coaching_notes: patch.coaching_notes ?? null,
+  });
+  if (error) throw error;
+  return data as CoachingProfileResult;
+}
+
+export async function fetchStorybank(competency?: string): Promise<StorybankResult> {
+  const { data, error } = await supabase.rpc("list_stories", { p_competency: competency ?? null });
+  if (error) throw error;
+  return data as StorybankResult;
+}
+
+/** Title is the natural key — reusing one enriches that story instead of duplicating it. */
+export async function upsertStory(story: {
+  title: string;
+  competency?: string | null;
+  situation?: string | null;
+  task?: string | null;
+  action?: string | null;
+  result?: string | null;
+  earned_secret?: string | null;
+  strength?: number | null;
+  best_for?: string | null;
+}): Promise<{ success: boolean; story: CoachingStory }> {
+  const { data, error } = await supabase.rpc("upsert_story", {
+    p_title: story.title,
+    p_competency: story.competency ?? null,
+    p_situation: story.situation ?? null,
+    p_task: story.task ?? null,
+    p_action: story.action ?? null,
+    p_result: story.result ?? null,
+    p_earned_secret: story.earned_secret ?? null,
+    p_strength: story.strength ?? null,
+    p_best_for: story.best_for ?? null,
+    p_source: "manual",
+  });
+  if (error) throw error;
+  return data as { success: boolean; story: CoachingStory };
+}
+
+export async function deleteStory(storyId: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_story", { p_story_id: storyId });
+  if (error) throw error;
+}
+
+export async function markStoryUsed(storyId: string): Promise<{ success: boolean; story: CoachingStory }> {
+  const { data, error } = await supabase.rpc("mark_story_used", { p_story_id: storyId });
+  if (error) throw error;
+  return data as { success: boolean; story: CoachingStory };
+}
+
+export async function fetchScoreHistory(limit = 30): Promise<ScoreHistory> {
+  const { data, error } = await supabase.rpc("get_score_history", { p_limit: limit });
+  if (error) throw error;
+  return data as ScoreHistory;
+}
+
+/** Read a previously generated sheet without re-running the model. */
+export async function fetchCoachingArtifact<T>(
+  kind: CoachingArtifactKind,
+  interviewId?: string,
+): Promise<CoachingArtifactResult<T>> {
+  const { data, error } = await supabase.rpc("get_coaching_artifact", {
+    p_kind: kind,
+    p_interview_id: interviewId ?? null,
+  });
+  if (error) throw error;
+  return data as CoachingArtifactResult<T>;
+}
+
+// The ported command stages. Same edge function, dispatched by `stage`; each
+// returns the freshly saved artifact rather than the whole prep session.
+export async function generateConcerns(interviewId: string) {
+  return invokeFunction<CoachingArtifactResult<ConcernsContent>>("interview-prep", {
+    interview_id: interviewId, stage: "concerns",
+  });
+}
+
+export async function generateQuestionsToAsk(interviewId: string) {
+  return invokeFunction<CoachingArtifactResult<QuestionsContent>>("interview-prep", {
+    interview_id: interviewId, stage: "questions",
+  });
+}
+
+export async function generateHype(interviewId: string) {
+  return invokeFunction<CoachingArtifactResult<HypeContent>>("interview-prep", {
+    interview_id: interviewId, stage: "hype",
+  });
+}
+
+export async function decodeJd(interviewId: string, jdText: string) {
+  return invokeFunction<CoachingArtifactResult<DecodeContent>>("interview-prep", {
+    interview_id: interviewId, stage: "decode", jd_text: jdText,
+  });
+}
+
+/** Candidate-scoped — reviews the whole search, so it takes no interview_id. */
+export async function generateProgressReview() {
+  return invokeFunction<CoachingArtifactResult<ProgressContent>>("interview-prep", { stage: "progress" });
 }

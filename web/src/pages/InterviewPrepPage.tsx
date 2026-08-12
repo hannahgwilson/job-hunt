@@ -293,18 +293,30 @@ export default function InterviewPrepPage() {
         </section>
       )}
 
-      {/* The sheets ported from the interview-coach skill. They need the
-          intake to exist (they read the round's context) but deliberately NOT
-          the research or a rehearsal — concerns and questions are useful the
-          moment a round is on the calendar, and hype is what you open in the
-          parking lot whether or not you got around to practising.
+      {/* The JD decode, first because it's the one you read earliest: it tells
+          you which competencies to go build stories for, which is upstream of
+          rehearsing them.
 
-          decode comes first because it's the one you run earliest: it tells you
-          which competencies to go build stories for, which is upstream of
-          rehearsing them. It's also the only one that needs an input. */}
+          It sits OUTSIDE the `session` gate, and it's keyed to the posting
+          rather than this round (migration 026). Both follow from the same fact:
+          a job description belongs to the role, so it doesn't need an intake to
+          exist and it doesn't want re-decoding for every round in the loop. This
+          renders whatever intake already generated — the second and third rounds
+          at a company open to a decode that's simply there. */}
+      {prep.role?.job_posting_id && (
+        <DecodeSheet
+          jobPostingId={prep.role.job_posting_id}
+          hasStoredJd={prep.role.has_jd_text ?? false}
+        />
+      )}
+
+      {/* The per-round sheets. They need the intake to exist (they read who's in
+          the room) but deliberately NOT the research or a rehearsal — concerns
+          and questions are useful the moment a round is on the calendar, and
+          hype is what you open in the parking lot whether or not you got around
+          to practising. */}
       {session && (
         <>
-          <DecodeSheet interviewId={interviewId!} />
           <ConcernsSheet interviewId={interviewId!} />
           <QuestionsSheet interviewId={interviewId!} />
           <HypeSheet interviewId={interviewId!} />

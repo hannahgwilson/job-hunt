@@ -48,6 +48,11 @@ export interface JobPosting {
   closing_date: string | null;
   closed_at: string | null;
   closed_reason: ClosedReason | null;
+  /** Whether the posting body is stored (migration 026's generated column). A
+   *  flag rather than the text: jd_text runs to tens of KB and the UI only needs
+   *  to know whether the JD decode can run without a paste. Absent for callers
+   *  that don't select it. */
+  has_jd_text?: boolean;
   organizations?: Organization;
 }
 
@@ -404,6 +409,8 @@ export interface RoleFitResponse {
     role_type: RoleType | null;
     closed_at: string | null;
     closed_reason: ClosedReason | null;
+    /** Whether the posting body is stored — see JobPosting.has_jd_text. */
+    has_jd_text?: boolean;
     organization_id: string;
     organization_name: string;
   } | null;
@@ -792,7 +799,13 @@ export interface InterviewPrepSession {
   // notes = the round's scheduling-time context (D5); optional until
   // migration 022 is applied.
   interview: { id: string; interview_type: string | null; scheduled_at: string | null; status: string; notes?: string | null };
-  role: { application_id: string; job_posting_id: string; title: string; organization_id: string; organization_name: string };
+  role: {
+    application_id: string; job_posting_id: string; title: string;
+    organization_id: string; organization_name: string;
+    /** Whether the posting body is stored, so the decode panel knows whether it
+     *  needs a paste. The flag, never the text — see JobPosting.has_jd_text. */
+    has_jd_text?: boolean;
+  };
   company_intel: { growth_stage: string | null };
   fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null } | null;
   interviewer: { contact_id: string; name: string; title: string | null } | null;
@@ -917,18 +930,69 @@ export interface CoachingStory {
   strength: number | null;
   best_for: string | null;
   tags: string[] | null;
-  source: "manual" | "synthesis" | "mock" | "mcp";
+  source: "manual" | "synthesis" | "mock" | "mcp" | "consolidation";
   source_interview_id: string | null;
   last_used_at: string | null;
   use_count: number;
   created_at: string;
   updated_at: string;
+  // ── migration 026 ─────────────────────────────────────────────────────────
+  /** Variant titles folded into this story. Why a later synthesis writing an old
+   *  title updates this row instead of resurrecting the duplicate. */
+  aliases: string[];
+  /** The employer it happened at — how the candidate actually distinguishes two
+   *  otherwise similar stories. */
+  company: string | null;
+  /** The one thing to fix before telling it. Distinct from a low strength:
+   *  strength says "weak story", sharpen says "strong story, one number short". */
+  sharpen: string | null;
+  /** A story the candidate named themselves. Consolidation merges variants INTO
+   *  anchors and never merges an anchor away. */
+  is_anchor: boolean;
 }
 
 export interface StorybankResult {
   success: boolean;
   error?: string;
   stories: CoachingStory[];
+}
+
+// ── story consolidation (migration 026) ──────────────────────────────────────
+// The proposal returned by the `consolidate_stories` stage. Nothing is written
+// until a cluster is accepted — a wrong merge loses the one telling that had the
+// number in it, so this round-trips through review.
+
+export interface StoryCluster {
+  title: string;
+  matches_anchor: boolean;
+  company?: string;
+  competency: string;
+  best_for?: string;
+  /** Titles this story has previously been filed under. These become aliases. */
+  variant_titles: string[];
+  situation?: string;
+  task?: string;
+  action?: string;
+  result?: string;
+  earned_secret?: string;
+  strength: number;
+  sharpen?: string;
+  source_note?: string;
+}
+
+export interface StoryConsolidationProposal {
+  clusters: StoryCluster[];
+  /** Anchors with no material anywhere — stories she says she tells but has
+   *  never written down. The highest-value gap in the library. */
+  unmatched_anchors?: string[];
+  coverage_notes?: string[];
+}
+
+export interface StoryConsolidationResult {
+  success: boolean;
+  error?: string;
+  proposal: StoryConsolidationProposal;
+  input_counts: { tellings: number; banked: number; anchors: number };
 }
 
 export interface CoachingScoreRow {
@@ -1020,6 +1084,48 @@ export interface DecodeContent {
 }
 
 export type CoachingArtifactKind = "concerns" | "questions_to_ask" | "hype" | "progress" | "decode";
+
+// ── outcome reconciliation ───────────────────────────────────────────────────
+// Rounds whose recorded verdict contradicts what actually happened to the
+// application. `advance_decision` gets written optimistically in the moment and
+// nothing ever went back to correct it, so the pass rate reads far higher than
+// reality — see get_outcome_reconciliation() in functions.sql.
+
+/** `contradicted` distorts the metrics; `undecided` merely withholds from them. */
+export type ReconcileIssue = "contradicted" | "undecided";
+
+export interface ReconcileRow {
+  interview_id: string;
+  interview_type: string | null;
+  scheduled_at: string | null;
+  rating: number | null;
+  feedback: string | null;
+  advance_decision: AdvanceDecision | null;
+  decision_notes: string | null;
+  application_id: string;
+  app_status: ApplicationStatus;
+  job_posting_id: string;
+  role_title: string | null;
+  organization_id: string;
+  organization_name: string;
+  /** The round whose verdict should match the outcome. An 'advance' on an early
+   *  round under a rejected app is history, not a contradiction. */
+  is_furthest_round: boolean;
+  issue: ReconcileIssue;
+  /** Derived from the application's own terminal status. Null when the app is
+   *  still live — there's no outcome to reconcile against yet. */
+  suggested_decision: AdvanceDecision | null;
+}
+
+export interface ReconcileResult {
+  success: boolean;
+  error?: string;
+  rows: ReconcileRow[];
+  contradicted: number;
+  undecided: number;
+  /** Rows carrying a suggestion, i.e. what "Accept all" would apply. */
+  actionable: number;
+}
 
 export type CoachingArtifactContent =
   | ConcernsContent | QuestionsContent | HypeContent | ProgressContent | DecodeContent;

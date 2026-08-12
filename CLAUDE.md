@@ -32,6 +32,11 @@ When I paste a job-description link (or describe a role):
 > enrichment server-side, the user reviews, `intake_role` persists). The chat
 > play remains the richer path — UI intake does **not** yet write the Open
 > Brain notes in step 3.
+>
+> UI intake also **decodes the JD once**, fire-and-forget, right after the
+> posting lands (migration 026 — see Play 5). Nothing to trigger by hand: the
+> decode artifact is keyed to the posting, so it can only exist once per role,
+> and every interview round at that company reads the same one.
 
 1. **Enrich.** Read the posting at the URL and extract: title, salary range,
    key requirements, location, remote policy, source. If the page is walled,
@@ -56,6 +61,11 @@ When I paste a job-description link (or describe a role):
    This find-or-creates the org (tagged `employer-target`) and inserts the
    posting transactionally. One company → many roles falls out naturally:
    intake another role at the same `organization_name` and it reuses the org.
+   **If you actually fetched the posting, pass `jd_text` too** — the page's own
+   words, not your summary of them. It's stored on the posting so the JD decode
+   (Play 5) can run on the role page without the user pasting the JD back in,
+   and so a re-run doesn't ask again. `requirements` is not a substitute: it's
+   already compressed, and decode's whole job is reading the wording.
    Forgot the signals at intake, or want to revise after a closer read?
    `set_priority_signals({ job_posting_id, experience_alignment?, career_trajectory?,
    growth_stage? })` — only the fields you pass change.
@@ -174,6 +184,25 @@ When I paste a job-description link (or describe a role):
    **computed client-side** (`web/src/lib/outcomes.ts`), so unlike the other
    metrics there is no SQL function or MCP tool for it yet — you can't ask this
    one in chat.
+5. **Reconcile before believing any of it.** `advance_decision` gets written in
+   the moment, optimistically: "they're moving me forward" is true the day it's
+   typed and false three weeks later when the loop dies, and nothing ever went
+   back to fix it. The result is a pass rate that reads far higher than reality.
+   `get_outcome_reconciliation()` returns the disagreements:
+   - **`contradicted`** — the application is terminal but its *furthest* round
+     still says `advance`. This actively skews every rate.
+   - **`undecided`** — a completed round on `hold` or with no verdict. This only
+     withholds from them; it sits outside every denominator.
+
+   Each row carries a `suggested_decision` inferred from the application's own
+   outcome (null while the app is still live). **Never apply these blindly** — a
+   round can genuinely have gone well and the loop still die because the budget
+   went or the req was pulled. Fix a row with `log_interview_notes`; when the
+   record is already right, `mark_outcome_reviewed({ interview_id, note })` drops
+   it out of the list without writing a loss that never happened. Same flow in
+   the UI at the top of Interviews → Outcomes, above the tables, deliberately: a
+   rate computed over stale verdicts is worse than no rate, because it looks
+   authoritative.
 
 ## Play 4 — Prioritize the apply queue (force-ranking)
 
@@ -256,13 +285,39 @@ fully MCP-exposed. Design notes:
    `seniority_band` matters most: every answer score is calibrated against it,
    so an unset band produces miscalibrated feedback. `directness` (1–5) governs
    delivery only — the diagnosis is identical at every level.
-3. **The storybank is durable.** `list_stories({ competency? })`,
+3. **The storybank is the story library.** `list_stories({ competency? })`,
    `upsert_story({ title, ... })` — **title is the key**, so reuse an exact
    title to enrich a story in place instead of creating a near-duplicate;
    omitted fields are left untouched. `mark_story_used({ story_id })` after a
    story gets told, which feeds rotation. Don't confuse this with
    `get_story_cheat_sheet`, which is a read-only rollup *derived* from past
-   syntheses and regenerated each time.
+   syntheses and regenerated each time — it's the per-round view, not the library.
+   The tracking hub's Interviews → **Story library** reads this table (it used to
+   render the cheat sheet, which is why nothing accumulated).
+
+   Three things keep it clean (migration 026):
+   - **Anchors.** `set_story_anchors({ titles })` — the stories the user says
+     they keep coming back to, in *their* words. Consolidation files variants
+     into anchors and never merges one away, so the library stays under the
+     user's own names instead of whichever title a model invented last. An
+     anchor with no STAR written is kept on purpose: it's the clearest record of
+     a story told out loud but never written down.
+   - **Aliases.** Every title folded into a story is remembered on it, and
+     `upsert_story` is alias-aware — a later synthesis writing an absorbed title
+     updates the keeper instead of resurrecting the duplicate. Pass `aliases`
+     when you merge tellings by hand.
+   - **Consolidation.** `get_story_consolidation_input()` returns anchors + the
+     storybank + every story synthesized across every past prep session, flat
+     and with provenance. Cluster on the **underlying event**, not the wording
+     (each session invented its own title for the same story); take the best
+     situation/task/action/result across the variants; and **carry over any
+     number that appears in *any* telling** — that's the single most valuable
+     thing the pass does. Then write each cluster with `upsert_story`, passing
+     the variant titles as `aliases`. `merge_stories({ p_keep_id, p_merge_ids })`
+     collapses duplicates already in the bank (additive — it can't blank a
+     better sentence the keeper had). Same flow in the UI under Interviews →
+     Story library → **Consolidate…**, which proposes and waits: a bad merge
+     loses the one telling that had the figure in it, so nothing auto-applies.
 4. **Score real rounds.** The mock-interview flow records its own scores; when
    debriefing a **real** interview, `record_coaching_score({ source: 'real',
    ... })` on the five dimensions — substance, structure (STAR lives here),

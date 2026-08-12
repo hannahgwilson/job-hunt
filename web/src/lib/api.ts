@@ -18,6 +18,7 @@ import type {
   CoachingProfileResult, StorybankResult, CoachingStory, ScoreHistory,
   CoachingArtifactResult, CoachingArtifactKind,
   ConcernsContent, QuestionsContent, HypeContent, ProgressContent, DecodeContent,
+  StoryCluster, StoryConsolidationResult, ReconcileResult,
 } from "./types";
 
 export async function fetchApplications(): Promise<Application[]> {
@@ -49,7 +50,7 @@ export async function fetchRole(applicationId: string): Promise<{
       id, status, applied_date, response_date, notes,
       job_postings:job_posting_id (
         id, title, url, location, remote_policy, salary_min, salary_max, closing_date,
-        closed_at, closed_reason,
+        closed_at, closed_reason, has_jd_text,
         organizations:organization_id ( id, name )
       )
     `)
@@ -422,6 +423,9 @@ export interface IntakeRoleInput {
   source?: string;
   requirements?: string[];
   notes?: string;
+  /** The posting body, when the caller has it. Stored so the JD decode can run
+   *  at intake and be regenerated later without re-pasting. */
+  jd_text?: string;
   // prioritization signals (see semantic/metrics/priority_score.yaml)
   experience_alignment?: number; // 0..1
   career_trajectory?: CareerTrajectory;
@@ -443,6 +447,7 @@ export async function intakeRole(input: IntakeRoleInput): Promise<{ posting_id: 
     p_experience_alignment: input.experience_alignment ?? null,
     p_career_trajectory: input.career_trajectory ?? null,
     p_growth_stage: input.growth_stage ?? null,
+    p_jd_text: input.jd_text ?? null,
   });
   if (error) throw error;
   const posting = (data as { posting?: { id: string } }).posting;
@@ -662,9 +667,17 @@ export interface ExtractedRole {
 // Fetch + extract a posting server-side (browser CORS blocks doing it here).
 // A prefill for AddRole — persists nothing; the user reviews, then intake_role
 // saves. Throws with a readable message on walled/unreadable pages.
-export async function extractRoleFromUrl(url: string): Promise<ExtractedRole> {
-  const res = await invokeFunction<{ role: ExtractedRole }>("intake-from-url", { url });
-  return res.role ?? {};
+//
+// `jd_text` is the raw posting body the fetch already pulled down. It rides along
+// so intake can store it, which is what lets the JD decode run at intake and be
+// re-run later without asking for the text again.
+export async function extractRoleFromUrl(
+  url: string,
+): Promise<{ role: ExtractedRole; jdText: string | null }> {
+  const res = await invokeFunction<{ role: ExtractedRole; jd_text?: string | null }>(
+    "intake-from-url", { url },
+  );
+  return { role: res.role ?? {}, jdText: res.jd_text ?? null };
 }
 
 // The career profile (baseline + ambition) judge-career reads. Edited on Profile.
@@ -1167,14 +1180,21 @@ export async function fetchScoreHistory(limit = 30): Promise<ScoreHistory> {
   return data as ScoreHistory;
 }
 
-/** Read a previously generated sheet without re-running the model. */
+/**
+ * Read a previously generated sheet without re-running the model.
+ *
+ * One of the two scopes, never both: per-round sheets pass `interviewId`, the JD
+ * decode passes `jobPostingId`, and `progress` passes neither.
+ */
 export async function fetchCoachingArtifact<T>(
   kind: CoachingArtifactKind,
   interviewId?: string,
+  jobPostingId?: string,
 ): Promise<CoachingArtifactResult<T>> {
   const { data, error } = await supabase.rpc("get_coaching_artifact", {
     p_kind: kind,
     p_interview_id: interviewId ?? null,
+    p_job_posting_id: jobPostingId ?? null,
   });
   if (error) throw error;
   return data as CoachingArtifactResult<T>;
@@ -1200,13 +1220,112 @@ export async function generateHype(interviewId: string) {
   });
 }
 
-export async function decodeJd(interviewId: string, jdText: string) {
+/**
+ * Decode a role's JD — competencies they'll probe, checked against the storybank.
+ *
+ * Scoped to the POSTING, not a round: a JD belongs to the role, so this runs
+ * once at intake and every round at that company reads the same decode. `jdText`
+ * is only needed when intake never captured the posting body (walled pages);
+ * pass it once and it's stored for later re-runs.
+ */
+export async function decodeRole(jobPostingId: string, jdText?: string) {
   return invokeFunction<CoachingArtifactResult<DecodeContent>>("interview-prep", {
-    interview_id: interviewId, stage: "decode", jd_text: jdText,
+    job_posting_id: jobPostingId, stage: "decode",
+    ...(jdText ? { jd_text: jdText } : {}),
   });
 }
 
 /** Candidate-scoped — reviews the whole search, so it takes no interview_id. */
 export async function generateProgressReview() {
   return invokeFunction<CoachingArtifactResult<ProgressContent>>("interview-prep", { stage: "progress" });
+}
+
+// ── story consolidation ──────────────────────────────────────────────────────
+
+/**
+ * Cluster every telling of every story into one library entry each.
+ *
+ * Returns a PROPOSAL — nothing is written. Merging destroys material (the wrong
+ * merge loses the one telling that had the number in it), so the accepted
+ * clusters go back through applyStoryCluster.
+ */
+export async function consolidateStories() {
+  return invokeFunction<StoryConsolidationResult>("interview-prep", { stage: "consolidate_stories" });
+}
+
+/**
+ * Write one accepted cluster into the storybank.
+ *
+ * The variant titles land as aliases, which is what stops the next prep
+ * synthesis writing one of them back as a fresh duplicate.
+ */
+export async function applyStoryCluster(cluster: StoryCluster): Promise<{ success: boolean; story: CoachingStory }> {
+  const { data, error } = await supabase.rpc("upsert_story", {
+    p_title: cluster.title,
+    p_competency: cluster.competency ?? null,
+    p_situation: cluster.situation ?? null,
+    p_task: cluster.task ?? null,
+    p_action: cluster.action ?? null,
+    p_result: cluster.result ?? null,
+    p_earned_secret: cluster.earned_secret ?? null,
+    p_strength: cluster.strength ?? null,
+    p_best_for: cluster.best_for ?? null,
+    p_source: "consolidation",
+    p_company: cluster.company ?? null,
+    p_sharpen: cluster.sharpen ?? null,
+    p_is_anchor: cluster.matches_anchor ? true : null,
+    p_aliases: cluster.variant_titles ?? [],
+  });
+  if (error) throw error;
+  return data as { success: boolean; story: CoachingStory };
+}
+
+/** Fold reviewed duplicates in the storybank into one keeper. */
+export async function mergeStories(keepId: string, mergeIds: string[]): Promise<{ success: boolean; story: CoachingStory; absorbed: string[] }> {
+  const { data, error } = await supabase.rpc("merge_stories", {
+    p_keep_id: keepId,
+    p_merge_ids: mergeIds,
+  });
+  if (error) throw error;
+  return data as { success: boolean; story: CoachingStory; absorbed: string[] };
+}
+
+/**
+ * Declare the stories you keep coming back to.
+ *
+ * Anchors are what keep the library under the candidate's own names —
+ * consolidation files variants into them and never merges one away. Titles that
+ * don't exist yet become empty shells, which is deliberate: a titled gap tells
+ * the next consolidation run what to go looking for.
+ */
+export async function setStoryAnchors(titles: string[]): Promise<{ success: boolean; anchors: number }> {
+  const { data, error } = await supabase.rpc("set_story_anchors", { p_titles: titles });
+  if (error) throw error;
+  return data as { success: boolean; anchors: number };
+}
+
+// ── outcome reconciliation ───────────────────────────────────────────────────
+
+/** Rounds whose verdict contradicts (or never caught up with) the application's
+ *  actual outcome. See get_outcome_reconciliation() for what counts. */
+export async function fetchReconciliation(): Promise<ReconcileResult> {
+  const { data, error } = await supabase.rpc("get_outcome_reconciliation");
+  if (error) throw error;
+  return data as ReconcileResult;
+}
+
+/**
+ * "I checked this round and the record is right — leave it."
+ *
+ * The escape hatch that keeps the reconcile list from pressuring you into
+ * recording a loss that didn't happen: a round can go well and the loop still
+ * die for budget or headcount reasons, and then 'advance' on the round and
+ * 'rejected' on the application are both true.
+ */
+export async function markOutcomeReviewed(interviewId: string, note?: string): Promise<void> {
+  const { error } = await supabase.rpc("mark_outcome_reviewed", {
+    p_interview_id: interviewId,
+    p_note: note ?? null,
+  });
+  if (error) throw error;
 }

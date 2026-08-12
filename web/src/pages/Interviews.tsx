@@ -5,21 +5,27 @@ import {
   findDuplicateInterviews, mergeInterviews,
 } from "../lib/api";
 import InterviewOutcome from "../components/InterviewOutcome";
-import StoryCard from "../components/StoryCard";
 import OutcomesPanel from "../components/OutcomesPanel";
+import StoryLibrary from "../components/StoryLibrary";
 import { awaitingDebrief, roundLabel } from "../lib/rounds";
 import { decidedRounds } from "../lib/outcomes";
 import type {
-  Interview, InterviewListRow, CheatSheetSession, InterviewPrepStory, InterviewPrep as PrepDoc,
+  Interview, InterviewListRow, CheatSheetSession, InterviewPrep as PrepDoc,
   DuplicateInterviewGroup,
 } from "../lib/types";
 
-// The merged Interviews tab: three sub-views over the same underlying data.
+// The merged Interviews tab: sub-views over the same underlying data.
 //   Upcoming — at-a-glance grid, interviews + networking calls both.
-//   Prep     — chronological, per-round: spikes/gaps + that round's stories,
-//              each tagged with the competency it answers.
-//   Story library — the standing, cross-company reference, indexed by
-//              competency instead of company, for open-ended browsing.
+//   Past     — closed-out rounds; amend a debrief or reopen a mis-click.
+//   Prep     — chronological, per-round: spikes/gaps + a link to that round's
+//              full prep session.
+//   Story library — the durable storybank (StoryLibrary.tsx), indexed by
+//              competency. This used to render get_story_cheat_sheet's
+//              per-session rollup, which meant the same story appeared once per
+//              prep session under a different invented title each time and
+//              nothing accumulated. The cheat sheet is still what the Prep
+//              sub-view counts, where per-round IS the right framing.
+//   Outcomes — pass rates, plus the reconcile pass that makes them true.
 // Networking calls only ever appear in Upcoming/Prep (as a lightweight card) —
 // the AI prep flow and story synthesis are scoped to formal interview rounds,
 // which are the only ones with a job_posting/role_fit to ground them in.
@@ -55,30 +61,6 @@ function matchesQuery(iv: InterviewListRow, q: string): boolean {
   return hay.includes(q.toLowerCase());
 }
 
-interface LibraryEntry { session: CheatSheetSession; story: InterviewPrepStory; }
-
-function competencyIndex(sessions: CheatSheetSession[]): Map<string, LibraryEntry[]> {
-  const map = new Map<string, LibraryEntry[]>();
-  for (const session of sessions) {
-    for (const story of session.stories) {
-      const key = story.competency?.trim() || "Uncategorized";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push({ session, story });
-    }
-  }
-  return map;
-}
-
-function matchesLibraryQuery(entry: LibraryEntry, q: string): boolean {
-  if (!q) return true;
-  const { session, story } = entry;
-  const hay = [
-    session.organization_name, session.role_title, story.title, story.competency,
-    story.situation, story.task, story.action, story.result, story.story, story.best_for,
-  ].filter(Boolean).join(" \n ").toLowerCase();
-  return hay.includes(q.toLowerCase());
-}
-
 export default function Interviews() {
   const [sub, setSub] = useState<SubTab>("upcoming");
   const [interviews, setInterviews] = useState<InterviewListRow[] | null>(null);
@@ -89,8 +71,6 @@ export default function Interviews() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [prepDocs, setPrepDocs] = useState<Record<string, { loading: boolean; doc: PrepDoc | null }>>({});
 
-  const [libQuery, setLibQuery] = useState("");
-  const [competency, setCompetency] = useState<string | null>(null);
   const [sweeping, setSweeping] = useState(false);
   const [pastQuery, setPastQuery] = useState("");
 
@@ -202,19 +182,6 @@ export default function Interviews() {
     return [...upcomingRows, ...pastRows];
   }, [interviews, prepQuery]);
 
-  const index = useMemo(() => competencyIndex(sheet ?? []), [sheet]);
-  const competencyList = useMemo(
-    () => [...index.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])),
-    [index],
-  );
-  useEffect(() => {
-    if (!competency && competencyList.length > 0) setCompetency(competencyList[0][0]);
-  }, [competency, competencyList]);
-  const libraryEntries = useMemo(() => {
-    const all = competency ? index.get(competency) ?? [] : [];
-    return all.filter((e) => matchesLibraryQuery(e, libQuery));
-  }, [index, competency, libQuery]);
-
   function openPrepFor(interviewId: string) {
     setSub("prep");
     setExpanded((prev) => new Set(prev).add(interviewId));
@@ -255,7 +222,7 @@ export default function Interviews() {
           Prep <span className="count">· {interviews.length}</span>
         </button>
         <button className={sub === "library" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("library")}>
-          Story library <span className="count">· {[...index.values()].reduce((n, v) => n + v.length, 0)}</span>
+          Story library
         </button>
         <button className={sub === "outcomes" ? "sub-tab active" : "sub-tab"} onClick={() => setSub("outcomes")}>
           Outcomes <span className="count">· {decidedRounds(interviews).length}</span>
@@ -508,58 +475,18 @@ export default function Interviews() {
         </section>
       )}
 
-      {sub === "library" && (
-        <section className="library-shell">
-          <div className="library-rail">
-            <div className="library-rail-label">By competency</div>
-            <ul className="library-nav">
-              {competencyList.map(([name, entries]) => (
-                <li
-                  key={name}
-                  className={competency === name ? "active" : ""}
-                  onClick={() => setCompetency(name)}
-                >
-                  <span>{name}</span>
-                  <span className="count">{entries.length}</span>
-                </li>
-              ))}
-              {competencyList.length === 0 && <li className="muted small">No stories synthesized yet.</li>}
-            </ul>
-          </div>
-          <div className="library-main">
-            <div className="section-head">
-              <input
-                type="search"
-                placeholder="Search stories…"
-                value={libQuery}
-                onChange={(e) => setLibQuery(e.target.value)}
-                style={{ flex: 1 }}
-              />
-            </div>
-            {competency && (
-              <>
-                <h2 className="library-heading">{competency}</h2>
-                <p className="muted small">
-                  {libraryEntries.length} stor{libraryEntries.length === 1 ? "y" : "ies"} tagged for this competency
-                  , across {new Set(libraryEntries.map((e) => e.session.organization_id)).size} compan
-                  {new Set(libraryEntries.map((e) => e.session.organization_id)).size === 1 ? "y" : "ies"}
-                </p>
-              </>
-            )}
-            {libraryEntries.map(({ session, story }, i) => (
-              <StoryCard
-                key={i}
-                story={story}
-                source={`from ${session.organization_name} prep`}
-                showCompetency={false}
-              />
-            ))}
-          </div>
-        </section>
-      )}
+      {/* The durable storybank, not a rollup of what each session generated. */}
+      {sub === "library" && <StoryLibrary />}
 
-      {/* Where the debrief data finally pays off (T3.2). */}
-      {sub === "outcomes" && <OutcomesPanel interviews={interviews} />}
+      {/* Where the debrief data finally pays off (T3.2). The reconcile pass
+          inside it rewrites verdicts, so it gets a way to refresh the list the
+          rates are computed from. */}
+      {sub === "outcomes" && (
+        <OutcomesPanel
+          interviews={interviews}
+          onRoundsChanged={() => fetchInterviews().then(setInterviews).catch((e) => setError(e.message))}
+        />
+      )}
     </div>
   );
 }

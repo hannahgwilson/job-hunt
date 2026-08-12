@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchPostingSignals } from "../lib/api";
+import ReconcilePanel from "./ReconcilePanel";
 import {
   byFitBand, byGrowthStage, byRoundType, decidedRounds, overall,
   type OutcomeBucket, type PostingSignals,
@@ -69,7 +70,15 @@ function OutcomeTable({ title, blurb, buckets }: { title: string; blurb: string;
   );
 }
 
-export default function OutcomesPanel({ interviews }: { interviews: InterviewListRow[] }) {
+export default function OutcomesPanel({
+  interviews,
+  onRoundsChanged,
+}: {
+  interviews: InterviewListRow[];
+  /** Refetch the round list — a corrected verdict has to move the rates on this
+   *  same screen, or reconciling feels like it did nothing. */
+  onRoundsChanged?: () => void;
+}) {
   const [signals, setSignals] = useState<Record<string, PostingSignals> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -118,6 +127,11 @@ export default function OutcomesPanel({ interviews }: { interviews: InterviewLis
           <div className="muted">awaiting a go/no-go</div>
         </div>
       </div>
+
+      {/* Above the cuts, deliberately. A pass rate computed over stale verdicts
+          is worse than no pass rate — it looks authoritative. Fix the inputs
+          first, then read the tables. */}
+      <ReconcilePanel onChanged={onRoundsChanged} />
 
       <OutcomeTable
         title="By round type"

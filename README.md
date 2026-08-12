@@ -71,12 +71,32 @@ exists. Ported from the
 [`interview-coach-skill`](https://github.com/noamseg/interview-coach-skill),
 whose guidance is compiled into a committed bundle by `dev/build_coach_bundle.mjs`.
 
+The storybank is the **one** story library, and **Consolidate** is how it fills:
+every prep session used to invent its own title for a story it had already been
+told, so the same work existed under four names and nothing accumulated. The pass
+clusters every telling by the underlying event, keeps the best of each STAR
+component — carrying over any number that appears in *any* version — and files
+the result under **anchors**, the titles you named yourself. It proposes rather
+than writes: the wrong merge loses the one telling that had the figure in it.
+
+**Decode a JD once per role** — the competencies a posting will actually probe
+for, each checked against the storybank. It runs automatically at intake and is
+keyed to the posting, so a nine-round loop reads one decode instead of paying for
+nine identical ones.
+
 **Build résumés** — a **bullet library** of reusable, tagged, orderable lines; the
 generator picks the best of them per JD into an editable one-pager. Synthesis
 themes can be promoted straight into the library.
 
 **Analyze** — true conversion + median time-in-stage from the status history; a
 résumé-fit-vs-(career+growth) scatter on the Insights page; per-company pages.
+Pass rate per round type, company stage, and résumé-fit band under Interviews →
+**Outcomes**, with a **Reconcile** pass above the tables: a go/no-go gets typed
+optimistically in the moment and never corrected, so rounds marked *advance* pile
+up under applications that ended in a rejection and the rate reads far higher than
+reality. Reconcile surfaces each disagreement with a suggestion derived from the
+application's own outcome, and applies nothing until you say so — a loop can die
+for reasons that had nothing to do with the round.
 
 ---
 

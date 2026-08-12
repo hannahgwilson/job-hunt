@@ -4,12 +4,18 @@ import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
 import TailoredResumePanel from "../components/TailoredResumePanel";
 import CloseRoleControl from "../components/CloseRoleControl";
+import { DecodeSheet } from "../components/CoachSheets";
 import { usePriorityWeights } from "../lib/usePriorityWeights";
 import { submitApplication } from "../lib/api";
 
 // Posting-scoped fit page (reached from the to-apply table, for roles with no
 // application yet). The scoring UI itself lives in RoleFitPanel, which the
 // application/role view (/role/:id) also embeds.
+//
+// The JD decode belongs here too, and arguably here most of all: intake
+// generates it (migration 026), and a role you haven't applied to yet has no
+// /role/:id page — so without it, the decode that just ran would be invisible
+// until you applied.
 
 export default function RoleFit() {
   const { id } = useParams<{ id: string }>();
@@ -88,6 +94,8 @@ export default function RoleFit() {
       />
 
       <TailoredResumePanel jobPostingId={p.id} baseResumeId={data.recommended_resume_id} />
+
+      <DecodeSheet jobPostingId={p.id} hasStoredJd={p.has_jd_text ?? false} />
 
       {(p.requirements?.length ?? 0) > 0 && (
         <section className="card">

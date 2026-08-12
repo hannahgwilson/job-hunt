@@ -45,8 +45,14 @@ function FeedbackBody({ fb }: { fb: InterviewPrepFeedback }) {
           layer shipped — older transcript entries render exactly as before. */}
       {fb.scores && <RubricScores scores={fb.scores} bottleneck={fb.bottleneck} compact />}
       {fb.root_cause && <p className="small"><strong>Why:</strong> {fb.root_cause}</p>}
-      {fb.what_worked.length > 0 && <p className="small"><strong>Worked:</strong> {fb.what_worked.join(" · ")}</p>}
-      {fb.what_to_improve.length > 0 && <p className="small"><strong>Improve:</strong> {fb.what_to_improve.join(" · ")}</p>}
+      {/* Persisted transcript entries can predate a schema change, so never
+          index these lists without checking they're actually lists. */}
+      {Array.isArray(fb.what_worked) && fb.what_worked.length > 0 && (
+        <p className="small"><strong>Worked:</strong> {fb.what_worked.join(" · ")}</p>
+      )}
+      {Array.isArray(fb.what_to_improve) && fb.what_to_improve.length > 0 && (
+        <p className="small"><strong>Improve:</strong> {fb.what_to_improve.join(" · ")}</p>
+      )}
       {fb.differentiation_note && (
         <p className="muted small"><em>Only you could say:</em> {fb.differentiation_note}</p>
       )}

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import Dashboard from "./pages/Dashboard";
@@ -12,6 +12,7 @@ import Profile from "./pages/Profile";
 import TuningBench from "./pages/TuningBench";
 import InterviewPrepPage from "./pages/InterviewPrepPage";
 import Interviews from "./pages/Interviews";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function Login() {
   const [email, setEmail] = useState("");
@@ -81,6 +82,7 @@ const NAV: { to: string; label: string; end: boolean }[] = [
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const location = useLocation();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -110,18 +112,21 @@ export default function App() {
         </button>
       </header>
       <main>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/pipeline" element={<Pipeline />} />
-          <Route path="/queue" element={<ActionQueue />} />
-          <Route path="/resume" element={<Profile />} />
-          <Route path="/bench" element={<TuningBench />} />
-          <Route path="/role/:id" element={<RoleDetail />} />
-          <Route path="/posting/:id" element={<RoleFit />} />
-          <Route path="/company/:id" element={<Company />} />
-          <Route path="/interview-prep/:interviewId" element={<InterviewPrepPage />} />
-          <Route path="/interviews" element={<Interviews />} />
-        </Routes>
+        {/* Keyed by path so a crashed page clears when you navigate away. */}
+        <ErrorBoundary key={location.pathname}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/pipeline" element={<Pipeline />} />
+            <Route path="/queue" element={<ActionQueue />} />
+            <Route path="/resume" element={<Profile />} />
+            <Route path="/bench" element={<TuningBench />} />
+            <Route path="/role/:id" element={<RoleDetail />} />
+            <Route path="/posting/:id" element={<RoleFit />} />
+            <Route path="/company/:id" element={<Company />} />
+            <Route path="/interview-prep/:interviewId" element={<InterviewPrepPage />} />
+            <Route path="/interviews" element={<Interviews />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

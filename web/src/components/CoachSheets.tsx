@@ -8,6 +8,16 @@ import type {
 } from "../lib/types";
 
 /**
+ * Every list below comes out of a persisted model response. The generation
+ * schemas mark these `required`, but a row written by an earlier schema — or a
+ * response that came back a field short — used to throw straight through the
+ * render and blank the whole app. Read them through this instead.
+ */
+function arr<T>(v: T[] | null | undefined): T[] {
+  return Array.isArray(v) ? v : [];
+}
+
+/**
  * The per-round sheets ported from the interview-coach skill's commands
  * (docs/interview-coach-integration.md): concerns, questions to ask, the
  * pre-interview hype sheet, and the JD decode.
@@ -104,8 +114,10 @@ export function ConcernsSheet({ interviewId }: { interviewId: string }) {
     >
       {content && (
         <>
-          <p className="small"><strong>Biggest risk:</strong> {content.biggest_risk}</p>
-          {content.concerns.map((c, i) => (
+          {content.biggest_risk && (
+            <p className="small"><strong>Biggest risk:</strong> {content.biggest_risk}</p>
+          )}
+          {arr(content.concerns).map((c, i) => (
             <div key={i} className="prep-feedback-card">
               <div className="prep-msg-head">
                 <span className={`pill ${SEVERITY_CLASS[c.severity] ?? ""}`}>{c.severity}</span>
@@ -134,20 +146,22 @@ export function QuestionsSheet({ interviewId }: { interviewId: string }) {
       {content && (
         <>
           <ul className="clean">
-            {content.questions.map((q, i) => (
+            {arr(content.questions).map((q, i) => (
               <li key={i} className="prep-question">
                 <p className="small"><strong>{q.question}</strong></p>
                 {q.ask_who && <p className="muted small">Ask: {q.ask_who}</p>}
-                <p className="muted small">Signals: {q.why_it_lands}</p>
-                <p className="muted small">You learn: {q.what_the_answer_tells_you}</p>
+                {q.why_it_lands && <p className="muted small">Signals: {q.why_it_lands}</p>}
+                {q.what_the_answer_tells_you && (
+                  <p className="muted small">You learn: {q.what_the_answer_tells_you}</p>
+                )}
               </li>
             ))}
           </ul>
-          {content.avoid.length > 0 && (
+          {arr(content.avoid).length > 0 && (
             <>
               <h3>Skip this round</h3>
               <ul className="clean">
-                {content.avoid.map((a, i) => <li key={i} className="muted small">{a}</li>)}
+                {arr(content.avoid).map((a, i) => <li key={i} className="muted small">{a}</li>)}
               </ul>
             </>
           )}
@@ -201,7 +215,7 @@ export function DecodeSheet({ interviewId }: { interviewId: string }) {
         <>
           <h3>Competencies they'll probe</h3>
           <ul className="clean">
-            {content.competencies.map((c, i) => (
+            {arr(content.competencies).map((c, i) => (
               <li key={i} className="prep-question">
                 <div className="prep-msg-head">
                   <span className={`pill ${COVERAGE_CLASS[c.candidate_coverage] ?? ""}`}>
@@ -216,29 +230,29 @@ export function DecodeSheet({ interviewId }: { interviewId: string }) {
             ))}
           </ul>
 
-          {content.coverage_gaps.length > 0 && (
+          {arr(content.coverage_gaps).length > 0 && (
             <>
               <h3>Gaps to close before this round</h3>
               <ul className="clean">
-                {content.coverage_gaps.map((g, i) => <li key={i} className="small">· {g}</li>)}
+                {arr(content.coverage_gaps).map((g, i) => <li key={i} className="small">· {g}</li>)}
               </ul>
             </>
           )}
 
-          {content.signals.length > 0 && (
+          {arr(content.signals).length > 0 && (
             <>
               <h3>What the wording signals</h3>
               <ul className="clean">
-                {content.signals.map((s, i) => <li key={i} className="muted small">· {s}</li>)}
+                {arr(content.signals).map((s, i) => <li key={i} className="muted small">· {s}</li>)}
               </ul>
             </>
           )}
 
-          {content.verify_with_recruiter && content.verify_with_recruiter.length > 0 && (
+          {arr(content.verify_with_recruiter).length > 0 && (
             <>
               <h3>Verify with the recruiter</h3>
               <ul className="clean">
-                {content.verify_with_recruiter.map((v, i) => <li key={i} className="muted small">· {v}</li>)}
+                {arr(content.verify_with_recruiter).map((v, i) => <li key={i} className="muted small">· {v}</li>)}
               </ul>
             </>
           )}
@@ -255,15 +269,15 @@ export function HypeSheet({ interviewId }: { interviewId: string }) {
     if (!content) return;
     const md = [
       "## Why I belong in this room",
-      ...content.hype_reel.map((h) => `- ${h}`),
+      ...arr(content.hype_reel).map((h) => `- ${h}`),
       "",
       "## 3 concerns + counters",
-      ...content.three_concerns.map((c) => `- **${c.concern}** → ${c.counter}`),
+      ...arr(content.three_concerns).map((c) => `- **${c.concern}** → ${c.counter}`),
       "",
       "## 3 questions to ask",
-      ...content.three_questions.map((q) => `- ${q}`),
+      ...arr(content.three_questions).map((q) => `- ${q}`),
       "",
-      `**Focus cue:** ${content.focus_cue}`,
+      `**Focus cue:** ${content.focus_cue ?? ""}`,
       ...(content.recovery_script ? ["", `**If I bomb one:** ${content.recovery_script}`] : []),
     ].join("\n");
     navigator.clipboard.writeText(md);
@@ -281,33 +295,35 @@ export function HypeSheet({ interviewId }: { interviewId: string }) {
             <button className="ghost sm" onClick={copyMarkdown}>Copy as markdown</button>
           </div>
 
-          <div className="prep-focus">
-            <h3>Focus cue</h3>
-            <p><strong>{content.focus_cue}</strong></p>
-          </div>
+          {content.focus_cue && (
+            <div className="prep-focus">
+              <h3>Focus cue</h3>
+              <p><strong>{content.focus_cue}</strong></p>
+            </div>
+          )}
 
           <h3>Why you belong in this room</h3>
           <ul className="clean">
-            {content.hype_reel.map((h, i) => <li key={i}>· {h}</li>)}
+            {arr(content.hype_reel).map((h, i) => <li key={i}>· {h}</li>)}
           </ul>
 
           <h3>3 concerns + counters</h3>
           <ul className="clean">
-            {content.three_concerns.map((c, i) => (
+            {arr(content.three_concerns).map((c, i) => (
               <li key={i} className="small"><strong>{c.concern}</strong> → {c.counter}</li>
             ))}
           </ul>
 
           <h3>3 questions to ask</h3>
           <ul className="clean">
-            {content.three_questions.map((q, i) => <li key={i} className="small">{q}</li>)}
+            {arr(content.three_questions).map((q, i) => <li key={i} className="small">{q}</li>)}
           </ul>
 
-          {content.warmup && content.warmup.length > 0 && (
+          {arr(content.warmup).length > 0 && (
             <>
               <h3>10-minute warmup</h3>
               <ul className="clean">
-                {content.warmup.map((w, i) => <li key={i} className="small">{i + 1}. {w}</li>)}
+                {arr(content.warmup).map((w, i) => <li key={i} className="small">{i + 1}. {w}</li>)}
               </ul>
             </>
           )}
@@ -320,11 +336,11 @@ export function HypeSheet({ interviewId }: { interviewId: string }) {
           )}
 
           {/* Pre-mortem only comes back at directness 5 (Challenge Protocol). */}
-          {content.pre_mortem && content.pre_mortem.length > 0 && (
+          {arr(content.pre_mortem).length > 0 && (
             <>
               <h3>Pre-mortem</h3>
               <ul className="clean">
-                {content.pre_mortem.map((p, i) => (
+                {arr(content.pre_mortem).map((p, i) => (
                   <li key={i} className="small"><strong>{p.failure_mode}</strong> — {p.prevention_cue}</li>
                 ))}
               </ul>

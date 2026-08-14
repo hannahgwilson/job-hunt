@@ -566,6 +566,19 @@ export async function fetchFitEvals(): Promise<FitEvalRow[]> {
 // reason is in the response body our functions return as { success:false, error }.
 // Pull it out (and also handle functions that report failure with a 200 body) so
 // the UI shows something actionable instead of the opaque generic message.
+//
+// Two shapes, and only reading the first is how a 504 spent an afternoon looking
+// like a mystery: our own handler answers `{ success:false, error }`, but a
+// failure the handler never saw — gateway timeout, worker OOM, boot error — is
+// answered by the *platform*, keyed `message`/`msg` with a `code`. Reading only
+// `error` there falls through to the generic string, which is precisely the case
+// where the generic string tells you nothing. Read both, and name the timeout:
+// it means the work was too big for one call, not that anything is broken.
+const PLATFORM_HINTS: Record<number, string> = {
+  504: "the function hit the 150s Edge Function ceiling — too much work for one call",
+  546: "the function ran out of memory or CPU budget",
+};
+
 async function invokeFunction<T>(name: string, body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke(name, { body });
   if (error) {
@@ -574,10 +587,14 @@ async function invokeFunction<T>(name: string, body: Record<string, unknown>): P
     if (res && typeof res.json === "function") {
       try {
         const parsed = await res.json();
+        const platform = parsed?.message ?? parsed?.msg;
         if (parsed?.error) detail = parsed.error;
+        else if (platform) detail = `${name}: ${platform}`;
       } catch {
-        /* body wasn't JSON — keep the generic message */
+        /* body wasn't JSON — fall through to the status-code hint */
       }
+      const hint = PLATFORM_HINTS[res.status];
+      if (hint && detail === error.message) detail = `${name} failed (${res.status}) — ${hint}`;
     }
     throw new Error(detail);
   }
@@ -1243,14 +1260,44 @@ export async function generateProgressReview() {
 // ── story consolidation ──────────────────────────────────────────────────────
 
 /**
- * Cluster every telling of every story into one library entry each.
+ * Pass 1 — decide what the stories are.
  *
- * Returns a PROPOSAL — nothing is written. Merging destroys material (the wrong
- * merge loses the one telling that had the number in it), so the accepted
- * clusters go back through applyStoryCluster.
+ * Returns clusters carrying identity only: title, variant_titles, anchor match.
+ * No STAR yet; assembleStoryCluster fills each one in. The split is what keeps
+ * the pass inside the 150s Edge Function ceiling — doing both jobs in one call
+ * was output-bound and, once the prep syntheses piled up, stopped returning at
+ * all (a 504 the UI could only report as "non-2xx").
+ *
+ * Nothing is written either way. Merging destroys material — the wrong merge
+ * loses the one telling that had the number in it — so the accepted clusters go
+ * back through applyStoryCluster one at a time.
  */
 export async function consolidateStories() {
   return invokeFunction<StoryConsolidationResult>("interview-prep", { stage: "consolidate_stories" });
+}
+
+/**
+ * Pass 2 — assemble one planned cluster into an actual story.
+ *
+ * The server re-reads the material and picks out this cluster's tellings by
+ * title, so only the identity fields need to go back over the wire.
+ */
+export async function assembleStoryCluster(cluster: StoryCluster): Promise<StoryCluster> {
+  const r = await invokeFunction<{ success: boolean; cluster: StoryCluster; telling_count: number }>(
+    "interview-prep",
+    {
+      stage: "consolidate_cluster",
+      cluster: {
+        title: cluster.title,
+        variant_titles: cluster.variant_titles ?? [],
+        matches_anchor: cluster.matches_anchor,
+        company: cluster.company,
+        competency: cluster.competency,
+        source_note: cluster.source_note,
+      },
+    },
+  );
+  return r.cluster;
 }
 
 /**

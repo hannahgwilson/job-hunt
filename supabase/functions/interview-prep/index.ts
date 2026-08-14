@@ -40,10 +40,16 @@
  *                 once per round with a manual JD paste each time.
  *   consolidate_stories
  *               — folds every telling of a story across all prep syntheses into
- *                 one library entry, best-of per STAR component. Candidate-
- *                 scoped, and the only stage that PROPOSES rather than
- *                 persists — a bad merge loses the one telling that had the
- *                 number in it, so the client applies what's accepted.
+ *                 one library entry. Candidate-scoped. PASS 1: groups the
+ *                 tellings and returns titles + variant titles only.
+ *   consolidate_cluster
+ *               — PASS 2: assembles one of those clusters into a story, best-of
+ *                 per STAR component, from just that cluster's tellings. One
+ *                 request per story, because one request for all of them ran
+ *                 past the 150s Edge Function ceiling.
+ *                 Both PROPOSE rather than persist — a bad merge loses the one
+ *                 telling that had the number in it, so the client applies what
+ *                 the candidate accepts.
  *
  * Coach guidance comes from ./coach-bundle.ts, compiled from the skill repo by
  * dev/build_coach_bundle.mjs. It's the stable half of every system prompt and
@@ -440,12 +446,30 @@ const PROGRESS_TOOL = {
   },
 };
 
-const CONSOLIDATE_TOOL = {
-  name: "report_consolidation",
+/**
+ * Consolidation is TWO calls, and the split is not an optimisation — it's what
+ * makes the pass finish at all.
+ *
+ * It used to be one: every telling from every prep synthesis in a single prompt,
+ * `max_tokens: 8000`, asked to both cluster AND write the assembled STAR for
+ * each cluster. That is output-bound, and at ~40 syntheses it stopped returning
+ * inside the 150s Edge Function ceiling — the gateway killed it at 150,105ms and
+ * the client saw an opaque non-2xx. Worse, nothing checked `stop_reason`, so a
+ * run that *did* squeak in under the wire could have truncated the tool call
+ * mid-JSON and looked like a model failure.
+ *
+ * So: PLAN decides what the stories are, reading a compact one-line index of
+ * every telling and emitting titles + variant titles only (small output, and it
+ * scales with the number of distinct stories rather than the volume of text).
+ * ASSEMBLE then writes one story at a time from just that cluster's tellings —
+ * small in, small out, one request each. Both fit comfortably, and each story
+ * gets the model's whole attention instead of a share of one 8k budget.
+ */
+const CONSOLIDATE_PLAN_TOOL = {
+  name: "report_consolidation_plan",
   description:
-    "Cluster every telling of the candidate's stories into one entry per underlying story, pick the best version of " +
-    "each STAR component across the variants, and say what's still missing. One cluster per real story — not per " +
-    "title you were given.",
+    "Decide what the candidate's stories actually ARE: group every telling you were shown into one cluster per " +
+    "underlying event. Do not write the stories — that happens one at a time afterwards, with the full text in hand.",
   input_schema: {
     type: "object",
     properties: {
@@ -472,43 +496,20 @@ const CONSOLIDATE_TOOL = {
               type: "string",
               description: "The single competency this is the strongest answer for — how it gets found under pressure.",
             },
-            best_for: { type: "string", description: "Secondary competencies / question types it also answers." },
             variant_titles: {
               type: "array",
               items: { type: "string" },
               description:
-                "Every title this story has previously been filed under, copied EXACTLY as given. These become " +
-                "aliases, so a typo here resurrects a duplicate later.",
-            },
-            situation: { type: "string", description: "The best situation across the variants — stakes visible, no preamble." },
-            task: { type: "string", description: "What the candidate specifically owned. Not what the team owned." },
-            action: { type: "string", description: "The best action across the variants — the actual mechanism, decisions and tradeoffs included." },
-            result: { type: "string", description: "The best result across the variants. Quantified if ANY variant quantified it — carry the number over." },
-            earned_secret: {
-              type: "string",
-              description:
-                "The insight only this candidate could have, from having lived it. Omit rather than invent: an " +
-                "absent secret is the finding, and a manufactured one fails the moment it's probed.",
-            },
-            strength: {
-              type: "integer",
-              minimum: 1,
-              maximum: 5,
-              description:
-                "How strong the CONSOLIDATED story is: 5 = quantified, differentiated, ready to tell. 3 = complete " +
-                "but interchangeable. Do not inflate because several variants exist — four vague tellings is still vague.",
-            },
-            sharpen: {
-              type: "string",
-              description:
-                "The one thing to fix before telling it. Usually a missing number. Omit only if it's genuinely ready.",
+                "Every title this story has previously been filed under, copied EXACTLY as given — they are the key " +
+                "the assembly pass uses to find this cluster's material, and they become aliases afterwards. A " +
+                "paraphrase here both starves the assembly and resurrects the duplicate later.",
             },
             source_note: {
               type: "string",
               description: "Where the material came from, e.g. 'merged from 3 Cityblock/EvolutionIQ syntheses'.",
             },
           },
-          required: ["title", "matches_anchor", "competency", "variant_titles", "strength"],
+          required: ["title", "matches_anchor", "competency", "variant_titles"],
         },
       },
       unmatched_anchors: {
@@ -525,6 +526,47 @@ const CONSOLIDATE_TOOL = {
       },
     },
     required: ["clusters"],
+  },
+};
+
+const CONSOLIDATE_STORY_TOOL = {
+  name: "report_consolidated_story",
+  description:
+    "Assemble ONE story from every telling of it, taking the best version of each STAR component across the variants.",
+  input_schema: {
+    type: "object",
+    properties: {
+      competency: {
+        type: "string",
+        description: "The single competency this is the strongest answer for — how it gets found under pressure.",
+      },
+      company: { type: "string", description: "The employer the story happened at, e.g. 'Oscar' or 'Garner'." },
+      best_for: { type: "string", description: "Secondary competencies / question types it also answers." },
+      situation: { type: "string", description: "The best situation across the variants — stakes visible, no preamble." },
+      task: { type: "string", description: "What the candidate specifically owned. Not what the team owned." },
+      action: { type: "string", description: "The best action across the variants — the actual mechanism, decisions and tradeoffs included." },
+      result: { type: "string", description: "The best result across the variants. Quantified if ANY variant quantified it — carry the number over." },
+      earned_secret: {
+        type: "string",
+        description:
+          "The insight only this candidate could have, from having lived it. Omit rather than invent: an " +
+          "absent secret is the finding, and a manufactured one fails the moment it's probed.",
+      },
+      strength: {
+        type: "integer",
+        minimum: 1,
+        maximum: 5,
+        description:
+          "How strong the CONSOLIDATED story is: 5 = quantified, differentiated, ready to tell. 3 = complete " +
+          "but interchangeable. Do not inflate because several variants exist — four vague tellings is still vague.",
+      },
+      sharpen: {
+        type: "string",
+        description:
+          "The one thing to fix before telling it. Usually a missing number. Omit only if it's genuinely ready.",
+      },
+    },
+    required: ["strength"],
   },
 };
 
@@ -850,6 +892,17 @@ function findToolUse(data: { content?: Array<{ type: string; name?: string; inpu
   return (data.content ?? []).reverse().find((b) => b.type === "tool_use" && b.name === name);
 }
 
+/**
+ * A forced tool call that ran out of output budget still comes back as a
+ * `tool_use` block — with whatever fields fit and the rest silently missing. So
+ * `findToolUse` succeeding is not the same as the model finishing, and a
+ * consolidated story truncated mid-`result` is exactly the material this pass
+ * exists to preserve. Check the stop reason before trusting the input.
+ */
+function hitTokenCeiling(data: { stop_reason?: string }) {
+  return data?.stop_reason === "max_tokens";
+}
+
 // Shared by both feedback paths (committed-answer and draft-workshop) — the
 // coach persona is the same either way, only what happens to the result differs.
 async function critiqueAnswer(
@@ -985,14 +1038,15 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceKey);
 
-    const { interview_id, stage, action, message, draft_answer, jd_text, job_posting_id } = await req.json();
+    const { interview_id, stage, action, message, draft_answer, jd_text, job_posting_id, cluster } =
+      await req.json();
     if (!stage) return json({ success: false, error: "stage required" }, 400);
 
     // Three scopes, and only the per-round one needs an interview_id:
-    //   per-candidate  progress, consolidate_stories  — reviews the whole search
-    //   per-role       decode                         — a JD belongs to a posting
+    //   per-candidate  progress, consolidate_*  — reviews the whole search
+    //   per-role       decode                   — a JD belongs to a posting
     //   per-round      everything else
-    const SCOPELESS = ["progress", "consolidate_stories"];
+    const SCOPELESS = ["progress", "consolidate_stories", "consolidate_cluster"];
     const needsInterview = !SCOPELESS.includes(stage) && stage !== "decode";
     if (needsInterview && !interview_id) {
       return json({ success: false, error: "interview_id required" }, 400);
@@ -1112,15 +1166,19 @@ Deno.serve(async (req) => {
       return json(saved);
     }
 
-    // ---- consolidate_stories: candidate-scoped, and the only stage that -----
-    // proposes rather than persists.
+    // ---- consolidate_stories / consolidate_cluster: candidate-scoped, and ---
+    // the only stages that propose rather than persist.
     //
     // Merging stories destroys material — the wrong merge loses the one telling
-    // that had the number in it. So this returns clusters for review and the
+    // that had the number in it. So these return clusters for review and the
     // client applies the accepted ones through upsert_story / merge_stories.
     // Every other stage can afford to write directly because a bad artifact is
     // just regenerated.
-    if (stage === "consolidate_stories") {
+    //
+    // Two passes (see CONSOLIDATE_PLAN_TOOL for why): `consolidate_stories`
+    // decides what the stories are, `consolidate_cluster` writes one of them.
+    // Both read the same material, so they share the load below.
+    if (stage === "consolidate_stories" || stage === "consolidate_cluster") {
       const { data: input, error: inErr } = await admin.rpc("get_story_consolidation_input", {
         p_user_id: userId,
       });
@@ -1140,6 +1198,154 @@ Deno.serve(async (req) => {
         }, 400);
       }
 
+      const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+      const clip = (v: unknown, n: number) => {
+        const s = String(v ?? "").replace(/\s+/g, " ").trim();
+        return s.length > n ? `${s.slice(0, n)}…` : s;
+      };
+
+      // The full text of one telling — what the assembly pass reads. Every
+      // field, uncut, including the narrative: at a handful of tellings that's
+      // cheap, and the number this pass exists to rescue is often only in the
+      // narrative.
+      const fullTelling = (t: typeof tellings[number], i: number) => {
+        const s = t.story as Record<string, unknown>;
+        return (
+          `--- telling ${i + 1} · ${t.organization_name} ${t.role_title ? `(${t.role_title})` : ""} ` +
+          `${t.interview_type ?? ""} · synthesized ${(t.synthesized_at ?? "").slice(0, 10)}\n` +
+          `title: ${s.title ?? "(untitled)"}\n` +
+          `competency: ${s.competency ?? "-"}\n` +
+          `situation: ${s.situation ?? "-"}\n` +
+          `task: ${s.task ?? "-"}\n` +
+          `action: ${s.action ?? "-"}\n` +
+          `result: ${s.result ?? "-"}\n` +
+          (s.best_for ? `best_for: ${s.best_for}\n` : "") +
+          (s.story ? `narrative: ${s.story}\n` : "")
+        );
+      };
+
+      const bankedLine = (s: Record<string, unknown>) => {
+        const star = [s.situation, s.task, s.action, s.result].filter(Boolean).join(" / ");
+        return (
+          `- "${s.title}"${s.is_anchor ? " [ANCHOR]" : ""}${s.company ? ` [${s.company}]` : ""} ` +
+          `[${s.competency ?? "uncategorized"}] strength ${s.strength ?? "?"}/5` +
+          (star ? `\n  ${star}` : "\n  (no STAR written)") +
+          (s.earned_secret ? `\n  earned secret: ${s.earned_secret}` : "") +
+          (Array.isArray(s.aliases) && s.aliases.length ? `\n  already absorbed: ${(s.aliases as string[]).join(" | ")}` : "")
+        );
+      };
+
+      // ---- pass 2: assemble ONE story from just its own tellings ------------
+      if (stage === "consolidate_cluster") {
+        const want = new Set(
+          [cluster?.title, ...(cluster?.variant_titles ?? [])].filter(Boolean).map(norm),
+        );
+        if (!cluster?.title || want.size === 0) {
+          return json({ success: false, error: "consolidate_cluster needs { cluster: { title, variant_titles } }" }, 400);
+        }
+
+        // Titles are the join key the plan pass emits. A title it paraphrased
+        // finds nothing here, which is why the plan tool leans on copying them
+        // character for character.
+        const mine = tellings.filter((t) => want.has(norm((t.story as Record<string, unknown>).title)));
+        const bankedMine = banked.filter((s) =>
+          want.has(norm(s.title)) ||
+          (Array.isArray(s.aliases) && (s.aliases as string[]).some((a) => want.has(norm(a)))));
+
+        if (mine.length === 0 && bankedMine.length === 0) {
+          return json({
+            success: false,
+            error: `no material found for "${cluster.title}" — none of its variant titles matched a telling. Re-run the plan.`,
+          }, 404);
+        }
+
+        // An ANCHOR is a title with nothing behind it until a telling gets filed
+        // under it — that's the whole reason set_story_anchors writes STAR-less
+        // rows. So a cluster can match material by title and still have no words
+        // in it, and asking the model to assemble from nothing gets you a
+        // confident empty story with a strength score attached. Say so instead:
+        // "you tell this one but have never written it down" is the finding, and
+        // it's the same thing the library itself reports for a bare anchor.
+        const hasWords = (s: Record<string, unknown>) => Boolean(s.situation || s.task || s.action || s.result);
+        if (mine.length === 0 && !bankedMine.some(hasWords)) {
+          return json({
+            success: true,
+            cluster: {
+              ...cluster,
+              no_material: true,
+              sharpen:
+                "Nothing written down anywhere — no prep synthesis has ever captured this one. Rehearse a round " +
+                "that draws on it, or dictate it in conversation, and consolidation will have something to fold in.",
+            },
+            telling_count: 0,
+          });
+        }
+
+        const data = await callClaude(apiKey, {
+          model: MODEL,
+          max_tokens: 1500,
+          system: systemBlocks(
+            "You assemble one interview story from every telling of it.\n\n" +
+              "The same story has been told many times across many prep sessions, each inventing its own title and " +
+              "remembering a different part. Take the sharpest situation, the task as the candidate actually owned " +
+              "it, the action with its real mechanism, and the most quantified result available across ALL of them. " +
+              "If one telling has the number and three don't, the number carries over — that is the single most " +
+              "valuable thing this pass does.\n\n" +
+              "Rules that matter more than tidiness:\n" +
+              "- Never invent content. If no telling quantified the result, say so in `sharpen` rather than supplying " +
+              "a plausible figure — a fabricated number is the one failure mode that destroys credibility in the room.\n" +
+              "- Be honest in `strength`. Four vague tellings assemble into one vague story, not a strong one.\n" +
+              "- Omit `earned_secret` rather than manufacture one. Its absence is the finding.\n\n" +
+              "Call report_consolidated_story.\n\n" +
+              coachGuidance("stories"),
+            `=== COACHING CONTEXT ===\n${coachSeed(coach)}${directnessNote(coach)}`,
+          ),
+          tools: [CONSOLIDATE_STORY_TOOL],
+          tool_choice: { type: "tool", name: "report_consolidated_story" },
+          messages: [
+            {
+              role: "user",
+              content:
+                `=== THE STORY ===\n"${cluster.title}"` +
+                `${cluster.company ? ` · ${cluster.company}` : ""}${cluster.competency ? ` · ${cluster.competency}` : ""}\n\n` +
+                (bankedMine.length
+                  ? `=== ALREADY IN THE STORYBANK ===\n${bankedMine.map(bankedLine).join("\n")}\n\n`
+                  : "") +
+                `=== EVERY TELLING OF IT (${mine.length}) ===\n` +
+                (mine.length ? mine.map(fullTelling).join("\n") : "(none — the storybank entry above is all there is)") +
+                "\n\nAssemble it and call report_consolidated_story.",
+            },
+          ],
+        });
+        const toolUse = findToolUse(data, "report_consolidated_story");
+        if (!toolUse) return json({ success: false, error: `could not assemble "${cluster.title}" — try again` }, 502);
+        if (hitTokenCeiling(data)) {
+          return json({
+            success: false,
+            error: `"${cluster.title}" ran past the output budget and came back half-written — try again`,
+          }, 502);
+        }
+
+        // The plan owns identity (title, aliases, anchor match); this pass owns
+        // content. Merge in that order so an assembly that drifted on the title
+        // can't fork the cluster the candidate is looking at.
+        return json({
+          success: true,
+          cluster: {
+            ...cluster,
+            ...(toolUse.input as Record<string, unknown>),
+            title: cluster.title,
+            matches_anchor: cluster.matches_anchor ?? false,
+            variant_titles: cluster.variant_titles ?? [],
+            source_note:
+              cluster.source_note ??
+              `assembled from ${mine.length} telling${mine.length === 1 ? "" : "s"}`,
+          },
+          telling_count: mine.length,
+        });
+      }
+
+      // ---- pass 1: decide what the stories are ------------------------------
       // Anchors go in FIRST and are labelled as the candidate's own names. The
       // model reuses them verbatim; everything else is material to be filed
       // under them. That's what stops the library drifting back to
@@ -1153,81 +1359,87 @@ Deno.serve(async (req) => {
             .join("\n")
         : "=== ANCHOR STORIES ===\n(none declared — cluster on the material alone and title each cluster the way the candidate would refer to it: what happened, where.)";
 
-      const tellingsBlock = tellings.length
+      // One line per telling, not the whole thing. Recognising that four titles
+      // describe one event needs the title, where it happened, and enough of the
+      // situation and result to identify it — not the full STAR. Sending the
+      // full text here is what made the single-call version output-bound.
+      //
+      // Clipped generously, though: it's OUTPUT that blew the budget, and the
+      // thing this pass has to get right is deciding that a telling titled
+      // "Steerage Metric Definition → Product Experimentation" is the anchor
+      // called "Steerage dashboard at Oscar". Starve it of situation text and it
+      // files that under a new title instead, which is the drift the anchors
+      // exist to stop.
+      const indexBlock = tellings.length
         ? tellings
-            .map((t, i) => {
+            .map((t) => {
               const s = t.story as Record<string, unknown>;
               return (
-                `--- telling ${i + 1} · ${t.organization_name} ${t.role_title ? `(${t.role_title})` : ""} ` +
-                `${t.interview_type ?? ""} · synthesized ${(t.synthesized_at ?? "").slice(0, 10)}\n` +
-                `title: ${s.title ?? "(untitled)"}\n` +
-                `competency: ${s.competency ?? "-"}\n` +
-                `situation: ${s.situation ?? "-"}\n` +
-                `task: ${s.task ?? "-"}\n` +
-                `action: ${s.action ?? "-"}\n` +
-                `result: ${s.result ?? "-"}\n` +
-                (s.best_for ? `best_for: ${s.best_for}\n` : "") +
-                (s.story ? `narrative: ${s.story}\n` : "")
+                `- "${s.title ?? "(untitled)"}" · ${t.organization_name}` +
+                `${t.interview_type ? ` ${t.interview_type}` : ""} · ${s.competency ?? "uncategorized"}\n` +
+                `  ${clip(s.situation, 320) || "(no situation written)"}` +
+                (s.action ? `\n  did: ${clip(s.action, 200)}` : "") +
+                (s.result ? `\n  → ${clip(s.result, 160)}` : "")
               );
             })
             .join("\n")
         : "(no synthesized prep sheets)";
 
-      const bankedBlock = banked.length
-        ? banked
-            .map((s) => {
-              const star = [s.situation, s.task, s.action, s.result].filter(Boolean).join(" / ");
-              return (
-                `- "${s.title}"${s.is_anchor ? " [ANCHOR]" : ""}${s.company ? ` [${s.company}]` : ""} ` +
-                `[${s.competency ?? "uncategorized"}] strength ${s.strength ?? "?"}/5` +
-                (star ? `\n  ${star}` : "\n  (no STAR written)") +
-                (s.earned_secret ? `\n  earned secret: ${s.earned_secret}` : "") +
-                (Array.isArray(s.aliases) && s.aliases.length ? `\n  already absorbed: ${(s.aliases as string[]).join(" | ")}` : "")
-              );
-            })
-            .join("\n")
-        : "(storybank is empty)";
+      const bankedBlock = banked.length ? banked.map(bankedLine).join("\n") : "(storybank is empty)";
 
       const data = await callClaude(apiKey, {
         model: MODEL,
-        max_tokens: 8000,
+        max_tokens: 4000,
         system: systemBlocks(
-          "You consolidate a candidate's scattered interview stories into one clean library.\n\n" +
+          "You reconcile a candidate's scattered interview stories into one clean library.\n\n" +
             "The same story has been told many times across many prep sessions, and each session invented its own " +
-            "title for it. Your job is to recognise those as ONE story and assemble the best single version: the " +
-            "sharpest situation, the task as the candidate actually owned it, the action with its real mechanism, " +
-            "and the most quantified result available across every telling. If one telling has the number and three " +
-            "don't, the number carries over — that is the single most valuable thing this pass does.\n\n" +
+            "title for it. Your job in THIS pass is only to recognise which tellings are the same story. You are " +
+            "shown one line per telling — a title, where it happened, and a clipped situation. Do not write the " +
+            "stories; a second pass assembles each one with the full text in hand.\n\n" +
             "Rules that matter more than tidiness:\n" +
             "- Cluster on the UNDERLYING EVENT, not on wording. Two tellings of the same Garner steerage work are one " +
             "cluster even if the titles share no words. Two different hard-people-calls at two different companies " +
             "are two clusters even if both are tagged 'conflict'.\n" +
-            "- Never invent content. If no telling quantified the result, say so in `sharpen` rather than supplying a " +
-            "plausible figure — a fabricated number is the one failure mode that destroys credibility in the room.\n" +
-            "- Copy `variant_titles` character for character from the input. They become aliases; a paraphrase there " +
+            "- Copy `variant_titles` character for character from the input. They are how the assembly pass finds " +
+            "this cluster's material, and they become aliases afterwards; a paraphrase both starves the assembly and " +
             "silently resurrects the duplicate on the next run.\n" +
-            "- Be honest in `strength`. Four vague tellings consolidate into one vague story, not a strong one.\n\n" +
-            "Call report_consolidation.\n\n" +
+            "- Every telling belongs to exactly one cluster. A story you can't place still gets its own cluster — " +
+            "dropping it loses the material.\n" +
+            "- **Anchors are where the tellings go.** An anchor is the candidate's own name for a story they keep " +
+            "telling, so almost every anchor SHOULD end up with variant titles filed under it. Before you invent a " +
+            "title for a cluster, check whether it is one of the anchors described differently — a telling about the " +
+            "same company and the same work is that anchor, however little the wording overlaps. Inventing a new " +
+            "title for material that belongs to an anchor is the specific failure this pass exists to prevent.\n" +
+            "- An anchor with genuinely no material anywhere goes in `unmatched_anchors` — NOT into a cluster with an " +
+            "empty `variant_titles`. A cluster with no variants and no banked STAR has nothing to assemble, and the " +
+            "candidate ends up looking at a story with a title and no words in it.\n\n" +
+            "Call report_consolidation_plan.\n\n" +
             coachGuidance("stories"),
           `=== COACHING CONTEXT ===\n${coachSeed(coach)}${directnessNote(coach)}`,
         ),
-        tools: [CONSOLIDATE_TOOL],
-        tool_choice: { type: "tool", name: "report_consolidation" },
+        tools: [CONSOLIDATE_PLAN_TOOL],
+        tool_choice: { type: "tool", name: "report_consolidation_plan" },
         messages: [
           {
             role: "user",
             content:
               `${anchorBlock}\n\n=== ALREADY IN THE STORYBANK ===\n${bankedBlock}\n\n` +
-              `=== EVERY TELLING FOUND ACROSS ${tellings.length} PREP SYNTHES${tellings.length === 1 ? "IS" : "ES"} ===\n${tellingsBlock}\n\n` +
-              "Consolidate all of it and call report_consolidation.",
+              `=== EVERY TELLING FOUND ACROSS ${tellings.length} PREP SYNTHES${tellings.length === 1 ? "IS" : "ES"} ===\n${indexBlock}\n\n` +
+              "Group all of it and call report_consolidation_plan.",
           },
         ],
       });
-      const toolUse = findToolUse(data, "report_consolidation");
-      if (!toolUse) return json({ success: false, error: "consolidation did not return a proposal — try again" }, 502);
+      const toolUse = findToolUse(data, "report_consolidation_plan");
+      if (!toolUse) return json({ success: false, error: "consolidation did not return a plan — try again" }, 502);
+      if (hitTokenCeiling(data)) {
+        return json({
+          success: false,
+          error: "the plan ran past the output budget and came back with only some of your stories — try again",
+        }, 502);
+      }
 
-      // Nothing persisted: the client shows this for review and applies what
-      // the candidate accepts.
+      // Nothing persisted: the client assembles each cluster, shows it, and
+      // applies what the candidate accepts.
       return json({
         success: true,
         proposal: toolUse.input,

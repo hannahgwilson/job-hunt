@@ -962,22 +962,35 @@ export interface StorybankResult {
 // until a cluster is accepted — a wrong merge loses the one telling that had the
 // number in it, so this round-trips through review.
 
+/**
+ * Consolidation arrives in two pieces. The plan pass fills in identity —
+ * title, variant_titles, anchor match — and nothing else; the assembly pass
+ * fills in the STAR. So everything below `variant_titles` is absent on a
+ * freshly planned cluster and present once it's been assembled, which is why
+ * `strength` is optional here even though a saved story always has one.
+ */
 export interface StoryCluster {
   title: string;
   matches_anchor: boolean;
   company?: string;
   competency: string;
-  best_for?: string;
-  /** Titles this story has previously been filed under. These become aliases. */
+  /** Titles this story has previously been filed under. These become aliases,
+   *  and they're the key the assembly pass uses to find the cluster's material. */
   variant_titles: string[];
+  source_note?: string;
+  best_for?: string;
   situation?: string;
   task?: string;
   action?: string;
   result?: string;
   earned_secret?: string;
-  strength: number;
+  strength?: number;
   sharpen?: string;
-  source_note?: string;
+  /** Set by the assembly pass when the cluster matched only a bare anchor — a
+   *  title the candidate named with no telling behind it anywhere. Not an
+   *  error: it's the library's most useful gap, and saving it would write an
+   *  empty story with a confident strength score on it. */
+  no_material?: boolean;
 }
 
 export interface StoryConsolidationProposal {

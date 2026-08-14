@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  applyStoryCluster, consolidateStories, deleteStory, fetchStorybank,
+  applyStoryCluster, assembleStoryCluster, consolidateStories, deleteStory, fetchStorybank,
   markStoryUsed, mergeStories, setStoryAnchors,
 } from "../lib/api";
 import type { CoachingStory, StoryCluster, StoryConsolidationProposal } from "../lib/types";
@@ -161,6 +161,24 @@ function LibraryStory({
 }
 
 /**
+ * Where a proposed cluster is in the two-pass flow.
+ *
+ * The plan pass returns identity only — title, variant titles, anchor match —
+ * and each story is then assembled by its own request. So a card exists, with
+ * its real name on it, before it has any words in it.
+ */
+type ClusterStatus = "queued" | "assembling" | "ready" | "applying" | "done" | "skipped" | "error";
+
+const STATUS_NOTE: Partial<Record<ClusterStatus, string>> = {
+  queued: "waiting to assemble",
+  assembling: "assembling from every telling…",
+  applying: "saving…",
+  done: "saved",
+  skipped: "skipped",
+  error: "couldn't assemble",
+};
+
+/**
  * The consolidation proposal, per cluster, accept or skip.
  *
  * Deliberately not auto-applied. Every other AI stage in this app writes
@@ -170,34 +188,57 @@ function LibraryStory({
  * the pass is to carry it forward.
  */
 function ClusterCard({
-  cluster, applied, onApply,
+  cluster, status, error, onApply, onRetry,
 }: {
   cluster: StoryCluster;
-  applied: "pending" | "applying" | "done" | "skipped";
+  status: ClusterStatus;
+  error?: string;
   onApply: () => void;
+  onRetry: () => void;
 }) {
   const star: Array<[string, string | undefined]> = [
     ["Situation", cluster.situation], ["Task", cluster.task],
     ["Action", cluster.action], ["Result", cluster.result],
   ];
+  const pending = status === "queued" || status === "assembling";
+
   return (
-    <div className={`story-card cluster-card is-${applied}`}>
+    <div className={`story-card cluster-card is-${status}`}>
       <div className="story-card-head">
         <div className="story-card-title">
           {cluster.title}
           {cluster.matches_anchor && <span className="pill pill-accepted">anchor</span>}
           {cluster.company && <span className="pill">{cluster.company}</span>}
           <span className="pill">{cluster.competency}</span>
-          <span className={`pill ${strengthClass(cluster.strength)}`}>strength {cluster.strength}/5</span>
+          {cluster.strength != null && (
+            <span className={`pill ${strengthClass(cluster.strength)}`}>strength {cluster.strength}/5</span>
+          )}
         </div>
-        <div className="muted small">
-          {applied === "done" ? "saved" : applied === "skipped" ? "skipped" : cluster.source_note}
-        </div>
+        <div className="muted small">{STATUS_NOTE[status] ?? cluster.source_note}</div>
       </div>
 
-      <dl className="story-star">
-        {star.map(([k, v]) => v && <><dt key={k}>{k}</dt><dd key={`${k}d`}>{v}</dd></>)}
-      </dl>
+      {/* One failed assembly is one story, not the whole pass — the other cards
+          keep filling in behind it, and this one retries on its own. */}
+      {status === "error" ? (
+        <p className="error small">{error ?? "assembly failed"}</p>
+      ) : pending ? (
+        <p className="muted small">
+          Reading {cluster.variant_titles.length || "all"} telling
+          {cluster.variant_titles.length === 1 ? "" : "s"} of this one…
+        </p>
+      ) : cluster.no_material ? (
+        /* An anchor with nothing behind it. Saying "no STAR" here would read as
+           a bug; it's the opposite — the clearest record of a story she tells
+           out loud and has never written down. */
+        <p className="muted small">
+          Nothing written down yet — you named this story, but no prep synthesis has ever captured it.
+          Saving it banks the title so the next synthesis has somewhere to file it.
+        </p>
+      ) : (
+        <dl className="story-star">
+          {star.map(([k, v]) => v && <><dt key={k}>{k}</dt><dd key={`${k}d`}>{v}</dd></>)}
+        </dl>
+      )}
 
       {cluster.earned_secret && <p className="small"><em>Earned secret:</em> {cluster.earned_secret}</p>}
       {cluster.sharpen && <p className="small story-sharpen"><strong>Sharpen:</strong> {cluster.sharpen}</p>}
@@ -212,12 +253,16 @@ function ClusterCard({
         </p>
       )}
 
-      {applied === "pending" && (
+      {status === "ready" && (
         <div className="prep-chat-actions">
           <button className="sm" onClick={onApply}>Save to library</button>
         </div>
       )}
-      {applied === "applying" && <p className="muted small">Saving…</p>}
+      {status === "error" && (
+        <div className="prep-chat-actions">
+          <button className="ghost sm" onClick={onRetry}>Try this one again</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -230,11 +275,15 @@ export default function StoryLibrary() {
   const [query, setQuery] = useState("");
   const [competency, setCompetency] = useState<string | null>(null);
 
-  // Consolidation
+  // Consolidation. `proposal` is the plan's own commentary (unmatched anchors,
+  // coverage notes); `clusters` is the working copy, because each one is
+  // assembled by its own request and swapped in as it lands.
   const [proposal, setProposal] = useState<StoryConsolidationProposal | null>(null);
+  const [clusters, setClusters] = useState<StoryCluster[]>([]);
   const [counts, setCounts] = useState<{ tellings: number; banked: number; anchors: number } | null>(null);
   const [running, setRunning] = useState(false);
-  const [clusterState, setClusterState] = useState<Record<string, "pending" | "applying" | "done" | "skipped">>({});
+  const [clusterState, setClusterState] = useState<Record<string, ClusterStatus>>({});
+  const [clusterErrors, setClusterErrors] = useState<Record<string, string>>({});
 
   // Anchors
   const [editingAnchors, setEditingAnchors] = useState(false);
@@ -274,17 +323,48 @@ export default function StoryLibrary() {
     finally { setSavingAnchors(false); }
   }
 
+  /**
+   * Assemble planned clusters, a few at a time.
+   *
+   * One request per story is the whole point — the single call that wrote all
+   * of them at once ran past the 150s Edge Function ceiling and came back as an
+   * unreadable 504. Three at a time keeps the cards filling in visibly without
+   * opening a dozen model calls at once, and a failure is scoped to its own card.
+   */
+  async function assemble(list: StoryCluster[]) {
+    const queue = [...list];
+    const worker = async () => {
+      for (;;) {
+        const c = queue.shift();
+        if (!c) return;
+        setClusterState((s) => ({ ...s, [c.title]: "assembling" }));
+        setClusterErrors(({ [c.title]: _gone, ...rest }) => rest);
+        try {
+          const filled = await assembleStoryCluster(c);
+          setClusters((cur) => cur.map((x) => (x.title === c.title ? { ...x, ...filled } : x)));
+          setClusterState((s) => ({ ...s, [c.title]: "ready" }));
+        } catch (e) {
+          setClusterErrors((s) => ({ ...s, [c.title]: (e as Error).message }));
+          setClusterState((s) => ({ ...s, [c.title]: "error" }));
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+  }
+
   async function runConsolidation() {
-    setRunning(true); setError(null); setProposal(null);
+    setRunning(true); setError(null); setProposal(null); setClusters([]); setClusterErrors({});
+    let planned: StoryCluster[] = [];
     try {
       const r = await consolidateStories();
+      planned = r.proposal.clusters ?? [];
       setProposal(r.proposal);
+      setClusters(planned);
       setCounts(r.input_counts);
-      setClusterState(
-        Object.fromEntries((r.proposal.clusters ?? []).map((c) => [c.title, "pending" as const])),
-      );
-    } catch (e) { setError((e as Error).message); }
+      setClusterState(Object.fromEntries(planned.map((c) => [c.title, "queued" as const])));
+    } catch (e) { setError((e as Error).message); return; }
     finally { setRunning(false); }
+    await assemble(planned);
   }
 
   async function applyCluster(c: StoryCluster) {
@@ -295,15 +375,15 @@ export default function StoryLibrary() {
       load();
     } catch (e) {
       setError((e as Error).message);
-      setClusterState((s) => ({ ...s, [c.title]: "pending" }));
+      setClusterState((s) => ({ ...s, [c.title]: "ready" }));
     }
   }
 
   async function applyAll() {
-    const pending = (proposal?.clusters ?? []).filter((c) => clusterState[c.title] === "pending");
+    const ready = clusters.filter((c) => clusterState[c.title] === "ready");
     // Sequential on purpose: upsert_story resolves aliases, and two concurrent
     // writes that both claim the same variant title would race.
-    for (const c of pending) await applyCluster(c);
+    for (const c of ready) await applyCluster(c);
   }
 
   async function doMerge() {
@@ -357,6 +437,9 @@ export default function StoryLibrary() {
   if (!stories) return <p className="muted">Loading…</p>;
 
   const empty = stories.length === 0;
+  const stillAssembling = clusters.filter(
+    (c) => (clusterState[c.title] ?? "queued") === "queued" || clusterState[c.title] === "assembling",
+  ).length;
 
   return (
     <section>
@@ -406,14 +489,14 @@ export default function StoryLibrary() {
         <div className="card consolidation">
           <div className="section-head">
             <h3 style={{ margin: 0 }}>
-              Proposed library <span className="count">· {proposal.clusters?.length ?? 0} stories</span>
+              Proposed library <span className="count">· {clusters.length} stories</span>
             </h3>
             <button
               className="sm"
               onClick={applyAll}
-              disabled={!Object.values(clusterState).some((s) => s === "pending")}
+              disabled={!Object.values(clusterState).some((s) => s === "ready")}
             >
-              Save all
+              Save all{stillAssembling > 0 ? " that are ready" : ""}
             </button>
             <button className="ghost sm" onClick={() => setProposal(null)}>Dismiss</button>
           </div>
@@ -423,6 +506,14 @@ export default function StoryLibrary() {
               syntheses plus {counts.banked} banked stor{counts.banked === 1 ? "y" : "ies"}, against{" "}
               {counts.anchors} anchor{counts.anchors === 1 ? "" : "s"}. Nothing is saved until you say so —
               a merge that drops the one telling with the number in it can't be undone.
+            </p>
+          )}
+          {/* Each story is written by its own request, so they land one at a
+              time. Say so, rather than leaving half the cards looking empty. */}
+          {stillAssembling > 0 && (
+            <p className="muted small">
+              Assembling {stillAssembling} of {clusters.length} — each story is written from its own
+              tellings, so they fill in as they finish. You can save the ready ones now.
             </p>
           )}
 
@@ -445,12 +536,14 @@ export default function StoryLibrary() {
             </ul>
           )}
 
-          {(proposal.clusters ?? []).map((c) => (
+          {clusters.map((c) => (
             <ClusterCard
               key={c.title}
               cluster={c}
-              applied={clusterState[c.title] ?? "pending"}
+              status={clusterState[c.title] ?? "queued"}
+              error={clusterErrors[c.title]}
               onApply={() => applyCluster(c)}
+              onRetry={() => assemble([c])}
             />
           ))}
         </div>

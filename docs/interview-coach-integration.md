@@ -101,7 +101,7 @@ Three scopes, not two (revised by migration 026):
 |---|---|---|
 | per-round | `concerns`, `questions`, `hype` | `interview_id` |
 | **per-role** | `decode` | `job_posting_id` |
-| per-candidate | `progress`, `consolidate_stories` | neither |
+| per-candidate | `progress`, `consolidate_stories`, `consolidate_cluster` | neither |
 
 Where each one is reachable today:
 
@@ -110,7 +110,7 @@ Where each one is reachable today:
 | `concerns`, `questions`, `hype` | Interview Prep page, below the round flow (`CoachSheets.tsx`) |
 | `decode` | Role page — both `/posting/:id` and `/role/:id` — and read-only at the top of each round's prep page |
 | `progress` | Resumes page, in the storybank panel |
-| `consolidate_stories` | Interviews → Story library (`StoryLibrary.tsx`) |
+| `consolidate_stories`, `consolidate_cluster` | Interviews → Story library (`StoryLibrary.tsx`) |
 
 ### Why `decode` moved off the round
 
@@ -136,13 +136,35 @@ A job description is a property of the **posting**. So:
   tells you which competencies to go build stories for, which is upstream of
   scheduling anything.
 
-### `consolidate_stories`
+### `consolidate_stories` → `consolidate_cluster`
 
-The one stage that **proposes rather than persists**. Every other stage writes
+The one flow that **proposes rather than persists**. Every other stage writes
 directly, because a bad artifact is just regenerated — but consolidation merges
 stories, and if four tellings exist and only one carried the dollar figure, the
 wrong merge loses that number permanently. It returns clusters; the client
 applies what's accepted through `upsert_story` / `merge_stories`.
+
+**It is two calls, and that's load-bearing.** It shipped as one — every telling
+from every prep synthesis in a single prompt, `max_tokens: 8000`, asked to both
+cluster *and* write each assembled STAR. That is output-bound, and it scales with
+the volume of material rather than the number of stories, so it worked in testing
+and then stopped returning entirely: at ~40 syntheses the gateway killed it at
+150,105 ms against the 150 s Edge Function ceiling, and supabase-js could only
+report the 504 as "Edge Function returned a non-2xx status code". So:
+
+- `consolidate_stories` (**plan**) reads a one-line index of every telling —
+  title, employer, competency, clipped situation — and emits identity only:
+  `title`, `variant_titles`, `matches_anchor`. Output scales with the number of
+  distinct stories, which is bounded by how many stories a person has.
+- `consolidate_cluster` (**assemble**) writes one story from the full text of
+  just its own tellings, found by matching `variant_titles` — which is why the
+  plan tool insists on copying those character for character. One request per
+  story, three in flight, each card filling in as it lands.
+
+Each story also gets the model's whole attention instead of a share of one 8k
+budget, and a failed assembly is scoped to its own card with a retry.
+Both passes check `stop_reason` now: a forced tool call that runs out of output
+budget still returns a `tool_use` block, just with the tail of the story missing.
 
 It also fixes the reason the storybank was empty in practice: prep synthesis has
 written to it since this integration shipped, but every session that ran *before*

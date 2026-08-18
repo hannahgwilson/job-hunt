@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { priorityComponents, priorityScore } from "../lib/priority";
 import { fetchRole } from "../lib/api";
 import RoleFitPanel, { useRoleFit } from "../components/RoleFitPanel";
 import PriorityBreakdown from "../components/PriorityBreakdown";
@@ -49,30 +50,68 @@ export default function RoleDetail() {
   if (!app) return <p className="muted">Loading…</p>;
 
   const posting = app.job_postings;
+  const comp = posting?.salary_min && posting?.salary_max
+    ? `$${Math.round(posting.salary_min / 1000)}–${Math.round(posting.salary_max / 1000)}k`
+    : null;
+  const closing = posting?.closing_date
+    ? `closes ${new Date(posting.closing_date).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`
+    : null;
+  const growthStage = fit.data?.posting?.growth_stage ?? null;
+  // The same 0–100 the Pipeline ranks on, recomputed client-side from the same
+  // inputs and the user's own weights (semantic/metrics/priority_score.yaml).
+  const priority = fit.data?.posting
+    ? priorityScore(priorityComponents(fit.data.posting), weights)
+    : null;
+  // The judge's strongest read, for the sub-line under the score.
+  const bestFit = [...(fit.data?.resumes ?? [])]
+    .filter((r) => r.fit?.alignment != null)
+    .sort((a, b) => (b.fit!.alignment as number) - (a.fit!.alignment as number))[0] ?? null;
 
   return (
     <div className="page">
       <p><Link to="/pipeline">← Pipeline</Link></p>
-      <div className="page-head">
-        <h1>{posting?.title}</h1>
-        <span className={`pill pill-${app.status}`}>{app.status}</span>
-        <StatusActions app={app} onChanged={load} onError={setError} />
-        {posting?.id && (
-          <CloseRoleControl
-            jobPostingId={posting.id}
-            closedAt={posting.closed_at}
-            closedReason={posting.closed_reason}
-            onChanged={load}
-          />
-        )}
-        {posting?.id && <AddToChecklist jobPostingId={posting.id} />}
+      {/* The dossier hero: the verdict stated once, large, with the facts that
+          qualify it. Everything below is the argument for the number. */}
+      <div className="dossier-hero">
+        <div>
+          <div className="dossier-org">
+            {posting?.organizations?.name}
+            {growthStage && growthStage !== "unknown" && <> · {growthStage}-stage</>}
+          </div>
+          <h1 className="dossier-role">{posting?.title}</h1>
+          <div className="dossier-facts">
+            {[posting?.location, posting?.remote_policy, comp, closing]
+              .filter(Boolean)
+              .map((f, i) => <span key={i}>{f}</span>)}
+            {posting?.url && <a href={posting.url} target="_blank" rel="noreferrer">posting ↗</a>}
+          </div>
+          <div className="dossier-actions" style={{ marginTop: "0.9rem" }}>
+            <span className={`pill pill-${app.status}`}>{app.status}</span>
+            <StatusActions app={app} onChanged={load} onError={setError} />
+            {posting?.id && (
+              <CloseRoleControl
+                jobPostingId={posting.id}
+                closedAt={posting.closed_at}
+                closedReason={posting.closed_reason}
+                onChanged={load}
+              />
+            )}
+            {posting?.id && <AddToChecklist jobPostingId={posting.id} />}
+          </div>
+        </div>
+        <div className="dossier-verdict">
+          <span className={`dossier-vnum${priority == null ? " low" : priority >= 70 ? "" : priority >= 45 ? " mid" : " low"}`}>
+            {priority ?? "—"}
+          </span>
+          <span className="dossier-vlabel">Priority</span>
+          {bestFit && (
+            <span className="dossier-vsub">
+              {Math.round((bestFit.fit!.alignment as number) * 100)}% fit · {bestFit.label}
+            </span>
+          )}
+          {!bestFit && <span className="dossier-vsub">not judged against your resumes</span>}
+        </div>
       </div>
-      <p className="muted">
-        {posting?.organizations?.name}
-        {posting?.location ? ` · ${posting.location}` : ""}
-        {posting?.remote_policy ? ` · ${posting.remote_policy}` : ""}
-        {posting?.url && <> · <a href={posting.url} target="_blank" rel="noreferrer">posting ↗</a></>}
-      </p>
 
       {fit.data?.posting && (
         <PriorityBreakdown

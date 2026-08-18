@@ -555,6 +555,7 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
 }
 .prep-card-head:hover { background: var(--panel-2); }
 .prep-card-body { padding: 0 1rem 1rem; }
+.prep-fit-meta { display: flex; align-items: baseline; gap: 0.5rem; }
 .prep-fit-row { display: flex; gap: 0.9rem; margin: 0.2rem 0 0.9rem; }
 .prep-fit-col { flex: 1; }
 .prep-fit-col h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 0.4rem; }

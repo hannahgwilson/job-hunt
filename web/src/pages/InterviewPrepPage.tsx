@@ -7,6 +7,8 @@ import InterviewPrepChat, { ratingPillClass } from "../components/InterviewPrepC
 import StoryCard, { storyMarkdown } from "../components/StoryCard";
 import RubricScores from "../components/RubricScores";
 import { ConcernsSheet, QuestionsSheet, HypeSheet, DecodeSheet } from "../components/CoachSheets";
+import FitSpikes, { hasFitHighlights } from "../components/FitSpikes";
+import { pct, alignClass } from "../components/RoleFitPanel";
 import type { InterviewPrepSession } from "../lib/types";
 
 // Synthesis is persisted model output, so a row written by an older schema (or
@@ -112,6 +114,36 @@ export default function InterviewPrepPage() {
         )}
       </div>
       {error && <p className="error small">{error}</p>}
+
+      {/* Spikes and gaps first, above intake: it's the "why me / what do I have
+          to defend" read the rest of the round hangs off, and unlike everything
+          below it needs no intake, research or rehearsal — the fit judge has
+          usually already run at intake time, so this is the one thing that's
+          here the moment the round is on the calendar. Same block the
+          Interviews → Prep index shows (FitSpikes), deliberately. */}
+      <section className="card">
+        <div className="section-head">
+          <h2>Fit for this role</h2>
+          <span className="prep-fit-meta">
+            {prep.fit?.alignment != null && (
+              <span className={`score-badge ${alignClass(prep.fit.alignment)}`}>{pct(prep.fit.alignment)}</span>
+            )}
+            {prep.fit?.resume_label && <span className="muted small">{prep.fit.resume_label}</span>}
+          </span>
+        </div>
+        {hasFitHighlights(prep.fit) ? (
+          <>
+            {prep.fit?.summary && <p className="small">{prep.fit.summary}</p>}
+            <FitSpikes fit={prep.fit} />
+          </>
+        ) : (
+          <p className="muted small">
+            No resume fit scored for this role yet — run the AI judge on the{" "}
+            <Link to={`/role/${prep.role.application_id}`}>role page</Link> and the spikes
+            and gaps show up here.
+          </p>
+        )}
+      </section>
 
       <section className="card">
         <h2>Intake</h2>

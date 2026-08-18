@@ -807,7 +807,7 @@ export interface InterviewPrepSession {
     has_jd_text?: boolean;
   };
   company_intel: { growth_stage: string | null };
-  fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null } | null;
+  fit: { alignment: number | null; summary: string | null; spikes: string[] | null; gaps: string[] | null; resume_label?: string | null } | null;
   interviewer: { contact_id: string; name: string; title: string | null } | null;
   ob_suggestions: Array<{ thought_id: string; content: string; created_at: string }>;
   session: InterviewPrepSessionRow | null;

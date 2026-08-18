@@ -60,8 +60,8 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- ── Open Brain ───────────────────────────────────────────────────────────────
--- Note the shape D8 is about: no owner column. Reproduced faithfully, because
--- the leak is a property of this table's design, not of the readers.
+-- Declared in its pre-D8 shape — no owner column — on purpose: migration 027 is
+-- what adds user_id, and building from the original shape is what exercises it.
 CREATE TABLE IF NOT EXISTS thoughts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), content text,
   metadata jsonb DEFAULT '{}', status text, created_at timestamptz DEFAULT now()

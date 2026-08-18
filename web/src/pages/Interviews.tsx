@@ -7,6 +7,7 @@ import {
 import InterviewOutcome from "../components/InterviewOutcome";
 import OutcomesPanel from "../components/OutcomesPanel";
 import StoryLibrary from "../components/StoryLibrary";
+import FitSpikes from "../components/FitSpikes";
 import { awaitingDebrief, roundLabel } from "../lib/rounds";
 import { decidedRounds } from "../lib/outcomes";
 import type {
@@ -438,22 +439,7 @@ export default function Interviews() {
                       ) : (
                         <>
                           {doc?.loading && <p className="muted small">Loading prep…</p>}
-                          {doc?.doc?.success && (
-                            <div className="prep-fit-row">
-                              <div className="prep-fit-col spikes">
-                                <h4>Spikes</h4>
-                                {doc.doc.fit?.spikes?.length
-                                  ? <ul>{doc.doc.fit.spikes.map((s, i) => <li key={i}>{s}</li>)}</ul>
-                                  : <p className="muted small">—</p>}
-                              </div>
-                              <div className="prep-fit-col gaps">
-                                <h4>Gaps to address</h4>
-                                {doc.doc.fit?.gaps?.length
-                                  ? <ul>{doc.doc.fit.gaps.map((s, i) => <li key={i}>{s}</li>)}</ul>
-                                  : <p className="muted small">—</p>}
-                              </div>
-                            </div>
-                          )}
+                          {doc?.doc?.success && <FitSpikes fit={doc.doc.fit} />}
 
                           {/* The full story cards render on the prep page — this
                               sub-tab is an index (count + link), not a second,

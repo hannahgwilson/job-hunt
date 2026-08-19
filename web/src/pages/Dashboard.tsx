@@ -18,12 +18,8 @@ import ScheduleInterviewForm from "../components/ScheduleInterviewForm";
 // and an in-stage dwell. 'accepted' is the terminal success, so it's omitted.
 const STAGE_STEPS = ["applied", "screening", "interviewing", "offer"] as const;
 
-// Every status, in funnel order, with the terminal-negative outcomes
-// (rejected / withdrawn / closed) last — the order the By-status bars render in.
-const STATUS_DISPLAY_ORDER: ApplicationStatus[] = [
-  "draft", "applied", "screening", "interviewing", "offer",
-  "accepted", "rejected", "withdrawn", "closed",
-];
+// The outcomes that take an application off the live board and into Archive.
+const TERMINAL_STATUSES: ApplicationStatus[] = ["rejected", "withdrawn", "closed", "accepted"];
 
 export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
@@ -35,6 +31,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<ApplicationStatus | null>(null);
   const [selectedStage, setSelectedStage] = useState<(typeof STAGE_STEPS)[number] | null>(null);
+  const [tab, setTab] = useState<"live" | "archive">("live");
   const [addingInterview, setAddingInterview] = useState(false);
   const [pickedAppId, setPickedAppId] = useState("");
   const [interviews, setInterviews] = useState<InterviewListRow[]>([]);
@@ -100,12 +97,33 @@ export default function Dashboard() {
   for (const a of apps) counts[a.status] = (counts[a.status] ?? 0) + 1;
   const activeApps = apps.filter((a) => !["rejected", "withdrawn", "accepted", "closed"].includes(a.status));
   const active = activeApps.length;
-  // bars scale to the biggest bucket so the distribution reads as a chart
-  const maxCount = Math.max(1, ...STATUS_DISPLAY_ORDER.map((s) => counts[s] ?? 0));
   const selectedApps = selected ? apps.filter((a) => a.status === selected) : [];
   // T3.1 — overdue rounds distort the funnel (they keep counting as pending),
   // so they belong on the top-line strip, not only inside the Interviews tab.
   const overdueDebriefs = awaitingDebrief(interviews);
+
+  // The live search vs everything that's already over. Most of the data is
+  // history — 45 of 81 postings closed on the real account — so the two get
+  // separate homes instead of the same weight of ink (review, finding 02).
+  const archivedApps = apps.filter((a) => TERMINAL_STATUSES.includes(a.status));
+
+  // Pass-through across every decided stage: the single "am I converting?" read.
+  const decidedAll = STAGE_STEPS.reduce(
+    (acc, st) => {
+      const pt = funnel?.pass_through?.[st];
+      return pt ? { moved: acc.moved + pt.moved_on, decided: acc.decided + pt.moved_on + pt.terminated_here } : acc;
+    },
+    { moved: 0, decided: 0 },
+  );
+  const overallPass = decidedAll.decided > 0 ? Math.round((decidedAll.moved / decidedAll.decided) * 100) : null;
+
+  // The funnel bars scale to the widest stage so the taper is the shape.
+  const funnelMax = Math.max(1, ...STAGE_STEPS.map((st) => funnel?.pass_through?.[st]?.total_ever ?? 0));
+  const oldestDebrief = [...overdueDebriefs].sort(
+    (a, b) => new Date(a.scheduled_at ?? 0).getTime() - new Date(b.scheduled_at ?? 0).getTime(),
+  )[0];
+  const daysSince = (iso: string | null) =>
+    iso ? Math.round((Date.now() - new Date(iso).getTime()) / 86_400_000) : null;
 
   return (
     <div className="page">
@@ -132,32 +150,83 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Top-line metrics */}
-      <div className="stat-row">
-        <div className="card stat"><div className="stat-num">{apps.length}</div><div className="muted">applications</div></div>
-        <div className="card stat"><div className="stat-num">{active}</div><div className="muted">active</div></div>
-        <div className="card stat"><div className="stat-num">{queue?.roles_to_apply.length ?? "–"}</div><div className="muted">to apply</div></div>
-        <div
-          className="card stat clickable"
-          onClick={() => setAddingInterview((cur) => !cur)}
-          title="Add an interview"
-        >
-          <div className="stat-num">{queue?.upcoming_interviews.length ?? "–"}</div>
-          <div className="muted">interviews soon</div>
+      <div className="dash-tabs">
+        <div className="segmented">
+          <button className={tab === "live" ? "on" : ""} onClick={() => setTab("live")}>
+            Live <span className="seg-count">{active}</span>
+          </button>
+          <button className={tab === "archive" ? "on" : ""} onClick={() => setTab("archive")}>
+            Archive <span className="seg-count">{archivedApps.length}</span>
+          </button>
         </div>
-        {/* Debrief nudge (T3.1). Only appears when there's a backlog — a zero
-            tile would just be one more number to read past. */}
-        {overdueDebriefs.length > 0 && (
-          <div
-            className="card stat clickable stat-warn"
-            onClick={() => navigate("/interviews")}
-            title="Rounds whose date has passed but were never closed out — they still count as pending in the funnel"
-          >
-            <div className="stat-num">{overdueDebriefs.length}</div>
-            <div className="muted">need a debrief</div>
-          </div>
-        )}
       </div>
+
+      {tab === "live" && (
+        <>
+          {/* One decision, at the top. Only rendered when there is one — an
+              empty version of this band would be worse than no band. */}
+          {overdueDebriefs.length > 0 && (
+            <div className="next-action">
+              <span className="next-action-n">{overdueDebriefs.length}</span>
+              <div>
+                <div className="next-action-t">
+                  {overdueDebriefs.length === 1 ? "Round waiting on a debrief" : "Rounds waiting on a debrief"}
+                </div>
+                <div className="next-action-s">
+                  {oldestDebrief && (
+                    <>
+                      Oldest: {oldestDebrief.organization_name} · {roundLabel(oldestDebrief.interview_type)}
+                      {daysSince(oldestDebrief.scheduled_at) != null && ` · ${daysSince(oldestDebrief.scheduled_at)} days ago`}.{" "}
+                    </>
+                  )}
+                  Until they're closed out, the pass rate below is wrong.
+                </div>
+              </div>
+              <span className="spacer" />
+              <button onClick={() => navigate("/interviews")}>Close them out</button>
+            </div>
+          )}
+
+          <div className="tiles">
+            <div className="tile">
+              <span className="k">Live applications</span>
+              <span className="n">{active}</span>
+              <span className="d">{counts.interviewing ?? 0} interviewing · {counts.offer ?? 0} offer</span>
+            </div>
+            <button
+              className="tile clickable"
+              onClick={() => setSelected((cur) => (cur === "interviewing" ? null : "interviewing"))}
+            >
+              <span className="k">In loop</span>
+              <span className="n">{counts.interviewing ?? 0}</span>
+              <span className="d">interviewing now</span>
+            </button>
+            <button
+              className="tile clickable"
+              onClick={() => setSelected((cur) => (cur === "offer" ? null : "offer"))}
+            >
+              <span className="k">Offers</span>
+              <span className="n">{counts.offer ?? 0}</span>
+              <span className="d">{counts.accepted ?? 0} accepted</span>
+            </button>
+            <button className="tile clickable" onClick={() => navigate("/pipeline")}>
+              <span className="k">Ready to apply</span>
+              <span className="n">{queue?.roles_to_apply.length ?? "–"}</span>
+              <span className="d">force-ranked</span>
+            </button>
+            <div className="tile">
+              <span className="k">Pass rate</span>
+              <span className="n">{overallPass != null ? `${overallPass}%` : "–"}</span>
+              <span className="d">{decidedAll.moved}/{decidedAll.decided} decided rounds</span>
+            </div>
+            <button className="tile clickable" onClick={() => setAddingInterview((cur) => !cur)}>
+              <span className="k">Interviews · 14d</span>
+              <span className="n">{queue?.upcoming_interviews.length ?? "–"}</span>
+              <span className="d">{addingInterview ? "close" : "add one"}</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {addingInterview && (
         <section className="card">
@@ -187,75 +256,138 @@ export default function Dashboard() {
         </section>
       )}
 
-      <div className="cols">
-        {/* By status — every category in funnel order, click one to list its apps */}
-        <section className="card">
-          <h2>By status</h2>
-          {apps.length === 0 ? <p className="muted">No applications yet.</p> : (
-            <>
-              <p className="muted small">Click a status to see those applications.</p>
-              {STATUS_DISPLAY_ORDER.map((s) => {
-                const n = counts[s] ?? 0;
-                return (
-                  <div
-                    key={s}
-                    className={`bar-row${n > 0 ? " clickable" : ""}${selected === s ? " active" : ""}`}
-                    onClick={n > 0 ? () => setSelected((cur) => (cur === s ? null : s)) : undefined}
-                  >
-                    <span className={`pill pill-${s}`}>{s}</span>
-                    <div className="bar"><div className="bar-fill" style={{ width: `${(n / maxCount) * 100}%` }} /></div>
-                    <span className="bar-num">{n}</span>
-                  </div>
-                );
-              })}
-            </>
-          )}
-        </section>
+      {tab === "live" && (
+        <div className="cols">
+          {/* Top of funnel: what to apply to next, in priority order. */}
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Apply next</h2>
+              <span className="meta">force-ranked · {queue?.roles_to_apply.length ?? 0} open</span>
+            </div>
+            {!queue && <p className="panel-empty">Loading…</p>}
+            {queue && queue.roles_to_apply.length === 0 && (
+              <p className="panel-empty">Nothing waiting — every tracked role has an application.</p>
+            )}
+            {queue?.roles_to_apply.slice(0, 6).map((r, idx) => {
+              const score = r.priority?.score ?? 0;
+              const comps = r.priority?.components;
+              const band = score >= 70 ? "" : score >= 45 ? " mid" : " low";
+              const comp = r.salary_min && r.salary_max
+                ? `$${Math.round(r.salary_min / 1000)}–${Math.round(r.salary_max / 1000)}k`
+                : null;
+              const where = [r.location, r.remote_policy].filter(Boolean).join(" · ");
+              return (
+                <button
+                  key={r.id}
+                  className={`qrow${idx < 2 ? " hot" : ""}`}
+                  onClick={() => navigate(`/posting/${r.id}`)}
+                >
+                  <span className={`qrow-num${band}`}>{score.toFixed(1)}</span>
+                  <span>
+                    <span className="qrow-title">{r.title} · {r.organization_name}</span>
+                    <br />
+                    <span className="qrow-sub">
+                      {[comp, where].filter(Boolean).join(" · ")}
+                      {r.closing_soon && <span className="soon"> · closing soon</span>}
+                    </span>
+                  </span>
+                  {/* The five priority inputs, at a glance — the same components
+                      compute_priority scored, so a low bar is a visible reason. */}
+                  <span className="cbars">
+                    {comps
+                      ? (["experience", "location", "comp", "career", "growth"] as const).map((k) => (
+                          <i
+                            key={k}
+                            className={comps[k] >= 0.6 ? "f" : ""}
+                            style={{ height: `${Math.max(4, Math.round(comps[k] * 18))}px` }}
+                          />
+                        ))
+                      : null}
+                  </span>
+                </button>
+              );
+            })}
+          </section>
 
-        {/* Per-stage pass-through + dwell (pass_through_rate.yaml + days_in_stage.yaml) */}
-        <section className="card stage-metrics">
-          <h2>Stage funnel</h2>
-          {!funnel ? <p className="muted">Loading…</p> : (
-            <>
-              <p className="muted small">Click a stage to see the roles that reached it.</p>
-              <table className="stage-table">
+          {/* Where the loop dies — pass-through per stage, drawn as a taper. */}
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Where the loop dies</h2>
+              <span className="meta">advanced ÷ decided</span>
+            </div>
+            <div className="panel-body">
+              {!funnel ? <p className="muted small">Loading…</p> : (
+                <div className="funnel">
+                  {STAGE_STEPS.map((st) => {
+                    const pt = funnel.pass_through?.[st];
+                    const total = pt?.total_ever ?? 0;
+                    const rate = pt?.rate;
+                    return (
+                      <div
+                        key={st}
+                        className={`frow${total > 0 ? " clickable" : ""}`}
+                        onClick={total > 0 ? () => setSelectedStage((cur) => (cur === st ? null : st)) : undefined}
+                        title={total > 0 ? `${total} reached ${st} — click for the roles` : undefined}
+                      >
+                        <span className="flabel">{st}</span>
+                        <span className="ftrack">
+                          <span className="ffill" style={{ width: `${Math.max(3, (total / funnelMax) * 100)}%` }} />
+                        </span>
+                        <span className="fn">{total}</span>
+                        {rate != null
+                          ? <span className={`fpct${rate < 0.75 ? " drop" : ""}`}>{Math.round(rate * 100)}%</span>
+                          : <span className="fpct none">—</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="muted small" style={{ marginTop: "0.7rem" }}>
+                Bar length is how many applications ever reached that stage; the
+                percentage is how many of the <em>decided</em> ones moved on.
+                {overdueDebriefs.length > 0 && " Undebriefed rounds sit outside both."}
+              </p>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* Archive — the 21-of-36 that are already over. Same data, deliberately
+          quieter: an outcome list you scan, not a board you work. */}
+      {tab === "archive" && (
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Closed out</h2>
+            <span className="meta">{archivedApps.length} applications</span>
+          </div>
+          {archivedApps.length === 0 ? (
+            <p className="panel-empty">Nothing archived yet.</p>
+          ) : (
+            <div className="table-wrap">
+              <table className="data">
                 <thead>
                   <tr>
-                    <th>Stage</th><th className="num">Total</th>
-                    <th className="num">Pass-through</th><th className="num">Pending</th>
-                    <th className="num">Median days</th>
+                    <th>Role</th><th>Company</th><th>Outcome</th><th className="num">Applied</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {STAGE_STEPS.map((s) => {
-                    const pt = funnel.pass_through?.[s];
-                    const dwell = funnel.median_days_in_stage?.[s];
-                    const decided = pt ? pt.moved_on + pt.terminated_here : 0;
-                    const total = pt?.total_ever ?? 0;
-                    return (
-                      <tr
-                        key={s}
-                        className={`${total > 0 ? "clickable" : ""}${selectedStage === s ? " active" : ""}`}
-                        onClick={total > 0 ? () => setSelectedStage((cur) => (cur === s ? null : s)) : undefined}
-                      >
-                        <td><span className={`pill pill-${s}`}>{s}</span></td>
-                        <td className="num">{total}</td>
-                        <td className="num">
-                          {pt && pt.rate != null
-                            ? <>{Math.round(pt.rate * 100)}% <span className="muted">({pt.moved_on}/{decided})</span></>
-                            : <span className="muted">—</span>}
-                        </td>
-                        <td className="num">{pt?.pending ?? 0}</td>
-                        <td className="num">{dwell != null ? dwell : <span className="muted">—</span>}</td>
+                  {archivedApps
+                    .slice()
+                    .sort((a, b) => (b.applied_date ?? "").localeCompare(a.applied_date ?? ""))
+                    .map((a) => (
+                      <tr key={a.id} className="clickable" onClick={() => navigate(`/role/${a.id}`)}>
+                        <td className="role-title">{a.job_postings?.title ?? "Untitled role"}</td>
+                        <td>{a.job_postings?.organizations?.name ?? "—"}</td>
+                        <td><span className={`pill pill-${a.status}`}>{a.status}</span></td>
+                        <td className="num">{a.applied_date ?? "—"}</td>
                       </tr>
-                    );
-                  })}
+                    ))}
                 </tbody>
               </table>
-            </>
+            </div>
           )}
         </section>
-      </div>
+      )}
 
       {/* Drill-down: the applications in the clicked status */}
       {selected && (
@@ -329,36 +461,58 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Next up — upcoming interviews shortcut */}
-      <section className="card span-2">
-        <h2>Next up</h2>
-        {!queue && <p className="muted">Loading…</p>}
-        {queue && queue.upcoming_interviews.length === 0 && <p className="muted">No interviews scheduled.</p>}
-        <ul className="clean">
-          {queue?.upcoming_interviews.map((i) => (
-            <li key={i.interview_id}>
-              <strong>{i.title}</strong> @ {i.organization_name}
-              <span className="muted"> — {roundLabel(i.interview_type)} · {new Date(i.scheduled_at).toLocaleString()}</span>
-              {" · "}<Link to={`/interview-prep/${i.interview_id}`}>Prep →</Link>
-            </li>
-          ))}
-        </ul>
-        <p><Link to="/queue">See the full action queue →</Link></p>
-      </section>
+      {tab === "live" && (
+        <>
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Next up</h2>
+              <Link className="meta" to="/queue">full action queue →</Link>
+            </div>
+            {!queue && <p className="panel-empty">Loading…</p>}
+            {queue && queue.upcoming_interviews.length === 0 && (
+              <p className="panel-empty">
+                Nothing on the calendar.{" "}
+                {queue.roles_to_apply.length > 0
+                  ? <>The queue above has {queue.roles_to_apply.length} roles ready to apply to.</>
+                  : <>Add a role from the Pipeline to get the queue moving.</>}
+              </p>
+            )}
+            {queue && queue.upcoming_interviews.length > 0 && (
+              <div>
+                {queue.upcoming_interviews.map((i) => (
+                  <div key={i.interview_id} className="qrow">
+                    <span className="qrow-num">{new Date(i.scheduled_at).getDate()}</span>
+                    <span>
+                      <span className="qrow-title">{i.title} · {i.organization_name}</span>
+                      <br />
+                      <span className="qrow-sub">
+                        {roundLabel(i.interview_type)} · {new Date(i.scheduled_at).toLocaleString()}
+                      </span>
+                    </span>
+                    <Link className="small" to={`/interview-prep/${i.interview_id}`}>Prep →</Link>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
-      {/* The insights "2x2": fit (x) vs career-move + company-growth (y), the
-          top-right quadrant being the sweet spot. Backfill judges from the head. */}
-      <section className="card span-2">
-        <h2>Fit map</h2>
-        <p className="muted small">
-          Each role placed by <strong>resume fit</strong> (x) against its{" "}
-          <strong>career move + company growth</strong> (y); bubble size is comp, the
-          label is location. Top-right is the sweet spot. Faded roles aren't fully
-          judged yet — run “Judge career + growth” above to place them for real.
-          Only roles you haven’t applied to yet are shown.
-        </p>
-        {roles == null ? <p className="muted">Loading…</p> : <FitScatter roles={openRoles} />}
-      </section>
+          {/* The insights "2x2": fit (x) vs career-move + company-growth (y), the
+              top-right quadrant being the sweet spot. Backfill judges from the head. */}
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Fit map</h2>
+              <span className="meta">{openRoles.length} un-applied roles</span>
+            </div>
+            <div className="panel-body">
+              {roles == null ? <p className="muted small">Loading…</p> : <FitScatter roles={openRoles} />}
+              <p className="muted small">
+                Resume fit across, career move + company growth up. Top-right is the
+                sweet spot; faded roles aren't fully judged yet.
+              </p>
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }

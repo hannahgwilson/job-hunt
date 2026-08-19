@@ -158,13 +158,14 @@ export const TIER_META: Record<AdjacencyTier, { label: string; cls: string }> = 
 };
 
 // The judge's per-requirement adjacency table — the chain-of-thought behind the
-// alignment number. Collapsed by default; core (required) gaps are the rows worth
-// reading, so we surface a quick count in the summary line.
-export function RequirementTable({ rows }: { rows: RequirementScore[] }) {
+// alignment number, and the one thing this app does that a spreadsheet can't.
+// It opens by default on the role page (`open`): burying it behind a disclosure
+// was the single biggest thing hiding the app's own work.
+export function RequirementTable({ rows, open = false }: { rows: RequirementScore[]; open?: boolean }) {
   const coreGaps = rows.filter((r) => r.importance === "required" && r.tier === "gap").length;
   const adjacent = rows.filter((r) => r.tier === "adjacent").length;
   return (
-    <details className="req-table">
+    <details className="req-table" open={open}>
       <summary>
         Requirement breakdown ({rows.length})
         {coreGaps > 0 && <span className="warn-text"> · {coreGaps} core gap{coreGaps > 1 ? "s" : ""}</span>}
@@ -195,13 +196,13 @@ export function RequirementTable({ rows }: { rows: RequirementScore[] }) {
 // The judged body — summary, the per-requirement adjacency table, spikes/gaps,
 // and proposed tweaks. Shared by the role page (FitCard) and the Tuning Bench so
 // the two reads can't drift.
-export function FitDetails({ fit }: { fit: RoleFit }) {
+export function FitDetails({ fit, openRequirements = false }: { fit: RoleFit; openRequirements?: boolean }) {
   return (
     <>
       {fit.summary && <p className="small">{fit.summary}</p>}
 
       {fit.requirement_scores && fit.requirement_scores.length > 0 && (
-        <RequirementTable rows={fit.requirement_scores} />
+        <RequirementTable rows={fit.requirement_scores} open={openRequirements} />
       )}
 
       {fit.spikes && fit.spikes.length > 0 && (
@@ -271,7 +272,7 @@ function FitCard({
         </div>
       ) : (
         <>
-          <FitDetails fit={fit} />
+          <FitDetails fit={fit} openRequirements />
 
           <div className="fit-card-foot">
             {fit.judged_at && (
@@ -304,6 +305,7 @@ export default function RoleFitPanel({
   // Any judge in flight (panel-level "judge all" or a single card) blocks the
   // other judge buttons so reads can't race.
   const anyJudging = judging || judgingResumeId != null;
+  const [picked, setPicked] = useState<string | null>(null);
   // Before the first fit read lands: show the error if it failed, else loading —
   // never an eternal "Loading…" that hides why the judge panel is empty.
   if (!data) {
@@ -319,6 +321,13 @@ export default function RoleFitPanel({
     .filter((r) => r.fit?.alignment != null)
     .sort((a, b) => (b.fit!.alignment as number) - (a.fit!.alignment as number))[0];
   const bestMismatch = best ? trackMismatch(roleType, best.variant) : false;
+  // Which resume the body shows. Defaults to the recommended one (the judge's
+  // own pick), falling back to the strongest judged, then to whatever exists —
+  // so the page opens on the best match without the user choosing.
+  const defaultId = data.recommended_resume_id ?? best?.resume_id ?? data.resumes[0]?.resume_id ?? null;
+  // A picked id is dropped once it's no longer in the list (re-judge, deletion).
+  const shownId = picked && data.resumes.some((r) => r.resume_id === picked) ? picked : defaultId;
+  const shown = data.resumes.find((r) => r.resume_id === shownId);
 
   return (
     <section className="card fit-section">
@@ -352,23 +361,43 @@ export default function RoleFitPanel({
 
       <Verdict resumes={data.resumes} />
 
-      <div className="cols">
-        {data.resumes.length === 0 ? (
-          <p className="muted">No resumes yet — add one on the <Link to="/resume">Resumes</Link> page.</p>
-        ) : (
-          data.resumes.map((entry) => (
+      {data.resumes.length === 0 ? (
+        <p className="muted">No resumes yet — add one on the <Link to="/resume">Resumes</Link> page.</p>
+      ) : (
+        <>
+          {/* One picker instead of a card per resume. Seven variants × a full
+              fit body was most of the page's height for a comparison the
+              verdict line above already makes. */}
+          <div className="resume-picker">
+            <label className="muted small" style={{ margin: 0 }}>
+              Scored against
+              <select value={shownId ?? ""} onChange={(e) => setPicked(e.target.value)}>
+                {data.resumes.map((entry) => (
+                  <option key={entry.resume_id} value={entry.resume_id}>
+                    {entry.label}
+                    {entry.fit?.alignment != null ? ` · ${pct(entry.fit.alignment)}` : " · not judged"}
+                    {entry.resume_id === defaultId ? " · best match" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {shownId === defaultId && shown?.fit?.alignment != null && (
+              <span className="best-flag">★ best match</span>
+            )}
+          </div>
+
+          {shown && (
             <FitCard
-              key={entry.resume_id}
-              entry={entry}
-              recommended={entry.resume_id === data.recommended_resume_id}
+              entry={shown}
+              recommended={shown.resume_id === defaultId}
               roleType={roleType}
               onJudge={onJudgeResume}
-              judging={judgingResumeId === entry.resume_id}
-              disabled={anyJudging && judgingResumeId !== entry.resume_id}
+              judging={judgingResumeId === shown.resume_id}
+              disabled={anyJudging && judgingResumeId !== shown.resume_id}
             />
-          ))
-        )}
-      </div>
+          )}
+        </>
+      )}
     </section>
   );
 }

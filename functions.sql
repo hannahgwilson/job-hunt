@@ -2569,7 +2569,8 @@ BEGIN
                     'created_at', th.created_at
                 ) AS s
                 FROM thoughts th
-                WHERE th.metadata @> '{"topics":["job-search"]}'::jsonb
+                WHERE th.user_id = p_user_id
+                  AND th.metadata @> '{"topics":["job-search"]}'::jsonb
                   AND COALESCE(th.status, '') NOT IN ('promoted', 'done')
                   AND NOT EXISTS (SELECT 1 FROM tasks t
                                   WHERE t.user_id = p_user_id AND t.thought_id = th.id)
@@ -2678,12 +2679,13 @@ BEGIN
 
     IF v_prefix = 'thought' THEN
         v_title := COALESCE(p_title,
-            left((SELECT content FROM thoughts WHERE id = v_uuid), 140), 'Job-search note');
+            left((SELECT content FROM thoughts
+                  WHERE id = v_uuid AND user_id = p_user_id), 140), 'Job-search note');
         INSERT INTO tasks (user_id, domain, kind, title, priority, source, thought_id)
         VALUES (p_user_id, 'job-hunt', 'thought', v_title, p_priority, 'open_brain', v_uuid)
         RETURNING * INTO v_row;
         UPDATE thoughts SET status = 'promoted', status_updated_at = now()
-        WHERE id = v_uuid;
+        WHERE id = v_uuid AND user_id = p_user_id;
 
     ELSIF v_prefix = 'crm' THEN
         v_title := COALESCE(p_title,
@@ -2806,7 +2808,8 @@ BEGIN
                             'content', n.content, 'created_at', n.created_at)), '[]'::jsonb)
                         FROM (
                             SELECT content, created_at FROM thoughts
-                            WHERE metadata @> jsonb_build_object(
+                            WHERE user_id = p_user_id
+                              AND metadata @> jsonb_build_object(
                                     'topics', jsonb_build_array(iv.organization_name))
                             ORDER BY created_at DESC LIMIT 5
                         ) n)),
@@ -2929,7 +2932,8 @@ BEGIN
                         ORDER BY n.created_at DESC), '[]'::jsonb)
                     FROM (
                         SELECT id, content, created_at FROM thoughts
-                        WHERE metadata @> jsonb_build_object(
+                        WHERE user_id = p_user_id
+                          AND metadata @> jsonb_build_object(
                                 'topics', jsonb_build_array(iv.organization_name))
                         ORDER BY created_at DESC LIMIT 8
                     ) n),

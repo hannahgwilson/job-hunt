@@ -558,8 +558,10 @@ export default function Interviews() {
         </section>
       )}
 
-      {/* Where the debrief data finally pays off (T3.2). */}
-      {sub === "outcomes" && <OutcomesPanel interviews={interviews} />}
+      {/* Where the debrief data finally pays off (T3.2). Its drill-downs edit
+          rounds in place, so they patch back through the same handler the
+          Upcoming and Past cards use — every number on the tab re-derives. */}
+      {sub === "outcomes" && <OutcomesPanel interviews={interviews} onChanged={patchInterview} />}
     </div>
   );
 }

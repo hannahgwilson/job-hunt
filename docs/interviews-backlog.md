@@ -12,7 +12,7 @@ deployed: `intake-from-url` (new), `interview-prep` (D5 context),
 | | |
 |---|---|
 | ✅ Fixed | D1, D2, D3, D4, D5 (SQL path), D7 |
-| ✅ Built | T1.1, T1.2, T1.3, T1.4, T1.5, T1.6 (prefill), T1.7, T2.1, appendix commit, **T3.1, T3.2, T3.3** |
+| ✅ Built | T1.1, T1.2, T1.3, T1.4, T1.5, T1.6 (prefill), T1.7, T2.1, appendix commit, **T3.1, T3.2, T3.3, T3.4** |
 | ⏳ Still open | **D8** (blocked on an Open Brain schema decision), T1.6's required Open Brain notes write (same decision), D6 backfill (waits on T2.3), T2.2, T2.3 |
 | ⚠️ Check | the unique index installs only when the DO block finds no duplicates — if the SQL editor printed the NOTICE, merge (Interviews → Past → Duplicate rounds) and re-run 022 |
 | ⏳ To apply | `migrations/023_debrief_nudges.sql` (additive; the UI does **not** depend on it — see T3.1) |
@@ -779,6 +779,52 @@ Two things to settle before building:
   (mirroring how `rejected`/`withdrawn` already collapse into the "Rejected
   applications" section, and closed postings into "Closed roles") rather than
   making accepted offers simply invisible on Pipeline.
+
+### T3.4 Outcomes drill-down + in-place debrief editing — ✅ shipped
+
+> **Shipped 2026-07-31.** Two asks, one motion: *"can we get the expandable
+> situation like on the dashboard page so I can see what feeds into it? I also
+> need a way to update the ratings / scores since most of the roles I've
+> interviewed are 'undecided'."*
+>
+> **Every bucket row on Outcomes expands** into the rounds behind it —
+> `OutcomeBucket.rows` (`web/src/lib/outcomes.ts`) now carries the exact
+> population each number was computed from, newest first, and
+> `web/src/components/RoundDrilldown.tsx` renders it. Same one-open-at-a-time
+> convention as the Dashboard's By-status and Stage-funnel drill-downs.
+>
+> **Those rounds are editable in place.** Click a star to rate; click Advance /
+> Hold / Withdraw / Rejected to record the go/no-go. Each click is a
+> `complete_interview` call with the round's **current status** passed through —
+> this is a debrief amendment, never a re-open or a completion.
+>
+> **Decisions taken:**
+>
+> - **The two stat tiles became worklists.** "Awaiting a go/no-go" opens the
+>   undecided rounds (`hold` *or* no decision — both sit outside every rate);
+>   the avg-rating tile grew an "N unrated" count that opens the un-rated ones.
+>   That's the answer to "most are undecided": the fix is one click from the
+>   number that's wrong because of it. Rows leave the list as you resolve them —
+>   `hold` deliberately does **not**, since it's still pending.
+> - **Terminal decisions confirm first.** `rejected` / `withdraw` cascade to the
+>   application (T1.2), and that cascade is only undone by hand. From a dense
+>   table a mis-click is easy, so those two ask — naming the company and the
+>   consequence — while `advance` / `hold` save silently.
+> - **Nothing can be *cleared* here**, because `complete_interview` COALESCEs
+>   its arguments. That same property is what makes a partial save safe: rating
+>   a round can't wipe its decision. Clicking an already-set value is a no-op
+>   rather than a toggle-off that silently wouldn't persist — which is what the
+>   full debrief form's star toggle actually does today. **Worth fixing
+>   properly** (a tri-state "clear" argument on the RPC) if you ever need to
+>   un-say a decision.
+> - **Edits patch back through `patchInterview`**, the same handler the Upcoming
+>   and Past cards use, so every number on the tab re-derives from the edited row
+>   with no refetch.
+>
+> Verified in the running app as demo@jobhunt.test against the live database:
+> a star click persisted `rating` while leaving `advance_decision` intact, a
+> `hold` click persisted and kept the row in the worklist, and a declined
+> confirm on `Rejected` wrote nothing. Seed data was restored afterwards.
 
 ---
 

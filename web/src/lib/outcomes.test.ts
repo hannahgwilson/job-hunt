@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { byFitBand, byGrowthStage, byRoundType, decidedRounds, overall, type PostingSignals } from "./outcomes";
+import {
+  byFitBand, byGrowthStage, byRecency, byRoundType, decidedRounds, overall, undecided, unrated,
+  type PostingSignals,
+} from "./outcomes";
 import { awaitingDebrief, isAwaitingDebrief } from "./rounds";
 import type { AdvanceDecision, InterviewListRow } from "./types";
 
@@ -118,6 +121,44 @@ describe("the dimensional cuts", () => {
     ];
     expect(byFitBand(rows, signals).map((b) => b.label))
       .toEqual(["excellent fit (85%+)", "weak fit (<60%)", "not scored"]);
+  });
+});
+
+// The drill-down (T3.4) is only as trustworthy as the claim that a bucket's
+// `rows` are exactly the rounds its counts were computed from — that's what
+// makes "62% at hiring manager" auditable. Pinned here.
+describe("bucket membership", () => {
+  it("carries the rounds each number was computed from, newest first", () => {
+    const older = iv({ interview_type: "final", scheduled_at: "2026-06-01T12:00:00Z" });
+    const newer = iv({ interview_type: "final", scheduled_at: "2026-07-01T12:00:00Z" });
+    const other = iv({ interview_type: "phone_screen" });
+    const buckets = byRoundType([older, newer, other]);
+    const finals = buckets.find((b) => b.key === "final")!;
+    expect(finals.rows.map((r) => r.id)).toEqual([newer.id, older.id]);
+    expect(finals.rows).toHaveLength(finals.total);
+  });
+
+  it("sorts undated rounds last rather than dropping them", () => {
+    const dated = iv({ scheduled_at: "2020-01-01T00:00:00Z" });
+    const undated = iv({ scheduled_at: null });
+    expect(byRecency([undated, dated]).map((r) => r.id)).toEqual([dated.id, undated.id]);
+  });
+});
+
+// The two worklists behind the Outcomes stat tiles — what you click to fix the
+// dataset. 'hold' belongs with the un-decided: both sit outside every rate.
+describe("the worklists", () => {
+  it("treats 'hold' and a missing decision alike as undecided", () => {
+    const rows = [
+      withDecision(null), withDecision("hold"),
+      withDecision("advance"), withDecision("rejected"), withDecision("withdraw"),
+    ];
+    expect(undecided(rows).map((r) => r.advance_decision)).toEqual([null, "hold"]);
+  });
+
+  it("lists exactly the rounds carrying no rating", () => {
+    const rows = [iv({ rating: null }), iv({ rating: 1 }), iv({ rating: 5 })];
+    expect(unrated(rows)).toHaveLength(1);
   });
 });
 

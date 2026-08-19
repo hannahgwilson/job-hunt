@@ -44,6 +44,26 @@ export interface OutcomeBucket {
   rated: number;
   /** advanced + lost + withdrew + pending — every debriefed round in the bucket. */
   total: number;
+  /** The rounds themselves, newest first — what the drill-down lists, and what
+   *  makes every number above auditable (and fixable) in place. */
+  rows: InterviewListRow[];
+}
+
+/** Newest first, undated last — the order every drill-down lists rounds in. */
+export function byRecency(rows: InterviewListRow[]): InterviewListRow[] {
+  return [...rows].sort((a, b) => (b.scheduled_at ?? "").localeCompare(a.scheduled_at ?? ""));
+}
+
+/** Rounds with no verdict yet — 'hold' or never recorded. These are the ones
+ *  held out of every rate above, so they're also the worklist for fixing it. */
+export function undecided(rows: InterviewListRow[]): InterviewListRow[] {
+  return rows.filter((iv) => iv.advance_decision == null || iv.advance_decision === "hold");
+}
+
+/** Rounds nobody rated. Ratings don't move the pass rate — they're the
+ *  subjective read alongside it — so they get their own worklist. */
+export function unrated(rows: InterviewListRow[]): InterviewListRow[] {
+  return rows.filter((iv) => iv.rating == null);
 }
 
 /** Only formal rounds that actually happened. Cancelled / no-show rounds
@@ -70,6 +90,7 @@ function tally(rows: InterviewListRow[], key: string, label: string): OutcomeBuc
     avgRating: rated > 0 ? ratingSum / rated : null,
     rated,
     total: rows.length,
+    rows: byRecency(rows),
   };
 }
 

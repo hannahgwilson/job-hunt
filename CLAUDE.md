@@ -172,6 +172,19 @@ When I paste a job-description link (or describe a role):
    **computed client-side** (`web/src/lib/outcomes.ts`), so unlike the other
    metrics there is no SQL function or MCP tool for it yet — you can't ask this
    one in chat.
+   - **Every row expands** into the rounds behind it (same drill-down convention
+     as the Dashboard's By-status and Stage-funnel tables), and those rounds are
+     **editable in place**: click a star to rate, click Advance / Hold /
+     Withdraw / Rejected to record the go/no-go. Writes go through the same
+     `complete_interview` RPC as the debrief form (`log_interview_notes` from
+     chat), keeping the round's status — so the terminal decisions still cascade
+     to the application, and neither field can be *cleared* here (the RPC
+     COALESCEs, which is also why a rating save can't clobber a decision).
+   - Two worklists hang off the stat tiles: **awaiting a go/no-go** (rounds on
+     `hold` or with no decision — they sit outside every rate on the page) and
+     the **unrated** count on the avg-rating tile. Clearing the first is what
+     makes these numbers real; from chat the same job is
+     `list_interviews({ only_past: true })` → `log_interview_notes`.
 
 ## Play 4 — Prioritize the apply queue (force-ranking)
 

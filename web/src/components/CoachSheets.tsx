@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   fetchCoachingArtifact, generateConcerns, generateQuestionsToAsk, generateHype, decodeRole,
 } from "../lib/api";
+import PrepPanel from "./PrepPanel";
 import type {
   CoachingArtifactKind, CoachingArtifactResult,
   ConcernsContent, QuestionsContent, HypeContent, DecodeContent,
@@ -16,6 +17,18 @@ import type {
 function arr<T>(v: T[] | null | undefined): T[] {
   return Array.isArray(v) ? v : [];
 }
+
+function shortDate(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/**
+ * Whether a sheet has been generated, reported up to whoever is showing prep
+ * progress. Each sheet loads its own artifact, so the page can't know this
+ * without either a second round of queries or this callback — and the callback
+ * is what keeps "8 steps, 4 done" honest without a batch endpoint.
+ */
+export type SheetStateListener = (kind: CoachingArtifactKind, hasContent: boolean) => void;
 
 /**
  * The per-round sheets ported from the interview-coach skill's commands
@@ -38,6 +51,7 @@ function useSheet<T>(
   scopeId: string,
   generate: () => Promise<CoachingArtifactResult<T>>,
   scope: "interview" | "posting" = "interview",
+  onState?: SheetStateListener,
 ) {
   const [content, setContent] = useState<T | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
@@ -62,6 +76,11 @@ function useSheet<T>(
     return () => { live = false; };
   }, [kind, scopeId, scope]);
 
+  // Report presence up on every change, including the initial null — the
+  // progress read is only trustworthy if "nothing saved" is stated as loudly as
+  // "something saved". Listeners are expected to no-op on an unchanged value.
+  useEffect(() => { onState?.(kind, content != null); }, [content, kind, onState]);
+
   async function run() {
     setBusy(true); setError(null);
     try {
@@ -76,8 +95,9 @@ function useSheet<T>(
 }
 
 function SheetShell({
-  title, hint, busy, generatedAt, error, hasContent, onRun, canRun = true, children,
+  id, title, hint, busy, generatedAt, error, hasContent, onRun, canRun = true, children,
 }: {
+  id?: string;
   title: string;
   hint: string;
   busy: boolean;
@@ -90,20 +110,21 @@ function SheetShell({
   children: React.ReactNode;
 }) {
   return (
-    <section className="card">
-      <div className="section-head">
-        <h2>{title}</h2>
+    <PrepPanel
+      id={id}
+      title={title}
+      state={busy ? "working" : hasContent ? "ready" : "empty"}
+      meta={generatedAt && hasContent ? `generated ${shortDate(generatedAt)}` : undefined}
+      actions={
         <button className="ghost sm" onClick={onRun} disabled={busy || !canRun}>
           {busy ? "Working…" : hasContent ? "Regenerate" : "Generate"}
         </button>
-      </div>
+      }
+    >
       {error && <p className="error small">{error}</p>}
-      {!hasContent && !busy && <p className="muted small">{hint}</p>}
-      {generatedAt && hasContent && (
-        <p className="muted small">Generated {new Date(generatedAt).toLocaleString()}</p>
-      )}
+      {!hasContent && !busy && <p className="muted small pp-hint">{hint}</p>}
       {children}
-    </section>
+    </PrepPanel>
   );
 }
 
@@ -113,10 +134,13 @@ const SEVERITY_CLASS: Record<string, string> = {
   minor: "",
 };
 
-export function ConcernsSheet({ interviewId }: { interviewId: string }) {
-  const { content, generatedAt, busy, error, run } = useSheet<ConcernsContent>("concerns", interviewId, () => generateConcerns(interviewId));
+export function ConcernsSheet({ interviewId, onState }: { interviewId: string; onState?: SheetStateListener }) {
+  const { content, generatedAt, busy, error, run } = useSheet<ConcernsContent>(
+    "concerns", interviewId, () => generateConcerns(interviewId), "interview", onState,
+  );
   return (
     <SheetShell
+      id="pp-concerns"
       title="Concerns they'll raise"
       hint="The objections this interviewer is likely to have about you, ranked by damage — each with a counter."
       busy={busy} generatedAt={generatedAt} error={error} hasContent={!!content} onRun={run}
@@ -144,10 +168,13 @@ export function ConcernsSheet({ interviewId }: { interviewId: string }) {
   );
 }
 
-export function QuestionsSheet({ interviewId }: { interviewId: string }) {
-  const { content, generatedAt, busy, error, run } = useSheet<QuestionsContent>("questions_to_ask", interviewId, () => generateQuestionsToAsk(interviewId));
+export function QuestionsSheet({ interviewId, onState }: { interviewId: string; onState?: SheetStateListener }) {
+  const { content, generatedAt, busy, error, run } = useSheet<QuestionsContent>(
+    "questions_to_ask", interviewId, () => generateQuestionsToAsk(interviewId), "interview", onState,
+  );
   return (
     <SheetShell
+      id="pp-questions"
       title="Questions to ask"
       hint="Tailored to who's actually in this room — a question a peer can't answer is a wasted turn."
       busy={busy} generatedAt={generatedAt} error={error} hasContent={!!content} onRun={run}
@@ -168,7 +195,7 @@ export function QuestionsSheet({ interviewId }: { interviewId: string }) {
           </ul>
           {arr(content.avoid).length > 0 && (
             <>
-              <h3>Skip this round</h3>
+              <h3 className="pp-subhead">Skip this round</h3>
               <ul className="clean">
                 {arr(content.avoid).map((a, i) => <li key={i} className="muted small">{a}</li>)}
               </ul>
@@ -195,6 +222,16 @@ const COVERAGE_LABEL: Record<string, string> = {
 };
 
 /**
+ * The model prefixes each signal with its own confidence ("HIGH: …"), which
+ * read as shouting when rendered inline. Split it back out so the confidence
+ * is a tag and the sentence is a sentence.
+ */
+function splitConfidence(line: string): { level: string | null; text: string } {
+  const m = /^(HIGH|MEDIUM|LOW|UNKNOWN)\s*:\s*(.*)$/is.exec(line);
+  return m ? { level: m[1].toLowerCase(), text: m[2] } : { level: null, text: line };
+}
+
+/**
  * The JD decode — competencies this role will actually probe for, each checked
  * against the storybank.
  *
@@ -208,17 +245,24 @@ const COVERAGE_LABEL: Record<string, string> = {
  * button just works. When it didn't (walled pages — LinkedIn, most ATSes), the
  * paste box appears, and the pasted text is stored on the posting so a later
  * regenerate doesn't ask again.
+ *
+ * The two long tails — what the wording signals, what to verify with the
+ * recruiter — are folded away by default. Decode returns a lot of prose, and on
+ * the prep page it used to bury the three sheets under it; the two lists that
+ * change what you *do* (the competencies and the gaps) stay open.
  */
 export function DecodeSheet({
   jobPostingId,
   hasStoredJd,
+  onState,
 }: {
   jobPostingId: string;
   hasStoredJd: boolean;
+  onState?: SheetStateListener;
 }) {
   const [jdText, setJdText] = useState("");
   const { content, generatedAt, busy, error, run } = useSheet<DecodeContent>(
-    "decode", jobPostingId, () => decodeRole(jobPostingId, jdText.trim() || undefined), "posting",
+    "decode", jobPostingId, () => decodeRole(jobPostingId, jdText.trim() || undefined), "posting", onState,
   );
   // The paste box is a fallback, not the normal path — it only shows when
   // there's no stored JD to run against.
@@ -226,6 +270,7 @@ export function DecodeSheet({
 
   return (
     <SheetShell
+      id="pp-decode"
       title="Decode the job description"
       hint={
         needsPaste
@@ -235,7 +280,8 @@ export function DecodeSheet({
       busy={busy} generatedAt={generatedAt} error={error} hasContent={!!content}
       onRun={run} canRun={!needsPaste || jdText.trim().length > 0}
     >
-      {needsPaste && (
+      {/* No decode yet and nothing stored to read: the paste box IS the panel. */}
+      {needsPaste && !content && (
         <textarea
           rows={5}
           className="prep-jd-input"
@@ -246,48 +292,84 @@ export function DecodeSheet({
       )}
       {content && (
         <>
-          <h3>Competencies they'll probe</h3>
-          <ul className="clean">
-            {arr(content.competencies).map((c, i) => (
-              <li key={i} className="prep-question">
-                <div className="prep-msg-head">
-                  <span className={`pill ${COVERAGE_CLASS[c.candidate_coverage] ?? ""}`}>
-                    {COVERAGE_LABEL[c.candidate_coverage] ?? c.candidate_coverage}
-                  </span>
-                  <span className="muted small">priority {c.priority}</span>
-                </div>
-                <p className="small"><strong>{c.name}</strong></p>
-                <p className="muted small">In the JD: {c.evidence_in_jd}</p>
-                {c.covering_story && <p className="muted small">Story: {c.covering_story}</p>}
-              </li>
-            ))}
-          </ul>
-
+          {/* Gaps first: they're the only part of the decode that's a to-do.
+              Everything else is background for the room. */}
           {arr(content.coverage_gaps).length > 0 && (
-            <>
-              <h3>Gaps to close before this round</h3>
+            <div className="pp-callout">
+              <h3 className="pp-subhead">Gaps to close before this round</h3>
               <ul className="clean">
-                {arr(content.coverage_gaps).map((g, i) => <li key={i} className="small">· {g}</li>)}
+                {arr(content.coverage_gaps).map((g, i) => <li key={i} className="small">{g}</li>)}
               </ul>
-            </>
+            </div>
           )}
 
+          <h3 className="pp-subhead">Competencies they'll probe</h3>
+          <ol className="clean pp-comps">
+            {arr(content.competencies).map((c, i) => (
+              <li key={i} className="pp-comp">
+                <span className="pp-comp-rank">{c.priority}</span>
+                <div className="pp-comp-body">
+                  <div className="pp-comp-head">
+                    <strong>{c.name}</strong>
+                    {c.candidate_coverage && c.candidate_coverage !== "unknown" && (
+                      <span className={`pill ${COVERAGE_CLASS[c.candidate_coverage] ?? ""}`}>
+                        {COVERAGE_LABEL[c.candidate_coverage] ?? c.candidate_coverage}
+                      </span>
+                    )}
+                  </div>
+                  {c.evidence_in_jd && <p className="muted small">In the JD: {c.evidence_in_jd}</p>}
+                  {c.covering_story && <p className="muted small">Story: {c.covering_story}</p>}
+                </div>
+              </li>
+            ))}
+          </ol>
+
           {arr(content.signals).length > 0 && (
-            <>
-              <h3>What the wording signals</h3>
+            <details className="pp-more">
+              <summary>What the wording signals <span className="count">{arr(content.signals).length}</span></summary>
               <ul className="clean">
-                {arr(content.signals).map((s, i) => <li key={i} className="muted small">· {s}</li>)}
+                {arr(content.signals).map((s, i) => {
+                  const { level, text } = splitConfidence(s);
+                  return (
+                    <li key={i} className="small pp-signal">
+                      {level && <span className={`pp-conf is-${level}`}>{level}</span>}
+                      <span className="muted">{text}</span>
+                    </li>
+                  );
+                })}
               </ul>
-            </>
+            </details>
           )}
 
           {arr(content.verify_with_recruiter).length > 0 && (
-            <>
-              <h3>Verify with the recruiter</h3>
+            <details className="pp-more">
+              <summary>
+                Verify with the recruiter <span className="count">{arr(content.verify_with_recruiter).length}</span>
+              </summary>
               <ul className="clean">
-                {arr(content.verify_with_recruiter).map((v, i) => <li key={i} className="muted small">· {v}</li>)}
+                {arr(content.verify_with_recruiter).map((v, i) => <li key={i} className="muted small">{v}</li>)}
               </ul>
-            </>
+            </details>
+          )}
+
+          {/* With a decode already on file the paste box isn't the thing to do
+              — it's only the price of re-running one, so it goes last and
+              folds away rather than leading the panel with an empty box. */}
+          {needsPaste && (
+            <details className="pp-more">
+              <summary>Regenerating needs the JD pasted again</summary>
+              <p className="muted small pp-hint">
+                This posting's page couldn't be fetched, so there's nothing stored to re-read. Paste
+                it once and it's kept for next time.
+              </p>
+              <textarea
+                rows={5}
+                className="prep-jd-input"
+                placeholder="Paste the job description here…"
+                value={jdText}
+                onChange={(e) => setJdText(e.target.value)}
+              />
+            </details>
           )}
         </>
       )}
@@ -295,8 +377,10 @@ export function DecodeSheet({
   );
 }
 
-export function HypeSheet({ interviewId }: { interviewId: string }) {
-  const { content, generatedAt, busy, error, run } = useSheet<HypeContent>("hype", interviewId, () => generateHype(interviewId));
+export function HypeSheet({ interviewId, onState }: { interviewId: string; onState?: SheetStateListener }) {
+  const { content, generatedAt, busy, error, run } = useSheet<HypeContent>(
+    "hype", interviewId, () => generateHype(interviewId), "interview", onState,
+  );
 
   function copyMarkdown() {
     if (!content) return;
@@ -318,16 +402,13 @@ export function HypeSheet({ interviewId }: { interviewId: string }) {
 
   return (
     <SheetShell
+      id="pp-hype"
       title="Pre-interview hype"
       hint="The thing you read ten minutes before — grounded in your actual scores and stories, not pep talk."
       busy={busy} generatedAt={generatedAt} error={error} hasContent={!!content} onRun={run}
     >
       {content && (
         <>
-          <div className="section-head-actions">
-            <button className="ghost sm" onClick={copyMarkdown}>Copy as markdown</button>
-          </div>
-
           {content.focus_cue && (
             <div className="prep-focus">
               <h3>Focus cue</h3>
@@ -335,50 +416,54 @@ export function HypeSheet({ interviewId }: { interviewId: string }) {
             </div>
           )}
 
-          <h3>Why you belong in this room</h3>
+          <h3 className="pp-subhead">Why you belong in this room</h3>
           <ul className="clean">
-            {arr(content.hype_reel).map((h, i) => <li key={i}>· {h}</li>)}
+            {arr(content.hype_reel).map((h, i) => <li key={i}>{h}</li>)}
           </ul>
 
-          <h3>3 concerns + counters</h3>
+          <h3 className="pp-subhead">3 concerns + counters</h3>
           <ul className="clean">
             {arr(content.three_concerns).map((c, i) => (
               <li key={i} className="small"><strong>{c.concern}</strong> → {c.counter}</li>
             ))}
           </ul>
 
-          <h3>3 questions to ask</h3>
+          <h3 className="pp-subhead">3 questions to ask</h3>
           <ul className="clean">
             {arr(content.three_questions).map((q, i) => <li key={i} className="small">{q}</li>)}
           </ul>
 
           {arr(content.warmup).length > 0 && (
             <>
-              <h3>10-minute warmup</h3>
-              <ul className="clean">
-                {arr(content.warmup).map((w, i) => <li key={i} className="small">{i + 1}. {w}</li>)}
-              </ul>
+              <h3 className="pp-subhead">10-minute warmup</h3>
+              <ol className="clean pp-warmup">
+                {arr(content.warmup).map((w, i) => <li key={i} className="small">{w}</li>)}
+              </ol>
             </>
           )}
 
           {content.recovery_script && (
             <>
-              <h3>If you bomb one mid-interview</h3>
+              <h3 className="pp-subhead">If you bomb one mid-interview</h3>
               <p className="small">{content.recovery_script}</p>
             </>
           )}
 
           {/* Pre-mortem only comes back at directness 5 (Challenge Protocol). */}
           {arr(content.pre_mortem).length > 0 && (
-            <>
-              <h3>Pre-mortem</h3>
+            <details className="pp-more">
+              <summary>Pre-mortem <span className="count">{arr(content.pre_mortem).length}</span></summary>
               <ul className="clean">
                 {arr(content.pre_mortem).map((p, i) => (
                   <li key={i} className="small"><strong>{p.failure_mode}</strong> — {p.prevention_cue}</li>
                 ))}
               </ul>
-            </>
+            </details>
           )}
+
+          <div className="pp-foot">
+            <button className="ghost sm" onClick={copyMarkdown}>Copy as markdown</button>
+          </div>
         </>
       )}
     </SheetShell>

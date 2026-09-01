@@ -855,3 +855,113 @@ button.tier-opt { padding: 0.12rem 0.45rem; font-size: 0.78rem; }
   .dossier-hero, .dossier-grid { grid-template-columns: 1fr; }
   .dossier-verdict { justify-items: start; text-align: left; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   INTERVIEW PREP PAGE — the three-phase rebuild.
+
+   The page was nine equal-weight cards in one scroll whose order didn't match
+   the order you use them. It's now Brief / Rehearse / Game day, with a single
+   directive at the top and panels that say "locked, and here's why" rather
+   than not existing. These rules are the vocabulary that split needs; the
+   panels themselves reuse .panel from Signal.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.prep-page { display: grid; gap: var(--s4); }
+.pp-crumbs { margin: 0; font-size: var(--text-sm); }
+.pp-hero { margin-bottom: 0; padding-bottom: var(--s4); }
+
+/* How close the round is — the fact that decides how much of this page is
+   worth doing today, so it's a chip and not another grey fact. */
+.pp-when {
+  font-size: var(--text-xs); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 0.15rem 0.45rem; border-radius: 4px;
+  background: var(--accent-tint); color: var(--accent-700);
+}
+.pp-when.is-soon { background: var(--warn-tint); color: var(--warn); border: 1px solid var(--warn-line); }
+.pp-when.is-past { background: var(--panel-2); color: var(--faint); }
+
+/* The directive bar. Amber left edge, same as the Dashboard's — it wants you. */
+.pp-next { margin-bottom: 0; }
+.pp-next .next-action-n { display: flex; align-items: baseline; gap: 0.05rem; }
+.pp-next-den { font-size: var(--text-md); font-weight: 600; color: var(--faint); letter-spacing: 0; }
+.pp-next.is-done { border-left-color: var(--green); }
+.pp-next.is-done .next-action-n { color: var(--green); }
+
+/* Phase tabs — the Interviews-tab subnav, carrying a done/total per phase. */
+.pp-tabs { margin: 0; }
+.pp-tab-count {
+  margin-left: 0.4rem; font-size: var(--text-xs); font-weight: 600; color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.pp-tab-count.is-done { color: var(--accent); }
+.pp-tab-blurb { margin: -0.35rem 0 0; }
+
+.pp-tabpanel { display: grid; gap: var(--s4); }
+.pp-tabpanel[hidden] { display: none; }
+
+/* Panel head: state chip on the left next to the title, controls on the right. */
+.pp-head-actions { margin-left: auto; display: flex; align-items: center; gap: 0.4rem; }
+.panel-head .meta + .pp-head-actions { margin-left: 0.6rem; }
+.pp-state {
+  font-size: 0.625rem; font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  font-weight: 650; padding: 0.1rem 0.35rem; border-radius: 3px; white-space: nowrap;
+}
+.pp-state.is-ready { background: var(--accent-tint); color: var(--accent); }
+.pp-state.is-empty { background: var(--panel-2); color: var(--faint); }
+.pp-state.is-locked { background: transparent; color: var(--faint); border: 1px dashed var(--border); }
+.pp-state.is-working { background: var(--warn-tint); color: var(--warn); }
+
+/* A step you can't do yet states the reason instead of disappearing, so the
+   whole flow is legible on a first visit. */
+.pp-locked { font-style: italic; }
+
+.prep-panel .panel-body > *:first-child { margin-top: 0; }
+.pp-hint { margin: 0; }
+.pp-subhead {
+  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--faint); font-weight: 650; margin: 1.1rem 0 0.45rem;
+}
+.pp-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.9rem; }
+.pp-intake-saved { white-space: pre-wrap; margin: 0; }
+
+/* Research: people side by side rather than one per row — the whole block is
+   scanned, not read. */
+.pp-people { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.6rem; }
+.pp-people .prep-person { margin-bottom: 0; }
+.pp-sources { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+
+/* Decode: the competency ranking, and the two long tails folded away. */
+.pp-callout {
+  border-left: 3px solid var(--warn); background: var(--warn-tint);
+  padding: 0.6rem 0.75rem; border-radius: var(--radius-sm); margin-bottom: 0.4rem;
+}
+.pp-callout .pp-subhead { margin-top: 0; color: var(--warn); }
+.pp-comps { gap: 0; }
+.pp-comp { display: grid; grid-template-columns: 1.5rem 1fr; gap: 0.6rem; padding: 0.5rem 0; border-top: 1px solid var(--panel-2); }
+.pp-comp:first-child { border-top: none; }
+.pp-comp-rank { font-family: var(--mono); font-size: var(--text-sm); color: var(--faint); font-variant-numeric: tabular-nums; }
+.pp-comp-head { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+.pp-comp-body p { margin: 0.15rem 0 0; }
+
+.pp-more { margin-top: 0.8rem; border-top: 1px solid var(--border); padding-top: 0.6rem; }
+.pp-more > summary { cursor: pointer; font-size: var(--text-sm); color: var(--accent); font-weight: 600; }
+.pp-more[open] > summary { margin-bottom: 0.5rem; }
+.pp-signal { display: grid; grid-template-columns: 4.2rem 1fr; gap: 0.5rem; align-items: baseline; }
+.pp-conf {
+  font-size: 0.625rem; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
+  font-weight: 650; color: var(--faint);
+}
+.pp-conf.is-high { color: var(--warn); }
+.pp-conf.is-medium { color: var(--accent); }
+.pp-warmup { counter-reset: warmup; }
+.pp-warmup li { counter-increment: warmup; }
+.pp-warmup li::before { content: counter(warmup) ". "; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .pp-next { flex-wrap: wrap; }
+  .pp-next .spacer { display: none; }
+  .pp-signal { grid-template-columns: 1fr; gap: 0.1rem; }
+}
+
+/* The topbar is sticky, so a jumped-to panel needs to clear it. */
+.prep-panel { scroll-margin-top: 4.5rem; }
